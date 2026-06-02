@@ -1,10 +1,8 @@
-use iced::widget::{column, row, rule, text};
-use iced::{Color, Element, Length, Task};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use crate::Message;
+use crate::pages::PageContent;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -92,90 +90,91 @@ fn infer_file_type(name: &str, is_dir: bool) -> String {
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &PreviewState) -> Element<'_, Message> {
-    let accent = Color::from_rgb8(0x5c, 0x90, 0x60);
-    let text_fg = Color::from_rgb8(0xd4, 0xd4, 0xd4);
-    let text_dim = Color::from_rgb8(0x88, 0x88, 0x99);
-    let label_fg = Color::from_rgb8(0x8f, 0xd4, 0x8f);
+pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, _ch: f32) -> PageContent {
+    let mut pc = PageContent::new();
+    let text_fg = [0.83, 0.83, 0.83, 1.0];
+    let text_dim = [0.53, 0.53, 0.60, 1.0];
+    let label_fg = [0.56, 0.83, 0.56, 1.0];
+    let accent_bg = [0.36, 0.56, 0.38, 1.0];
 
     if state.path.is_none() {
-        return column![text("Select a file to view details")
-            .size(13)
-            .color(text_dim)]
-        .width(Length::Fill)
-        .into();
+        pc.text("Select a file to view details", cx + 12.0, cy + 12.0, 13.0, text_dim);
+        return pc;
     }
 
     let icon = if state.is_dir { "📁" } else { "📄" };
 
-    let mut content = column![
-        row![]
-            .spacing(10)
-            .push(text(icon).size(24))
-            .push(text(state.name.clone()).size(18).color(text_fg)),
-    ]
-    .spacing(16);
+    // Title row
+    pc.text(icon, cx + 12.0, cy + 12.0, 24.0, text_fg);
+    
+    let name_truncated = if state.name.len() > 30 {
+        format!("{}...", &state.name[..27])
+    } else {
+        state.name.clone()
+    };
+    pc.text(&name_truncated, cx + 46.0, cy + 18.0, 18.0, text_fg);
 
-    // File details
-    let details = column![
-        info_row("Path", &state.path_display, label_fg, text_dim),
-        info_row("Type", &state.file_type, label_fg, text_dim),
-        info_row("Size", &state.size, label_fg, text_dim),
-        info_row("Permissions", &state.permissions, label_fg, text_dim),
-        info_row("Modified", &state.modified, label_fg, text_dim),
-    ]
-    .spacing(6);
+    // Metadata details
+    let details = [
+        ("Path", &state.path_display),
+        ("Type", &state.file_type),
+        ("Size", &state.size),
+        ("Permissions", &state.permissions),
+        ("Modified", &state.modified),
+    ];
 
-    content = content.push(details);
-
-    if !state.target.is_empty() {
-        content = content.push(
-            column![
-                rule::horizontal(1).style(|_theme| rule::Style {
-                    color: Color::from_rgb8(0x26, 0x33, 0x28),
-                    radius: 0.0.into(),
-                    fill_mode: rule::FillMode::Full,
-                    snap: true,
-                }),
-                info_row("Target", &state.target, label_fg, text_dim),
-            ]
-            .spacing(6),
-        );
+    let mut y = cy + 54.0;
+    for (label, val) in &details {
+        pc.text(label, cx + 12.0, y, 12.0, label_fg);
+        
+        let val_str = if val.len() > 40 {
+            format!("...{}", &val[val.len() - 37..])
+        } else {
+            val.to_string()
+        };
+        pc.text(&val_str, cx + 112.0, y, 12.0, text_dim);
+        y += 20.0;
     }
 
-    // Open button for directories
+    if !state.target.is_empty() {
+        y += 8.0;
+        // Divider
+        pc.rect([0.15, 0.20, 0.16, 1.0], cx + 12.0, y, cw - 24.0, 1.0);
+        y += 12.0;
+        pc.text("Target", cx + 12.0, y, 12.0, label_fg);
+        
+        let target_str = if state.target.len() > 40 {
+            format!("...{}", &state.target[state.target.len() - 37..])
+        } else {
+            state.target.clone()
+        };
+        pc.text(&target_str, cx + 112.0, y, 12.0, text_dim);
+        y += 20.0;
+    }
+
     if state.is_dir {
         if let Some(path) = &state.path {
-            let path_clone = path.clone();
-            content = content.push(
-                iced::widget::button(text("Open directory").size(12).color(Color::from_rgb8(0x1a, 0x2a, 0x1c)))
-                    .style(move |_theme, _status| iced::widget::button::Style {
-                        background: Some(accent.into()),
-                        border: iced::Border {
-                            radius: 6.0.into(),
-                            ..iced::Border::default()
-                        },
-                        ..iced::widget::button::Style::default()
-                    })
-                    .padding([8, 16])
-                    .on_press(Message::Preview(PreviewMessage::NavigateTo(path_clone.clone()))),
+            y += 16.0;
+            pc.button(
+                "Open directory",
+                cx + 12.0,
+                y,
+                140.0,
+                32.0,
+                accent_bg,
+                [0.46, 0.66, 0.48, 1.0],
+                [0.10, 0.16, 0.11, 1.0],
+                crate::Message::Preview(PreviewMessage::NavigateTo(path.clone())),
             );
         }
     }
 
-    content.width(Length::Fill).into()
-}
-
-fn info_row<'a>(label: &'a str, value: &'a str, label_fg: Color, value_fg: Color) -> iced::widget::Row<'a, Message> {
-    row![]
-        .spacing(8)
-        .push(text(label).size(12).color(label_fg).width(100))
-        .push(text(value).size(12).color(value_fg).width(Length::Fill))
+    pc
 }
 
 // ── Update ──────────────────────────────────────────────────────────
 
-pub fn update(state: &mut PreviewState, msg: PreviewMessage) -> Task<Message> {
+pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
     match msg {
         PreviewMessage::SetPath { path } => {
             let meta = fs::symlink_metadata(&path).ok();
@@ -224,14 +223,7 @@ pub fn update(state: &mut PreviewState, msg: PreviewMessage) -> Task<Message> {
                 file_type,
                 target,
             };
-            Task::none()
         }
-        PreviewMessage::NavigateTo(_) => Task::none(),
+        PreviewMessage::NavigateTo(_) => {}
     }
-}
-
-// ── Subscription ────────────────────────────────────────────────────
-
-pub fn subscription(_state: &PreviewState) -> iced::Subscription<Message> {
-    iced::Subscription::none()
 }

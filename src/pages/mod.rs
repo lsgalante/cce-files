@@ -2,8 +2,7 @@ pub mod browse;
 pub mod preview;
 pub mod keybindings;
 
-use iced::widget::{button, text};
-use iced::{Color, Element, Length};
+use clear_ui::layout::RenderTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -32,35 +31,113 @@ impl Page {
     }
 }
 
-pub fn sidebar_button(page: Page, active: bool) -> Element<'static, super::Message> {
-    let bg = if active {
-        Color::from_rgb8(0x2a, 0x4a, 0x2e)
-    } else {
-        Color::from_rgb8(0x1e, 0x2e, 0x20)
-    };
+#[derive(Clone)]
+pub struct ContentButton {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub bg: [f32; 4],
+    pub hover_bg: [f32; 4],
+    pub label: String,
+    pub label_size: f32,
+    pub label_color: [f32; 4],
+    pub action: crate::Message,
+    pub left_align: bool,
+}
 
-    let fg = if active {
-        Color::from_rgb8(0x8f, 0xd4, 0x8f)
-    } else {
-        Color::from_rgb8(0x99, 0x99, 0xaa)
-    };
+pub struct PageContent {
+    pub rects: Vec<([f32; 4], f32, f32, f32, f32)>,
+    pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>)>,
+    pub buttons: Vec<ContentButton>,
+}
 
-    button(
-        iced::widget::row![]
-            .spacing(8)
-            .push(text(page.icon()).size(16))
-            .push(text(page.label()).size(14).color(fg)),
-    )
-    .style(move |_theme, _status| button::Style {
-        background: Some(bg.into()),
-        border: iced::Border {
-            radius: 6.0.into(),
-            ..iced::Border::default()
-        },
-        ..button::Style::default()
-    })
-    .padding([10, 14])
-    .width(Length::Fill)
-    .on_press(super::Message::SwitchPage(page))
-    .into()
+impl PageContent {
+    pub fn new() -> Self {
+        Self {
+            rects: Vec::new(),
+            texts: Vec::new(),
+            buttons: Vec::new(),
+        }
+    }
+
+    pub fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {
+        self.rects.push((color, x, y, w, h));
+    }
+
+    pub fn text(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4]) {
+        self.texts.push((content.to_string(), size, x, y, color, None));
+    }
+
+    pub fn text_with_font(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: &str) {
+        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string())));
+    }
+
+    pub fn button(
+        &mut self,
+        label: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        bg: [f32; 4],
+        hover_bg: [f32; 4],
+        label_color: [f32; 4],
+        action: crate::Message,
+    ) {
+        self.buttons.push(ContentButton {
+            x,
+            y,
+            w,
+            h,
+            bg,
+            hover_bg,
+            label: label.to_string(),
+            label_size: 12.0,
+            label_color,
+            action,
+            left_align: false,
+        });
+    }
+
+    pub fn button_left(
+        &mut self,
+        label: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        bg: [f32; 4],
+        hover_bg: [f32; 4],
+        label_color: [f32; 4],
+        action: crate::Message,
+    ) {
+        self.buttons.push(ContentButton {
+            x,
+            y,
+            w,
+            h,
+            bg,
+            hover_bg,
+            label: label.to_string(),
+            label_size: 12.0,
+            label_color,
+            action,
+            left_align: true,
+        });
+    }
+}
+
+impl RenderTarget for PageContent {
+    fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {
+        self.rects.push((color, x, y, w, h));
+    }
+
+    fn text(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4]) {
+        self.texts.push((content.to_string(), size, x, y, color, None));
+    }
+
+    fn text_with_font(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: &str) {
+        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string())));
+    }
 }

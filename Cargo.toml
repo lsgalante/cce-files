@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+clear-ui = { path = "../clear-ui" }
+wayland-client = { version = "0.31", features = ["system"] }
+wgpu = "24"
+bytemuck = { version = "1", features = ["derive"] }
+glyphon = "0.8"
+calloop = "0.13.0"
 chrono = "0.4.44"
-iced = { version = "0.14", features = ["svg", "image", "tokio"] }
 tokio = { version = "1", features = ["full"] }
+

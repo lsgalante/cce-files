@@ -1,11 +1,9 @@
-use iced::widget::{button, column, operation, row, scrollable, text, text_input};
-use iced::{Color, Element, Length, Task};
-use iced::widget::scrollable::Viewport;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::Message;
+use crate::pages::PageContent;
+use clear_ui::widget::Widget;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -25,10 +23,9 @@ pub struct BrowseState {
     pub all_entries: Vec<DirEntry>,
     pub entries: Vec<DirEntry>,
     pub show_hidden: bool,
-    pub search: String,
+    pub search_box: clear_ui::widget::TextBox,
+    pub list_box: clear_ui::widget::ScrollingList,
     pub selected: Option<usize>,
-    pub scroll_offset_y: f32,
-    pub viewport_height: f32,
 }
 
 impl Default for BrowseState {
@@ -39,10 +36,9 @@ impl Default for BrowseState {
             all_entries: Vec::new(),
             entries: Vec::new(),
             show_hidden: false,
-            search: String::new(),
+            search_box: clear_ui::widget::TextBox::new(String::new()).with_label("Search files..."),
+            list_box: clear_ui::widget::ScrollingList::new(28.0, 2.0),
             selected: None,
-            scroll_offset_y: 0.0,
-            viewport_height: 400.0,
         }
     }
 }
@@ -55,7 +51,6 @@ pub enum BrowseMessage {
     NavigateToPath(PathBuf),
     DirectoryLoaded(Vec<DirEntry>),
     ToggleHidden,
-    Scrolled(Viewport),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,10 +58,6 @@ pub enum BrowseNavigation {
     Up,
     Down,
 }
-
-const LIST_SCROLL_ID: &str = "browse-file-list";
-const LIST_ROW_HEIGHT: f32 = 34.0;
-const LIST_ROW_SPACING: f32 = 2.0;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -170,207 +161,195 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
     }
 }
 
-fn row_top(index: usize) -> f32 {
-    index as f32 * (LIST_ROW_HEIGHT + LIST_ROW_SPACING)
-}
-
-pub fn scroll_to_selection_if_needed(
-    state: &BrowseState,
-    index: usize,
-) -> Task<Message> {
-    let top = row_top(index);
-    let bottom = top + LIST_ROW_HEIGHT;
-    let viewport_top = state.scroll_offset_y;
-    let viewport_bottom = viewport_top + state.viewport_height;
-
-    if bottom <= viewport_top {
-        operation::scroll_to(
-            LIST_SCROLL_ID,
-            scrollable::AbsoluteOffset { x: 0.0, y: top },
-        )
-    } else if top >= viewport_bottom {
-        let new_offset = (bottom - state.viewport_height).max(0.0);
-        operation::scroll_to(
-            LIST_SCROLL_ID,
-            scrollable::AbsoluteOffset { x: 0.0, y: new_offset },
-        )
-    } else {
-        Task::none()
-    }
-}
-
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &BrowseState) -> Element<'_, Message> {
-    let text_fg = Color::from_rgb8(0xd4, 0xd4, 0xd4);
-    let text_dim = Color::from_rgb8(0x88, 0x88, 0x99);
-    let selected_bg = Color::from_rgb8(0x2a, 0x4a, 0x2e);
-    let row_bg = Color::from_rgb8(0x1e, 0x2e, 0x20);
-    let dir_fg = Color::from_rgb8(0x8f, 0xd4, 0x8f);
-    let accent = Color::from_rgb8(0x5c, 0x90, 0x60);
+pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageContent {
+    let mut pc = PageContent::new();
+    let text_dim = [0.53, 0.53, 0.60, 1.0];
+    let heading_fg = [0.56, 0.83, 0.56, 1.0]; // Color::from_rgb8(0x8f, 0xd4, 0x8f)
+    let selected_bg = [0.16, 0.29, 0.18, 0.8]; // Color::from_rgb8(0x2a, 0x4a, 0x2e)
+    let row_bg = [0.12, 0.18, 0.13, 0.6]; // Color::from_rgb8(0x1e, 0x2e, 0x20)
+    let accent_fg = [0.36, 0.56, 0.38, 1.0]; // Color::from_rgb8(0x5c, 0x90, 0x60)
+    let text_fg = [0.83, 0.83, 0.83, 1.0];
 
     // Breadcrumb path
     let path_str = state.current_dir.to_string_lossy().to_string();
-    let breadcrumb = text(path_str).size(11).color(text_dim);
+    pc.text(&path_str, cx + 12.0, cy + 12.0, 11.0, text_dim);
 
-    let search_input = text_input("Search files...", &state.search)
-        .on_input(|s| Message::Browse(BrowseMessage::SearchChanged(s)))
-        .padding([8, 12]);
+    // Search textbox
+    let search_w = cw - 80.0;
+    let search_h = 28.0;
+    let search_y = cy + 28.0 + state.search_box.top_room();
+    state.search_box.set_row_rect(cx + 12.0, search_w);
+    clear_ui::layout::render_widget(&mut pc, &mut state.search_box, cx + 12.0, search_y, search_w, search_h);
 
-    let count_label = text(format!(
+    // Count label next to search
+    let count_str = format!(
         "{} items{}",
         state.entries.len(),
         if state.show_hidden { " (.)" } else { "" }
-    ))
-    .size(11)
-    .color(text_dim);
+    );
+    pc.text(&count_str, cx + 12.0 + search_w + 8.0, search_y + 8.0, 11.0, text_dim);
 
-    let header = column![
-        breadcrumb,
-        row![search_input, count_label]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-    ]
-    .spacing(6);
+    // File list scroll box
+    let list_x = cx + 12.0;
+    let list_y = search_y + search_h + 16.0;
+    let list_w = cw - 24.0;
+    let list_h = ch - (list_y - cy) - 12.0;
 
-    let mut list = column![].spacing(2);
+    clear_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h);
+
+    state.list_box.update_bounds(state.entries.len(), list_y, list_h);
 
     for (idx, entry) in state.entries.iter().enumerate() {
-        let is_selected = state.selected == Some(idx);
-        let bg = if is_selected { selected_bg } else { row_bg };
-        let fg = if is_selected {
-            dir_fg
-        } else if entry.is_dir {
-            accent
-        } else {
-            text_fg
-        };
+        if let Some(draw_y) = state.list_box.get_item_draw_y(idx, 2.0) {
+            let is_selected = state.selected == Some(idx);
+            let bg = if is_selected { selected_bg } else { row_bg };
+            let fg = if is_selected {
+                heading_fg
+            } else if entry.is_dir {
+                accent_fg
+            } else {
+                text_fg
+            };
 
-        let icon = entry_icon(entry.is_dir, &entry.name);
-        let size_str = if entry.is_dir {
-            "—".to_string()
-        } else {
-            format_size(entry.size)
-        };
-        let perm_str = format_permissions(entry.permissions);
+            let icon = entry_icon(entry.is_dir, &entry.name);
+            let size_str = if entry.is_dir {
+                "—".to_string()
+            } else {
+                format_size(entry.size)
+            };
+            let perm_str = format_permissions(entry.permissions);
 
-        let entry_row = button(
-            row![]
-                .spacing(8)
-                .align_y(iced::Alignment::Center)
-                .push(text(icon).size(13))
-                .push(text(entry.name.clone()).size(13).color(fg).width(Length::Fill))
-                .push(text(size_str).size(11).color(text_dim).width(70))
-                .push(text(perm_str).size(11).color(text_dim).width(80))
-                .push(text(entry.modified.clone()).size(11).color(text_dim).width(120)),
-        )
-        .style(move |_theme, _status| button::Style {
-            background: Some(bg.into()),
-            border: iced::Border {
-                radius: 4.0.into(),
-                ..iced::Border::default()
-            },
-            ..button::Style::default()
-        })
-        .padding([6, 10])
-        .height(LIST_ROW_HEIGHT)
-        .width(Length::Fill)
-        .on_press(Message::Browse(BrowseMessage::SelectEntry(idx)));
+            // Determine click action
+            let action = if is_selected {
+                crate::Message::Browse(BrowseMessage::NavigateTo(idx))
+            } else {
+                crate::Message::Browse(BrowseMessage::SelectEntry(idx))
+            };
 
-        list = list.push(entry_row);
+            // Button for row selection/navigation
+            pc.button(
+                "",
+                list_x + 4.0,
+                draw_y,
+                list_w - 24.0,
+                28.0,
+                bg,
+                if is_selected { selected_bg } else { [0.22, 0.32, 0.24, 0.8] },
+                fg,
+                action,
+            );
+
+            // Draw contents inside the button boundary:
+            pc.text(icon, list_x + 12.0, draw_y + 7.0, 13.0, fg);
+            
+            let show_size = list_w > 400.0;
+            let show_perm = list_w > 480.0;
+            let show_modified = list_w > 280.0;
+
+            let next_col_x = if show_size {
+                list_w - 290.0
+            } else if show_modified {
+                list_w - 120.0
+            } else {
+                list_w - 20.0
+            };
+
+            let max_chars = ((next_col_x - 40.0) / 8.0).max(10.0) as usize;
+            let name_truncated = if entry.name.chars().count() > max_chars {
+                if max_chars > 3 {
+                    let mut s: String = entry.name.chars().take(max_chars - 3).collect();
+                    s.push_str("...");
+                    s
+                } else {
+                    entry.name.clone()
+                }
+            } else {
+                entry.name.clone()
+            };
+
+            pc.text(&name_truncated, list_x + 32.0, draw_y + 7.0, 13.0, fg);
+            if show_size {
+                pc.text(&size_str, list_x + list_w - 290.0, draw_y + 8.0, 11.0, text_dim);
+            }
+            if show_perm {
+                pc.text(&perm_str, list_x + list_w - 210.0, draw_y + 8.0, 11.0, text_dim);
+            }
+            if show_modified {
+                pc.text(&entry.modified, list_x + list_w - 120.0, draw_y + 8.0, 11.0, text_dim);
+            }
+        }
     }
 
-    let scroll = scrollable(list)
-        .id(LIST_SCROLL_ID)
-        .height(Length::Fill)
-        .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport)));
-
-    column![header, scroll]
-        .spacing(8)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    pc
 }
 
 // ── Update ──────────────────────────────────────────────────────────
 
 fn apply_filters(state: &mut BrowseState) {
+    let search_query = if state.search_box.editing {
+        state.search_box.edit_buffer.to_lowercase()
+    } else {
+        state.search_box.text.to_lowercase()
+    };
     state.entries = state
         .all_entries
         .iter()
         .filter(|e| state.show_hidden || !e.name.starts_with('.'))
         .filter(|e| {
-            if state.search.is_empty() {
+            if search_query.is_empty() {
                 return true;
             }
-            let q = state.search.to_lowercase();
-            e.name.to_lowercase().contains(&q)
+            e.name.to_lowercase().contains(&search_query)
         })
         .cloned()
         .collect();
     state.selected = if state.entries.is_empty() { None } else { Some(0) };
 }
 
-pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Task<Message> {
+pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> tokio::task::JoinHandle<Vec<DirEntry>> {
     match msg {
         BrowseMessage::SearchChanged(q) => {
-            state.search = q;
+            state.search_box.text = q;
             apply_filters(state);
-            Task::none()
+            tokio::spawn(async { Vec::new() })
         }
         BrowseMessage::SelectEntry(i) => {
             state.selected = Some(i);
-            Task::none()
+            tokio::spawn(async { Vec::new() })
         }
         BrowseMessage::NavigateTo(idx) => {
             if let Some(entry) = state.entries.get(idx) {
                 if entry.is_dir {
                     let path = entry.path.clone();
-                    return Task::perform(
-                        async move { read_directory(&path) },
-                        |entries| Message::Browse(BrowseMessage::DirectoryLoaded(entries)),
-                    );
+                    return tokio::spawn(async move { read_directory(&path) });
                 }
             }
-            Task::none()
+            tokio::spawn(async { Vec::new() })
         }
         BrowseMessage::NavigateToPath(path) => {
             let p = path.clone();
-            Task::perform(
-                async move { read_directory(&p) },
-                |entries| Message::Browse(BrowseMessage::DirectoryLoaded(entries)),
-            )
+            tokio::spawn(async move { read_directory(&p) })
         }
         BrowseMessage::DirectoryLoaded(entries) => {
             state.all_entries = entries;
-            state.search.clear();
+            state.search_box.text.clear();
+            state.search_box.edit_buffer.clear();
             apply_filters(state);
-            // Update current_dir from first entry's parent, or keep as-is
             if let Some(first) = state.all_entries.first() {
                 if let Some(parent) = first.path.parent() {
                     state.current_dir = parent.to_path_buf();
                 }
             }
-            Task::none()
+            tokio::spawn(async { Vec::new() })
         }
         BrowseMessage::ToggleHidden => {
             state.show_hidden = !state.show_hidden;
             apply_filters(state);
-            Task::none()
-        }
-        BrowseMessage::Scrolled(viewport) => {
-            let offset = viewport.absolute_offset();
-            state.scroll_offset_y = offset.y;
-            state.viewport_height = viewport.bounds().height;
-            Task::none()
+            tokio::spawn(async { Vec::new() })
         }
     }
-}
-
-// ── Subscription ────────────────────────────────────────────────────
-
-pub fn subscription(_state: &BrowseState) -> iced::Subscription<Message> {
-    iced::Subscription::none()
 }
 
 #[cfg(test)]
@@ -389,6 +368,8 @@ mod tests {
                     modified: String::new(),
                 })
                 .collect(),
+            search_box: clear_ui::widget::TextBox::new(String::new()),
+            list_box: clear_ui::widget::ScrollingList::new(28.0, 2.0),
             ..BrowseState::default()
         }
     }

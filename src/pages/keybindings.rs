@@ -1,7 +1,4 @@
-use iced::widget::{column, row, rule, text};
-use iced::{Color, Element, Length, Task};
-
-use crate::Message;
+use crate::pages::PageContent;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -65,49 +62,37 @@ const SECTIONS: &[Section] = &[
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(_state: &KeybindingsState) -> Element<'_, Message> {
-    let accent = Color::from_rgb8(0x5c, 0x90, 0x60);
-    let text_fg = Color::from_rgb8(0xd4, 0xd4, 0xd4);
-    let text_dim = Color::from_rgb8(0x88, 0x88, 0x99);
+pub fn view(_state: &KeybindingsState, cx: f32, cy: f32, cw: f32, _ch: f32) -> PageContent {
+    let mut pc = PageContent::new();
+    let accent = [0.36, 0.56, 0.38, 1.0];
+    let text_fg = [0.83, 0.83, 0.83, 1.0];
+    let text_dim = [0.53, 0.53, 0.60, 1.0];
 
-    let mut content = column![text("Keybindings").size(18).color(accent)].spacing(12);
+    pc.text("Keybindings", cx + 12.0, cy + 12.0, 18.0, accent);
+
+    let mut y = cy + 42.0;
 
     for section in SECTIONS {
-        let header = text(format!("{} {}", section.icon, section.title))
-            .size(14)
-            .color(text_fg);
+        // Section Header
+        let header_str = format!("{} {}", section.icon, section.title);
+        pc.text(&header_str, cx + 12.0, y, 14.0, text_fg);
+        y += 22.0;
 
-        let mut rows = column![].spacing(4);
         for b in section.bindings {
-            rows = rows.push(
-                row![]
-                    .spacing(8)
-                    .push(text(b.keys).size(12).color(accent).width(140))
-                    .push(text(b.action).size(12).color(text_dim)),
-            );
+            pc.text(b.keys, cx + 12.0, y, 12.0, accent);
+            pc.text(b.action, cx + 160.0, y, 12.0, text_dim);
+            y += 18.0;
         }
 
-        content = content.push(header);
-        content = content.push(rows);
-        content = content.push(rule::horizontal(1).style(|_theme| rule::Style {
-            color: Color::from_rgb8(0x26, 0x33, 0x28),
-            radius: 0.0.into(),
-            fill_mode: rule::FillMode::Full,
-            snap: true,
-        }));
+        y += 8.0;
+        // Divider
+        pc.rect([0.15, 0.20, 0.16, 1.0], cx + 12.0, y, cw - 24.0, 1.0);
+        y += 12.0;
     }
 
-    content.width(Length::Fill).into()
+    pc
 }
 
 // ── Update ──────────────────────────────────────────────────────────
 
-pub fn update(_state: &mut KeybindingsState, _msg: KeybindingsMessage) -> Task<Message> {
-    Task::none()
-}
-
-// ── Subscription ────────────────────────────────────────────────────
-
-pub fn subscription(_state: &KeybindingsState) -> iced::Subscription<Message> {
-    iced::Subscription::none()
-}
+pub fn update(_state: &mut KeybindingsState, _msg: KeybindingsMessage) {}

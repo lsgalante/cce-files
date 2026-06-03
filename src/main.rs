@@ -1,6 +1,5 @@
 mod pages;
 
-use std::path::PathBuf;
 use wayland_client::QueueHandle;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics};
 
@@ -25,8 +24,13 @@ struct AppWidget {
 struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
+    network: pages::network::NetworkState,
+    settings: pages::settings::SettingsState,
     preview: pages::preview::PreviewState,
-    keybindings: pages::keybindings::KeybindingsState,
+
+    // Command-line chooser options
+    select_mode: bool,
+    select_directory: bool,
 
     // Rendering resources
     widgets: Vec<AppWidget>,
@@ -40,6 +44,7 @@ struct FilesystemApp {
     page_buttons: Vec<pages::ContentButton>,
     cursor_x: f32,
     cursor_y: f32,
+    paginator: clear_ui::widget::Paginator,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -49,8 +54,9 @@ pub enum Message {
     SwitchPage(Page),
     Browse(pages::browse::BrowseMessage),
     Preview(pages::preview::PreviewMessage),
-    Keybindings(pages::keybindings::KeybindingsMessage),
     KeyboardEvent(KeyEvent),
+    SelectOpen,
+    SelectCancel,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -75,61 +81,42 @@ impl FilesystemApp {
 
         let mut pc = pages::PageContent::new();
 
-        // 1. Draw Sidebar Background
-        let sidebar_bg = [0.086, 0.141, 0.094, 1.0]; // matching 0x16, 0x24, 0x18
-        pc.rect(sidebar_bg, 0.0, 0.0, 200.0, self.height as f32);
+        // 1. Render the Paginator widget to separate PageContent first
+        let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
+        self.paginator.set_selected_page(page_idx);
+        let mut paginator_pc = pages::PageContent::new();
+        clear_ui::layout::render_widget(&mut paginator_pc, &mut self.paginator, 0.0, 0.0, self.width as f32, self.height as f32);
 
-        // Sidebar Divider Line (accent border)
-        pc.rect([0.36, 0.56, 0.38, 1.0], 200.0, 0.0, 1.0, self.height as f32);
-
-        // Sidebar Title
-        pc.text("Clear Filesystem", 16.0, 16.0, 15.0, [0.36, 0.56, 0.38, 1.0]);
-
-        // Sidebar buttons
-        let mut btn_y = 48.0;
-        for page in Page::ALL {
-            let active = page == self.current_page;
-            let bg = if active {
-                [0.16, 0.29, 0.18, 1.0]
-            } else {
-                [0.12, 0.18, 0.13, 1.0]
-            };
-            let fg = if active {
-                [0.56, 0.83, 0.56, 1.0]
-            } else {
-                [0.60, 0.60, 0.67, 1.0]
-            };
-
-            let label = format!("{}  {}", page.icon(), page.label());
-
-            pc.button(
-                &label,
-                12.0,
-                btn_y,
-                176.0,
-                36.0,
-                bg,
-                if active { bg } else { [0.18, 0.28, 0.20, 1.0] },
-                fg,
-                Message::SwitchPage(page),
-            );
-
-            btn_y += 42.0;
-        }
-
-        // 2. Draw Content Background
-        let content_bg = [0.10, 0.165, 0.11, 1.0]; // matching 0x1a, 0x2a, 0x1c
-        pc.rect(content_bg, 201.0, 0.0, self.width as f32 - 201.0, self.height as f32);
-
-        // 3. Draw Page content
-        let usable_w = self.width as f32 - 201.0 - 32.0;
+        let has_sidebar = !self.select_mode;
+        let sidebar_w = if has_sidebar { 56.0 } else { 0.0 };
+        let browse_x = if has_sidebar { 73.0 } else { 16.0 };
+        let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
         let browse_w = usable_w * 0.55;
         let preview_w = usable_w * 0.45;
-        let browse_x = 217.0;
         let preview_x = browse_x + browse_w + 12.0;
         let content_y = 16.0;
-        let content_h = self.height as f32 - 32.0;
 
+        let select_bar_h = 48.0;
+        let content_h = if self.select_mode {
+            self.height as f32 - 32.0 - select_bar_h
+        } else {
+            self.height as f32 - 32.0
+        };
+
+        if has_sidebar {
+            // 2. Add Content Background (where x >= 56.0) from the paginator to pc first
+            for rect in paginator_pc.rects.iter() {
+                if rect.1 >= 56.0 {
+                    pc.rects.push(*rect);
+                }
+            }
+        } else {
+            // Full window page background
+            let bg_color = clear_ui::color::page_low_color();
+            pc.rect(bg_color, 0.0, 0.0, self.width as f32, self.height as f32);
+        }
+
+        // 3. Draw Page content
         match self.current_page {
             Page::Browse => {
                 let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h);
@@ -143,13 +130,119 @@ impl FilesystemApp {
                 pc.texts.extend(preview_pc.texts);
                 pc.buttons.extend(preview_pc.buttons);
             }
-            Page::Keybindings => {
-                let keys_pc = pages::keybindings::view(&self.keybindings, browse_x, content_y, usable_w, content_h);
+            Page::Network => {
+                let network_pc = pages::network::view(&mut self.network, &self.browse, browse_x, content_y, browse_w, content_h);
+                let preview_pc = pages::preview::view(&self.preview, preview_x, content_y, preview_w, content_h);
 
-                pc.rects.extend(keys_pc.rects);
-                pc.texts.extend(keys_pc.texts);
-                pc.buttons.extend(keys_pc.buttons);
+                pc.rects.extend(network_pc.rects);
+                pc.texts.extend(network_pc.texts);
+                pc.buttons.extend(network_pc.buttons);
+
+                pc.rects.extend(preview_pc.rects);
+                pc.texts.extend(preview_pc.texts);
+                pc.buttons.extend(preview_pc.buttons);
             }
+            Page::Settings => {
+                let settings_pc = pages::settings::view(&mut self.settings, browse_x, content_y, usable_w, content_h);
+
+                pc.rects.extend(settings_pc.rects);
+                pc.texts.extend(settings_pc.texts);
+                pc.buttons.extend(settings_pc.buttons);
+
+                // Sync color selector changes back to global node color
+                let col = self.settings.color_selector.color;
+                let r_f = col[0] as f32 / 255.0;
+                let g_f = col[1] as f32 / 255.0;
+                let b_f = col[2] as f32 / 255.0;
+                let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                if clear_ui::color::node_color() != linear_col {
+                    clear_ui::color::set_node_color(linear_col);
+                }
+            }
+        }
+
+        if has_sidebar {
+            // 4. Add Sidebar Background and tabs (where x < 56.0) from the paginator to pc last
+            for rect in paginator_pc.rects.iter() {
+                if rect.1 < 56.0 {
+                    pc.rects.push(*rect);
+                }
+            }
+
+            // Sidebar Divider Line (accent border)
+            pc.rect([0.36, 0.56, 0.38, 1.0], 56.0, 0.0, 1.0, self.height as f32);
+
+            // Sidebar Title rendered vertically
+            pc.text("C\nL\nE\nA\nR", 18.0, 16.0, 12.0, [0.36, 0.56, 0.38, 1.0]);
+
+            // Add the paginator's texts (tab labels) on top of the sidebar background
+            pc.texts.extend(paginator_pc.texts);
+        }
+
+        // Draw bottom selection bar if select_mode is enabled
+        if self.select_mode {
+            let bar_y = self.height as f32 - select_bar_h - 16.0;
+            // Divider line
+            pc.rect([0.15, 0.20, 0.16, 1.0], 16.0, bar_y, self.width as f32 - 32.0, 1.0);
+
+            // Determine currently selected path
+            let selected_path = if let Some(idx) = self.browse.selected {
+                self.browse.entries.get(idx).map(|e| e.path.clone())
+            } else {
+                None
+            };
+
+            let disp_path = if self.select_directory {
+                selected_path.filter(|p| p.is_dir()).unwrap_or_else(|| self.browse.current_dir.clone())
+            } else {
+                selected_path.unwrap_or_else(|| self.browse.current_dir.clone())
+            };
+
+            let path_str = disp_path.to_string_lossy().to_string();
+            let label_text = if self.select_directory { "Selected Directory:" } else { "Selected File:" };
+            
+            let accent = [0.36, 0.56, 0.38, 1.0];
+            let text_fg = [0.83, 0.83, 0.83, 1.0];
+
+            pc.text(label_text, 24.0, bar_y + 18.0, 12.0, accent);
+            
+            // Limit path display string length
+            let max_chars = ((self.width as f32 - 380.0) / 7.0).max(10.0) as usize;
+            let path_truncated = if path_str.chars().count() > max_chars {
+                let truncated: String = path_str.chars().skip(path_str.chars().count() - max_chars + 3).collect();
+                format!("...{}", truncated)
+            } else {
+                path_str
+            };
+            pc.text(&path_truncated, 160.0, bar_y + 18.0, 12.0, text_fg);
+
+            // Cancel button
+            let cancel_x = self.width as f32 - 180.0;
+            pc.button(
+                "Cancel",
+                cancel_x,
+                bar_y + 10.0,
+                70.0,
+                28.0,
+                [0.25, 0.12, 0.12, 0.5],
+                [0.35, 0.15, 0.15, 0.8],
+                text_fg,
+                Message::SelectCancel,
+            );
+
+            // Open/Select button
+            let open_x = self.width as f32 - 100.0;
+            pc.button(
+                "Select",
+                open_x,
+                bar_y + 10.0,
+                80.0,
+                28.0,
+                accent,
+                [0.46, 0.66, 0.48, 1.0],
+                [0.10, 0.16, 0.11, 1.0],
+                Message::SelectOpen,
+            );
         }
 
         // 4. Translate PageContent into rendering quads and TextItems
@@ -231,25 +324,42 @@ impl Application for FilesystemApp {
     type Message = Message;
 
     fn new(_qh: &QueueHandle<clear_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
+        // Parse command line arguments
+        let args: Vec<String> = std::env::args().collect();
+        let select_mode = args.iter().any(|arg| arg == "--select" || arg == "--select-dir");
+        let select_directory = args.iter().any(|arg| arg == "--select-dir");
+
+        // Use signature green theme for the content background of the paginator
+        clear_ui::color::set_page_low_color([0.10, 0.165, 0.11, 1.0]);
+
         let browse = pages::browse::BrowseState::default();
         let current_dir = browse.current_dir.clone();
+
+        let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
+        let paginator = clear_ui::widget::Paginator::new(56.0, pages_names)
+            .with_tab_y_offset(120.0)
+            .with_tabs_rotated(true);
 
         let mut app = Self {
             current_page: Page::Browse,
             browse,
+            network: pages::network::NetworkState::default(),
+            settings: pages::settings::SettingsState::default(),
             preview: pages::preview::PreviewState::default(),
-            keybindings: pages::keybindings::KeybindingsState,
+            select_mode,
+            select_directory,
             widgets: Vec::new(),
             text_items: Vec::new(),
             font_system: FontSystem::new(),
             needs_rebuild: true,
-            width: 1200,
-            height: 720,
+            width: if select_mode { 900 } else { 1200 },
+            height: if select_mode { 500 } else { 720 },
             scale_factor: 1.0,
             sender: sender.clone(),
             page_buttons: Vec::new(),
             cursor_x: 0.0,
             cursor_y: 0.0,
+            paginator,
         };
 
         // Start initial directory loading
@@ -264,13 +374,29 @@ impl Application for FilesystemApp {
     }
 
     fn settings(&self) -> WindowSettings {
-        WindowSettings {
-            title: "Clear Filesystem Interface".to_string(),
-            app_id: "clear-filesystem-interface".to_string(),
-            width: 1200,
-            height: 720,
-            fullscreen: false,
-            min_size: Some((1020, 600)),
+        if self.select_mode {
+            let title = if self.select_directory {
+                "Select Directory"
+            } else {
+                "Select File"
+            };
+            WindowSettings {
+                title: title.to_string(),
+                app_id: "clear-filesystem-chooser".to_string(),
+                width: 900,
+                height: 500,
+                fullscreen: false,
+                min_size: Some((800, 400)),
+            }
+        } else {
+            WindowSettings {
+                title: "Clear Filesystem Interface".to_string(),
+                app_id: "clear-filesystem-interface".to_string(),
+                width: 1200,
+                height: 720,
+                fullscreen: false,
+                min_size: Some((1020, 600)),
+            }
         }
     }
 
@@ -278,6 +404,8 @@ impl Application for FilesystemApp {
         match msg {
             Message::SwitchPage(page) => {
                 self.current_page = page;
+                let page_idx = Page::ALL.iter().position(|&p| p == page).unwrap_or(0);
+                self.paginator.set_selected_page(page_idx);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -309,31 +437,59 @@ impl Application for FilesystemApp {
                 self.needs_rebuild = true;
             }
             Message::Preview(msg) => {
-                let nav_path = match &msg {
-                    pages::preview::PreviewMessage::NavigateTo(path) => Some(path.clone()),
-                    _ => None,
-                };
                 pages::preview::update(&mut self.preview, msg);
-                if let Some(path) = nav_path {
-                    let sender_clone = self.sender.clone();
-                    tokio::spawn(async move {
-                        let entries = pages::browse::read_directory(&path);
-                        let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
-                    });
-                }
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-            Message::Keybindings(msg) => {
-                pages::keybindings::update(&mut self.keybindings, msg);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
             Message::KeyboardEvent(_) => {}
+            Message::SelectOpen => {
+                let selected_path = if let Some(idx) = self.browse.selected {
+                    self.browse.entries.get(idx).map(|e| e.path.clone())
+                } else {
+                    None
+                };
+                if self.select_directory {
+                    let path = selected_path.filter(|p| p.is_dir()).unwrap_or_else(|| self.browse.current_dir.clone());
+                    println!("{}", path.display());
+                    std::process::exit(0);
+                } else if let Some(path) = selected_path {
+                    if path.is_dir() {
+                        let sender_clone = self.sender.clone();
+                        tokio::spawn(async move {
+                            let entries = pages::browse::read_directory(&path);
+                            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
+                        });
+                    } else {
+                        println!("{}", path.display());
+                        std::process::exit(0);
+                    }
+                }
+            }
+            Message::SelectCancel => {
+                std::process::exit(1);
+            }
         }
     }
 
-    fn tick(&mut self, _dt: f32, _needs_rebuild: &mut bool) {}
+    fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
+        if self.paginator.tick(dt) {
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+        }
+
+        if self.current_page == Page::Settings {
+            if self.settings.color_selector.tick(dt) {
+                let col = self.settings.color_selector.color;
+                let r_f = col[0] as f32 / 255.0;
+                let g_f = col[1] as f32 / 255.0;
+                let b_f = col[2] as f32 / 255.0;
+                let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                clear_ui::color::set_node_color(linear_col);
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        }
+    }
 
     fn view(&mut self, quads: &mut Vec<(f32, f32, f32, f32, [f32; 4])>, size: LogicalSize, scale: f64) {
         if self.needs_rebuild || self.width != size.width as u32 || self.height != size.height as u32 || self.scale_factor != scale {
@@ -362,11 +518,29 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
+        if self.paginator.cursor_moved(pos.x, pos.y) {
+            changed = true;
+        }
+
         if self.current_page == Page::Browse {
             if self.browse.search_box.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
             if self.browse.list_box.cursor_moved(pos.x, pos.y) {
+                changed = true;
+            }
+        } else if self.current_page == Page::Network {
+            if self.network.graph.is_dragging() {
+                if self.network.graph.drag_update(pos.x, pos.y) {
+                    changed = true;
+                }
+            } else {
+                if self.network.graph.on_cursor_moved(pos.x, pos.y) {
+                    changed = true;
+                }
+            }
+        } else if self.current_page == Page::Settings {
+            if self.settings.color_selector.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
         }
@@ -390,12 +564,131 @@ impl Application for FilesystemApp {
             return None;
         }
 
+        let mut changed = false;
+
+        if self.paginator.mouse_input(button, state, pos.x, pos.y) {
+            if self.paginator.take_click() {
+                let idx = self.paginator.selected_page();
+                if idx < Page::ALL.len() {
+                    clear_ui::widget::focus::clear_focus();
+                    self.current_page = Page::ALL[idx];
+                }
+            }
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+            return None;
+        }
+
         if self.current_page == Page::Browse {
             if self.browse.search_box.mouse_input(button, state, pos.x, pos.y) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
             if self.browse.list_box.mouse_input(button, state, pos.x, pos.y) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        } else if self.current_page == Page::Network {
+            if button == MouseButton::Left {
+                if state == ElementState::Pressed {
+                    if self.network.graph.mouse_input(button, state, pos.x, pos.y) {
+                        if self.network.graph.is_dragging() {
+                            self.network.graph.drag_begin(pos.x, pos.y);
+                        }
+                        changed = true;
+                    }
+                } else if state == ElementState::Released {
+                    if self.network.graph.is_dragging() {
+                        self.network.graph.drag_end();
+                        changed = true;
+                    } else {
+                        if self.network.graph.mouse_input(button, state, pos.x, pos.y) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            // Sync selection from graph to browse state
+            let has_parent = self.browse.current_dir.parent().is_some();
+            let offset = if has_parent { 2 } else { 1 };
+            if let Some(node_sel) = self.network.graph.selected_node() {
+                if node_sel >= offset {
+                    let entry_idx = node_sel - offset;
+                    if self.browse.selected != Some(entry_idx) {
+                        self.browse.selected = Some(entry_idx);
+                        let selected_path = self.browse.entries.get(entry_idx).map(|e| e.path.clone());
+                        if let Some(path) = selected_path {
+                            pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::SetPath { path });
+                        }
+                        changed = true;
+                    }
+                } else {
+                    if self.browse.selected.is_some() {
+                        self.browse.selected = None;
+                        changed = true;
+                    }
+                }
+            } else {
+                if self.browse.selected.is_some() {
+                    self.browse.selected = None;
+                    changed = true;
+                }
+            }
+
+            // Sync double click navigation
+            if let Some(dbl_idx) = self.network.graph.double_clicked_node() {
+                self.network.graph.clear_double_clicked_node();
+                if has_parent && dbl_idx == 0 {
+                    if let Some(parent) = self.browse.current_dir.parent() {
+                        let parent_path = parent.to_path_buf();
+                        let sender_clone = self.sender.clone();
+                        tokio::spawn(async move {
+                            let entries = pages::browse::read_directory(&parent_path);
+                            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
+                        });
+                        changed = true;
+                    }
+                } else if dbl_idx >= offset {
+                    let entry_idx = dbl_idx - offset;
+                    if let Some(entry) = self.browse.entries.get(entry_idx) {
+                        if entry.is_dir {
+                            let path = entry.path.clone();
+                            let sender_clone = self.sender.clone();
+                            tokio::spawn(async move {
+                                let entries = pages::browse::read_directory(&path);
+                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
+                            });
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            if changed {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        } else if self.current_page == Page::Settings {
+            if self.settings.color_selector.mouse_input(button, state, pos.x, pos.y) {
+                if self.settings.color_selector.take_click() {
+                    let col = self.settings.color_selector.color;
+                    let r_f = col[0] as f32 / 255.0;
+                    let g_f = col[1] as f32 / 255.0;
+                    let b_f = col[2] as f32 / 255.0;
+                    let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                    clear_ui::color::set_node_color(linear_col);
+                }
+                changed = true;
+            }
+            // If user clicked outside color selector focus area, unfocus it
+            if state == ElementState::Pressed && !self.settings.color_selector.hit_test(pos.x, pos.y) {
+                self.settings.color_selector.unfocus();
+                clear_ui::widget::focus::clear_focus();
+                changed = true;
+            }
+
+            if changed {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -430,12 +723,33 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
+        } else if self.current_page == Page::Network {
+            if self.network.graph.mouse_wheel(delta, pos.x as f32, pos.y as f32) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
         }
     }
 
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if event.state != ElementState::Pressed {
             return None;
+        }
+
+        if self.current_page == Page::Settings && self.settings.color_selector.editing {
+            if self.settings.color_selector.keyboard_input(event) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                if !self.settings.color_selector.editing {
+                    let col = self.settings.color_selector.color;
+                    let r_f = col[0] as f32 / 255.0;
+                    let g_f = col[1] as f32 / 255.0;
+                    let b_f = col[2] as f32 / 255.0;
+                    let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                    clear_ui::color::set_node_color(linear_col);
+                }
+                return None;
+            }
         }
 
         // If the search textbox is focused, forward key inputs to it
@@ -475,8 +789,16 @@ impl Application for FilesystemApp {
                         if let Some(entry) = self.browse.entries.get(idx) {
                             if entry.is_dir {
                                 return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
+                            } else if self.select_mode && !self.select_directory {
+                                println!("{}", entry.path.display());
+                                std::process::exit(0);
                             }
                         }
+                    }
+                }
+                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) => {
+                    if self.select_mode {
+                        std::process::exit(1);
                     }
                 }
                 clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Backspace) => {

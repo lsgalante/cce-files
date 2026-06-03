@@ -1,32 +1,37 @@
 pub mod browse;
 pub mod preview;
-pub mod keybindings;
+pub mod network;
+pub mod settings;
 
 use clear_ui::layout::RenderTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Browse,
-    Keybindings,
+    Network,
+    Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 2] = [
+    pub const ALL: [Page; 3] = [
         Page::Browse,
-        Page::Keybindings,
+        Page::Network,
+        Page::Settings,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Page::Browse => "Browse",
-            Page::Keybindings => "Keys",
+            Page::Network => "Network",
+            Page::Settings => "Settings",
         }
     }
 
     pub fn icon(self) -> &'static str {
         match self {
             Page::Browse => "📁",
-            Page::Keybindings => "⌨",
+            Page::Network => "🌐",
+            Page::Settings => "⚙",
         }
     }
 }

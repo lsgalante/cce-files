@@ -1,28 +1,42 @@
 use crate::pages::PageContent;
+use clear_ui::widget::{ColorSelector, Widget};
+use clear_ui::layout::Section;
 
 // ── Data ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Default)]
-pub struct KeybindingsState;
+pub struct SettingsState {
+    pub color_selector: ColorSelector,
+}
 
-#[derive(Debug, Clone)]
-pub enum KeybindingsMessage {}
+impl Default for SettingsState {
+    fn default() -> Self {
+        let col = clear_ui::color::node_color();
+        let col_u8 = [
+            (col[0] * 255.0) as u8,
+            (col[1] * 255.0) as u8,
+            (col[2] * 255.0) as u8,
+        ];
+        Self {
+            color_selector: ColorSelector::new(col_u8).with_label("Node Color"),
+        }
+    }
+}
 
-// ── Static data ────────────────────────────────────────────────────
+// ── Keybindings Structs & Data ──────────────────────────────────────
 
 struct Binding {
     keys: &'static str,
     action: &'static str,
 }
 
-struct Section {
+struct SectionData {
     title: &'static str,
     icon: &'static str,
     bindings: &'static [Binding],
 }
 
-const SECTIONS: &[Section] = &[
-    Section {
+const SECTIONS: &[SectionData] = &[
+    SectionData {
         title: "Navigation",
         icon: "🧭",
         bindings: &[
@@ -34,7 +48,7 @@ const SECTIONS: &[Section] = &[
             Binding { keys: "Ctrl + F", action: "Focus search" },
         ],
     },
-    Section {
+    SectionData {
         title: "Browse",
         icon: "📁",
         bindings: &[
@@ -43,7 +57,7 @@ const SECTIONS: &[Section] = &[
             Binding { keys: "Search", action: "Filter files by name" },
         ],
     },
-    Section {
+    SectionData {
         title: "Info",
         icon: "ℹ",
         bindings: &[
@@ -51,48 +65,58 @@ const SECTIONS: &[Section] = &[
             Binding { keys: "Open dir button", action: "Navigate into selected directory" },
         ],
     },
-    Section {
+    SectionData {
         title: "General",
         icon: "⚡",
         bindings: &[
-            Binding { keys: "Ctrl + 1-2", action: "Switch page" },
+            Binding { keys: "Ctrl + 1-3", action: "Switch page" },
         ],
     },
 ];
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(_state: &KeybindingsState, cx: f32, cy: f32, cw: f32, _ch: f32) -> PageContent {
+pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32) -> PageContent {
     let mut pc = PageContent::new();
     let accent = [0.36, 0.56, 0.38, 1.0];
     let text_fg = [0.83, 0.83, 0.83, 1.0];
     let text_dim = [0.53, 0.53, 0.60, 1.0];
 
-    pc.text("Keybindings", cx + 12.0, cy + 12.0, 18.0, accent);
+    pc.text("Settings", cx + 12.0, cy + 12.0, 18.0, accent);
 
-    let mut y = cy + 42.0;
+    let cs_w = (cw - 24.0).min(300.0);
+    let cs_h = 24.0;
+    let cs_y = cy + 48.0 + state.color_selector.top_room();
 
-    for section in SECTIONS {
+    state.color_selector.set_row_rect(cx + 12.0, cs_w);
+    clear_ui::layout::render_widget(&mut pc, &mut state.color_selector, cx + 12.0, cs_y, cs_w, cs_h);
+
+    let y = cs_y + cs_h + 32.0;
+
+    // Keyboard Shortcuts Section
+    let mut sec_keys = Section::new(&mut pc, cx, y, cw, "Keyboard Shortcuts");
+    sec_keys.spacing(8.0);
+
+    for (i, section) in SECTIONS.iter().enumerate() {
         // Section Header
         let header_str = format!("{} {}", section.icon, section.title);
-        pc.text(&header_str, cx + 12.0, y, 14.0, text_fg);
-        y += 22.0;
+        sec_keys.text(&mut pc, &header_str, 12.0, 0.0, 13.0, text_fg);
+        sec_keys.spacing(20.0);
 
         for b in section.bindings {
-            pc.text(b.keys, cx + 12.0, y, 12.0, accent);
-            pc.text(b.action, cx + 160.0, y, 12.0, text_dim);
-            y += 18.0;
+            sec_keys.text(&mut pc, b.keys, 12.0, 0.0, 11.0, accent);
+            sec_keys.text(&mut pc, b.action, 160.0, 0.0, 11.0, text_dim);
+            sec_keys.spacing(16.0);
         }
 
-        y += 8.0;
-        // Divider
-        pc.rect([0.15, 0.20, 0.16, 1.0], cx + 12.0, y, cw - 24.0, 1.0);
-        y += 12.0;
+        if i < SECTIONS.len() - 1 {
+            sec_keys.spacing(8.0);
+            sec_keys.separator(&mut pc);
+            sec_keys.spacing(12.0);
+        }
     }
+
+    sec_keys.finish(&mut pc);
 
     pc
 }
-
-// ── Update ──────────────────────────────────────────────────────────
-
-pub fn update(_state: &mut KeybindingsState, _msg: KeybindingsMessage) {}

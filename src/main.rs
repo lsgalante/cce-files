@@ -4,7 +4,7 @@ use wayland_client::QueueHandle;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics};
 
 use clear_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
-use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Widget};
+use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element};
 
 use pages::Page;
 use pages::browse::is_project_dir;

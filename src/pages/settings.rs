@@ -1,6 +1,6 @@
 use crate::pages::PageContent;
-use clear_ui::widget::{ColorSelector, Widget};
-use clear_ui::layout::Section;
+use clear_ui::widget::{ColorSelector, Element};
+use clear_ui::layout::SectionContext;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -85,8 +85,8 @@ pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32) -> P
     pc.text("Settings", cx + 12.0, cy + 12.0, 18.0, accent);
 
     let cs_w = (cw - 24.0).min(300.0);
-    let cs_h = 24.0;
-    let cs_y = cy + 48.0 + state.color_selector.top_room();
+    let cs_h = 42.0;
+    let cs_y = cy + 48.0;
 
     state.color_selector.set_row_rect(cx + 12.0, cs_w);
     clear_ui::layout::render_widget(&mut pc, &mut state.color_selector, cx + 12.0, cs_y, cs_w, cs_h);
@@ -94,29 +94,29 @@ pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32) -> P
     let y = cs_y + cs_h + 32.0;
 
     // Keyboard Shortcuts Section
-    let mut sec_keys = Section::new(&mut pc, cx, y, cw, "Keyboard Shortcuts");
+    let mut sec_keys = SectionContext::new(&mut pc, cx, y, cw, "Keyboard Shortcuts", false);
     sec_keys.spacing(8.0);
 
     for (i, section) in SECTIONS.iter().enumerate() {
         // Section Header
         let header_str = format!("{} {}", section.icon, section.title);
-        sec_keys.text(&mut pc, &header_str, 12.0, 0.0, 13.0, text_fg);
+        sec_keys.text(&header_str, 12.0, 0.0, 13.0, text_fg);
         sec_keys.spacing(20.0);
 
         for b in section.bindings {
-            sec_keys.text(&mut pc, b.keys, 12.0, 0.0, 11.0, accent);
-            sec_keys.text(&mut pc, b.action, 160.0, 0.0, 11.0, text_dim);
+            sec_keys.text(b.keys, 12.0, 0.0, 11.0, accent);
+            sec_keys.text(b.action, 160.0, 0.0, 11.0, text_dim);
             sec_keys.spacing(16.0);
         }
 
         if i < SECTIONS.len() - 1 {
             sec_keys.spacing(8.0);
-            sec_keys.separator(&mut pc);
+            sec_keys.separator();
             sec_keys.spacing(12.0);
         }
     }
 
-    sec_keys.finish(&mut pc);
+    sec_keys.finish();
 
     pc
 }

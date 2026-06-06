@@ -3,8 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
-use clear_ui::widget::{Widget, Breadcrumb};
-use clear_ui::layout::Section;
+use clear_ui::widget::{Element, Breadcrumb};
+use clear_ui::layout::SectionContext;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -214,9 +214,9 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     // Files Section height takes the remaining space above Search Section
     let outer_h = search_sec_y - outer_y - 12.0;
 
-    let mut files_sec = Section::new(&mut pc, outer_x - 8.0, outer_y - 12.0, outer_w + 16.0, "Files");
+    let mut files_sec = SectionContext::new(&mut pc, outer_x - 8.0, outer_y - 12.0, outer_w + 16.0, "Files", false);
     files_sec.content_y = outer_y + outer_h - 12.0;
-    files_sec.finish(&mut pc);
+    files_sec.finish();
 
     // Inner file list scroll box (inset inside the Files Section)
     let list_x = outer_x + 4.0;
@@ -244,9 +244,9 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         let sec_w = (outer_w - 12.0) / 2.0;
 
         // Left column: Search
-        let mut search_sec = Section::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "Search");
+        let mut search_sec = SectionContext::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "Search", false);
         search_sec.content_y = search_sec_y + search_sec_h - 12.0;
-        search_sec.finish(&mut pc);
+        search_sec.finish();
 
         let search_x = outer_x + 12.0;
         let search_y = search_sec_y + 14.0;
@@ -258,9 +258,9 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
 
         // Right column: File Name
         let filename_sec_x = outer_x + sec_w + 12.0;
-        let mut filename_sec = Section::new(&mut pc, filename_sec_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "File Name");
+        let mut filename_sec = SectionContext::new(&mut pc, filename_sec_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "File Name", false);
         filename_sec.content_y = search_sec_y + search_sec_h - 12.0;
-        filename_sec.finish(&mut pc);
+        filename_sec.finish();
 
         let filename_x = filename_sec_x + 12.0;
         let filename_y = search_sec_y + 14.0;
@@ -271,9 +271,9 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         clear_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, filename_y, filename_w, filename_h);
     } else {
         // 2. Search Section borders (Full Width)
-        let mut search_sec = Section::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, outer_w + 16.0, "Search");
+        let mut search_sec = SectionContext::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, outer_w + 16.0, "Search", false);
         search_sec.content_y = search_sec_y + search_sec_h - 12.0;
-        search_sec.finish(&mut pc);
+        search_sec.finish();
 
         // Inner search textbox
         let search_x = outer_x + 12.0;

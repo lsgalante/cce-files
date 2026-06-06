@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use crate::pages::PageContent;
 use crate::pages::browse::{BrowseState, DirEntry};
-use clear_ui::widget::{Graph, GraphNode, Widget, Breadcrumb};
+use clear_ui::widget::{Graph, GraphNode, Element, Breadcrumb};
 
 pub struct NetworkState {
     pub graph: Graph,

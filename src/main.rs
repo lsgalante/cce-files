@@ -7,6 +7,7 @@ use clear_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings
 use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Widget};
 
 use pages::Page;
+use pages::browse::is_project_dir;
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ struct FilesystemApp {
     // Command-line chooser options
     select_mode: bool,
     select_directory: bool,
+    save_mode: bool,
 
     // Rendering resources
     widgets: Vec<AppWidget>,
@@ -45,6 +47,7 @@ struct FilesystemApp {
     cursor_x: f32,
     cursor_y: f32,
     paginator: clear_ui::widget::Paginator,
+    just_initialized: bool,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -73,6 +76,9 @@ fn make_text_buffer(fs: &mut FontSystem, text: &str, size: f32) -> Buffer {
 
 impl FilesystemApp {
     fn rebuild_layout(&mut self) {
+        self.browse.save_name_box.prepare_text(&mut self.font_system);
+        self.browse.search_box.prepare_text(&mut self.font_system);
+
         let mut widgets = Vec::new();
         let mut text_items = Vec::new();
 
@@ -87,9 +93,9 @@ impl FilesystemApp {
         let mut paginator_pc = pages::PageContent::new();
         clear_ui::layout::render_widget(&mut paginator_pc, &mut self.paginator, 0.0, 0.0, self.width as f32, self.height as f32);
 
-        let has_sidebar = !self.select_mode;
-        let sidebar_w = if has_sidebar { 56.0 } else { 0.0 };
-        let browse_x = if has_sidebar { 73.0 } else { 16.0 };
+        let has_sidebar = true;
+        let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
+        let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
         let browse_w = usable_w * 0.55;
         let preview_w = usable_w * 0.45;
@@ -104,9 +110,9 @@ impl FilesystemApp {
         };
 
         if has_sidebar {
-            // 2. Add Content Background (where x >= 56.0) from the paginator to pc first
+            // 2. Add Content Background (where x >= sidebar_w) from the paginator to pc first
             for rect in paginator_pc.rects.iter() {
-                if rect.1 >= 56.0 {
+                if rect.1 >= sidebar_w {
                     pc.rects.push(*rect);
                 }
             }
@@ -119,7 +125,7 @@ impl FilesystemApp {
         // 3. Draw Page content
         match self.current_page {
             Page::Browse => {
-                let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h);
+                let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h, self.select_mode);
                 let preview_pc = pages::preview::view(&self.preview, preview_x, content_y, preview_w, content_h);
 
                 pc.rects.extend(browse_pc.rects);
@@ -162,18 +168,15 @@ impl FilesystemApp {
         }
 
         if has_sidebar {
-            // 4. Add Sidebar Background and tabs (where x < 56.0) from the paginator to pc last
+            // 4. Add Sidebar Background and tabs (where x < sidebar_w) from the paginator to pc last
             for rect in paginator_pc.rects.iter() {
-                if rect.1 < 56.0 {
+                if rect.1 < sidebar_w {
                     pc.rects.push(*rect);
                 }
             }
 
             // Sidebar Divider Line (accent border)
-            pc.rect([0.36, 0.56, 0.38, 1.0], 56.0, 0.0, 1.0, self.height as f32);
-
-            // Sidebar Title rendered vertically
-            pc.text("C\nL\nE\nA\nR", 18.0, 16.0, 12.0, [0.36, 0.56, 0.38, 1.0]);
+            pc.rect([0.36, 0.56, 0.38, 1.0], sidebar_w, 0.0, 1.0, self.height as f32);
 
             // Add the paginator's texts (tab labels) on top of the sidebar background
             pc.texts.extend(paginator_pc.texts);
@@ -183,38 +186,10 @@ impl FilesystemApp {
         if self.select_mode {
             let bar_y = self.height as f32 - select_bar_h - 16.0;
             // Divider line
-            pc.rect([0.15, 0.20, 0.16, 1.0], 16.0, bar_y, self.width as f32 - 32.0, 1.0);
+            pc.rect([0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
 
-            // Determine currently selected path
-            let selected_path = if let Some(idx) = self.browse.selected {
-                self.browse.entries.get(idx).map(|e| e.path.clone())
-            } else {
-                None
-            };
-
-            let disp_path = if self.select_directory {
-                selected_path.filter(|p| p.is_dir()).unwrap_or_else(|| self.browse.current_dir.clone())
-            } else {
-                selected_path.unwrap_or_else(|| self.browse.current_dir.clone())
-            };
-
-            let path_str = disp_path.to_string_lossy().to_string();
-            let label_text = if self.select_directory { "Selected Directory:" } else { "Selected File:" };
-            
             let accent = [0.36, 0.56, 0.38, 1.0];
             let text_fg = [0.83, 0.83, 0.83, 1.0];
-
-            pc.text(label_text, 24.0, bar_y + 18.0, 12.0, accent);
-            
-            // Limit path display string length
-            let max_chars = ((self.width as f32 - 380.0) / 7.0).max(10.0) as usize;
-            let path_truncated = if path_str.chars().count() > max_chars {
-                let truncated: String = path_str.chars().skip(path_str.chars().count() - max_chars + 3).collect();
-                format!("...{}", truncated)
-            } else {
-                path_str
-            };
-            pc.text(&path_truncated, 160.0, bar_y + 18.0, 12.0, text_fg);
 
             // Cancel button
             let cancel_x = self.width as f32 - 180.0;
@@ -230,10 +205,11 @@ impl FilesystemApp {
                 Message::SelectCancel,
             );
 
-            // Open/Select button
+            // Open/Select/Save button
             let open_x = self.width as f32 - 100.0;
+            let button_label = if self.save_mode { "Save" } else { "Select" };
             pc.button(
-                "Select",
+                button_label,
                 open_x,
                 bar_y + 10.0,
                 80.0,
@@ -294,11 +270,12 @@ impl FilesystemApp {
                     (btn.label_color[1] * 255.0) as u8,
                     (btn.label_color[2] * 255.0) as u8,
                 ),
+                bounds: None,
             });
         }
 
         // Add raw texts
-        for (text, size, x, y, col, _font) in &pc.texts {
+        for (text, size, x, y, col, _font, bounds) in &pc.texts {
             text_items.push(TextItem {
                 buffer: make_text_buffer(&mut self.font_system, text, *size),
                 x: *x,
@@ -308,6 +285,7 @@ impl FilesystemApp {
                     (col[1] * 255.0) as u8,
                     (col[2] * 255.0) as u8,
                 ),
+                bounds: *bounds,
             });
         }
 
@@ -326,18 +304,20 @@ impl Application for FilesystemApp {
     fn new(_qh: &QueueHandle<clear_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
         // Parse command line arguments
         let args: Vec<String> = std::env::args().collect();
-        let select_mode = args.iter().any(|arg| arg == "--select" || arg == "--select-dir");
         let select_directory = args.iter().any(|arg| arg == "--select-dir");
+        let save_mode = args.iter().any(|arg| arg == "--save");
+        let select_mode = save_mode || args.iter().any(|arg| arg == "--select" || arg == "--select-dir");
 
         // Use signature green theme for the content background of the paginator
         clear_ui::color::set_page_low_color([0.10, 0.165, 0.11, 1.0]);
+        clear_ui::scale::set_scale_factor(1.0);
 
         let browse = pages::browse::BrowseState::default();
         let current_dir = browse.current_dir.clone();
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
         let paginator = clear_ui::widget::Paginator::new(56.0, pages_names)
-            .with_tab_y_offset(120.0)
+            .with_sidebar_label("CLEAR")
             .with_tabs_rotated(true);
 
         let mut app = Self {
@@ -348,6 +328,7 @@ impl Application for FilesystemApp {
             preview: pages::preview::PreviewState::default(),
             select_mode,
             select_directory,
+            save_mode,
             widgets: Vec::new(),
             text_items: Vec::new(),
             font_system: FontSystem::new(),
@@ -360,13 +341,15 @@ impl Application for FilesystemApp {
             cursor_x: 0.0,
             cursor_y: 0.0,
             paginator,
+            just_initialized: true,
         };
 
         // Start initial directory loading
         let sender_clone = sender.clone();
+        let path_clone = current_dir.clone();
         tokio::spawn(async move {
-            let entries = pages::browse::read_directory(&current_dir);
-            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
+            let entries = pages::browse::read_directory(&path_clone);
+            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
         });
 
         app.rebuild_layout();
@@ -375,7 +358,9 @@ impl Application for FilesystemApp {
 
     fn settings(&self) -> WindowSettings {
         if self.select_mode {
-            let title = if self.select_directory {
+            let title = if self.save_mode {
+                "Save File"
+            } else if self.select_directory {
                 "Select Directory"
             } else {
                 "Select File"
@@ -410,16 +395,25 @@ impl Application for FilesystemApp {
                 self.needs_rebuild = true;
             }
             Message::Browse(msg) => {
+                let is_file_double_click = if let pages::browse::BrowseMessage::NavigateTo(idx) = &msg {
+                    self.browse.entries.get(*idx).map(|e| !e.is_dir || (self.select_mode && !self.select_directory && is_project_dir(&e.path))).unwrap_or(false)
+                } else {
+                    false
+                };
+
                 let is_navigation = match &msg {
-                    pages::browse::BrowseMessage::NavigateTo(_) | pages::browse::BrowseMessage::NavigateToPath(_) => true,
+                    pages::browse::BrowseMessage::NavigateTo(idx) => {
+                        self.browse.entries.get(*idx).map(|e| e.is_dir && !is_project_dir(&e.path)).unwrap_or(false)
+                    }
+                    pages::browse::BrowseMessage::NavigateToPath(_) => true,
                     _ => false,
                 };
-                let handle = pages::browse::update(&mut self.browse, msg);
+                let (target_path, handle) = pages::browse::update(&mut self.browse, msg);
                 if is_navigation {
                     let sender_clone = self.sender.clone();
                     tokio::spawn(async move {
                         let entries = handle.await.unwrap_or_default();
-                        let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
+                        let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(target_path, entries)));
                     });
                 }
 
@@ -433,8 +427,23 @@ impl Application for FilesystemApp {
                     pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::SetPath { path });
                 }
 
+                if let Some(idx) = self.browse.selected {
+                    if let Some(entry) = self.browse.entries.get(idx) {
+                        if self.select_mode {
+                            self.browse.save_name_box.text = entry.name.clone();
+                            if self.browse.save_name_box.editing {
+                                self.browse.save_name_box.edit_buffer = entry.name.clone();
+                            }
+                        }
+                    }
+                }
+
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
+
+                if is_file_double_click && self.select_mode {
+                    self.update(Message::SelectOpen, needs_rebuild, _exit);
+                }
             }
             Message::Preview(msg) => {
                 pages::preview::update(&mut self.preview, msg);
@@ -443,25 +452,53 @@ impl Application for FilesystemApp {
             }
             Message::KeyboardEvent(_) => {}
             Message::SelectOpen => {
-                let selected_path = if let Some(idx) = self.browse.selected {
-                    self.browse.entries.get(idx).map(|e| e.path.clone())
-                } else {
-                    None
-                };
                 if self.select_directory {
+                    let selected_path = if let Some(idx) = self.browse.selected {
+                        self.browse.entries.get(idx).map(|e| e.path.clone())
+                    } else {
+                        None
+                    };
                     let path = selected_path.filter(|p| p.is_dir()).unwrap_or_else(|| self.browse.current_dir.clone());
                     println!("{}", path.display());
                     std::process::exit(0);
-                } else if let Some(path) = selected_path {
-                    if path.is_dir() {
-                        let sender_clone = self.sender.clone();
-                        tokio::spawn(async move {
-                            let entries = pages::browse::read_directory(&path);
-                            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
-                        });
+                } else {
+                    let filename = if self.browse.save_name_box.editing {
+                        self.browse.save_name_box.edit_buffer.trim()
                     } else {
-                        println!("{}", path.display());
-                        std::process::exit(0);
+                        self.browse.save_name_box.text.trim()
+                    };
+                    if !filename.is_empty() {
+                        let path = self.browse.current_dir.join(filename);
+                        if path.is_dir() && !is_project_dir(&path) {
+                            let sender_clone = self.sender.clone();
+                            let path_clone = path.clone();
+                            tokio::spawn(async move {
+                                let entries = pages::browse::read_directory(&path_clone);
+                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
+                            });
+                        } else {
+                            println!("{}", path.display());
+                            std::process::exit(0);
+                        }
+                    } else {
+                        let selected_path = if let Some(idx) = self.browse.selected {
+                            self.browse.entries.get(idx).map(|e| e.path.clone())
+                        } else {
+                            None
+                        };
+                        if let Some(path) = selected_path {
+                            if path.is_dir() && !is_project_dir(&path) {
+                                let sender_clone = self.sender.clone();
+                                let path_clone = path.clone();
+                                tokio::spawn(async move {
+                                    let entries = pages::browse::read_directory(&path_clone);
+                                    let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
+                                });
+                            } else {
+                                println!("{}", path.display());
+                                std::process::exit(0);
+                            }
+                        }
                     }
                 }
             }
@@ -472,6 +509,15 @@ impl Application for FilesystemApp {
     }
 
     fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
+        if self.just_initialized {
+            self.just_initialized = false;
+            if self.save_mode {
+                self.browse.save_name_box.focus();
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        }
+
         if self.paginator.tick(dt) {
             *needs_rebuild = true;
             self.needs_rebuild = true;
@@ -496,6 +542,7 @@ impl Application for FilesystemApp {
             self.width = size.width as u32;
             self.height = size.height as u32;
             self.scale_factor = scale;
+            clear_ui::scale::set_scale_factor(scale as f32);
             self.rebuild_layout();
         }
 
@@ -509,7 +556,11 @@ impl Application for FilesystemApp {
     }
 
     fn clear_color(&self) -> [f32; 4] {
-        [0.10, 0.165, 0.11, 1.0]
+        let mut color = [0.10, 0.165, 0.11, 1.0];
+        if let Some(opacity) = clear_ui::color::read_opacity_if_configured() {
+            color[3] = opacity;
+        }
+        color
     }
 
     fn handle_pointer_move(&mut self, pos: LogicalPosition, needs_rebuild: &mut bool) {
@@ -526,10 +577,21 @@ impl Application for FilesystemApp {
             if self.browse.search_box.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
+            if self.select_mode {
+                if self.browse.save_name_box.cursor_moved(pos.x, pos.y) {
+                    changed = true;
+                }
+            }
             if self.browse.list_box.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
+            if self.browse.breadcrumb.on_cursor_moved(pos.x, pos.y) {
+                changed = true;
+            }
         } else if self.current_page == Page::Network {
+            if self.network.breadcrumb.on_cursor_moved(pos.x, pos.y) {
+                changed = true;
+            }
             if self.network.graph.is_dragging() {
                 if self.network.graph.drag_update(pos.x, pos.y) {
                     changed = true;
@@ -558,7 +620,6 @@ impl Application for FilesystemApp {
             self.needs_rebuild = true;
         }
     }
-
     fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, pos: LogicalPosition, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if button != MouseButton::Left && button != MouseButton::Right {
             return None;
@@ -566,9 +627,13 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
-        if self.paginator.mouse_input(button, state, pos.x, pos.y) {
+        eprintln!("[DEBUG] MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
+        let pag_match = self.paginator.mouse_input(button, state, pos.x, pos.y);
+        eprintln!("[DEBUG] Paginator matched: {}", pag_match);
+        if pag_match {
             if self.paginator.take_click() {
                 let idx = self.paginator.selected_page();
+                eprintln!("[DEBUG] Paginator page changed to idx: {}", idx);
                 if idx < Page::ALL.len() {
                     clear_ui::widget::focus::clear_focus();
                     self.current_page = Page::ALL[idx];
@@ -584,14 +649,78 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
+            if self.select_mode {
+                if self.browse.save_name_box.mouse_input(button, state, pos.x, pos.y) {
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                }
+            }
             if self.browse.list_box.mouse_input(button, state, pos.x, pos.y) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
+            if button == MouseButton::Left && state == ElementState::Pressed {
+                if self.browse.breadcrumb.hit_test(pos.x, pos.y) {
+                    if self.browse.breadcrumb.mouse_input(button, state, pos.x, pos.y) {
+                        if let Some(seg) = self.browse.breadcrumb.path_click() {
+                            let mut target_path = std::path::PathBuf::new();
+                            let mut current_idx = 0;
+                            for component in self.browse.current_dir.components() {
+                                target_path.push(component);
+                                if component == std::path::Component::RootDir {
+                                    if seg == 0 {
+                                        break;
+                                    }
+                                } else {
+                                    current_idx += 1;
+                                    if current_idx == seg {
+                                        break;
+                                    }
+                                }
+                            }
+                            let sender_clone = self.sender.clone();
+                            let path_clone = target_path.clone();
+                            tokio::spawn(async move {
+                                let entries = pages::browse::read_directory(&path_clone);
+                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
+                            });
+                            *needs_rebuild = true;
+                            self.needs_rebuild = true;
+                        }
+                    }
+                }
+            }
         } else if self.current_page == Page::Network {
             if button == MouseButton::Left {
                 if state == ElementState::Pressed {
-                    if self.network.graph.mouse_input(button, state, pos.x, pos.y) {
+                    if self.network.breadcrumb.hit_test(pos.x, pos.y) {
+                        if self.network.breadcrumb.mouse_input(button, state, pos.x, pos.y) {
+                            if let Some(seg) = self.network.breadcrumb.path_click() {
+                                let mut target_path = std::path::PathBuf::new();
+                                let mut current_idx = 0;
+                                for component in self.browse.current_dir.components() {
+                                    target_path.push(component);
+                                    if component == std::path::Component::RootDir {
+                                        if seg == 0 {
+                                            break;
+                                        }
+                                    } else {
+                                        current_idx += 1;
+                                        if current_idx == seg {
+                                            break;
+                                        }
+                                    }
+                                }
+                                let sender_clone = self.sender.clone();
+                                let path_clone = target_path.clone();
+                                tokio::spawn(async move {
+                                    let entries = pages::browse::read_directory(&path_clone);
+                                    let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
+                                });
+                                changed = true;
+                            }
+                        }
+                    } else if self.network.graph.mouse_input(button, state, pos.x, pos.y) {
                         if self.network.graph.is_dragging() {
                             self.network.graph.drag_begin(pos.x, pos.y);
                         }
@@ -617,9 +746,17 @@ impl Application for FilesystemApp {
                     let entry_idx = node_sel - offset;
                     if self.browse.selected != Some(entry_idx) {
                         self.browse.selected = Some(entry_idx);
-                        let selected_path = self.browse.entries.get(entry_idx).map(|e| e.path.clone());
-                        if let Some(path) = selected_path {
-                            pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::SetPath { path });
+                        if let Some(entry) = self.browse.entries.get(entry_idx) {
+                            if self.select_mode {
+                                self.browse.save_name_box.text = entry.name.clone();
+                                if self.browse.save_name_box.editing {
+                                    self.browse.save_name_box.edit_buffer = entry.name.clone();
+                                }
+                            }
+                            let selected_path = Some(entry.path.clone());
+                            if let Some(path) = selected_path {
+                                pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::SetPath { path });
+                            }
                         }
                         changed = true;
                     }
@@ -643,23 +780,31 @@ impl Application for FilesystemApp {
                     if let Some(parent) = self.browse.current_dir.parent() {
                         let parent_path = parent.to_path_buf();
                         let sender_clone = self.sender.clone();
+                        let path_clone = parent_path.clone();
                         tokio::spawn(async move {
-                            let entries = pages::browse::read_directory(&parent_path);
-                            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
+                            let entries = pages::browse::read_directory(&path_clone);
+                            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
                         });
                         changed = true;
                     }
                 } else if dbl_idx >= offset {
                     let entry_idx = dbl_idx - offset;
                     if let Some(entry) = self.browse.entries.get(entry_idx) {
-                        if entry.is_dir {
+                        if entry.is_dir && !is_project_dir(&entry.path) {
                             let path = entry.path.clone();
                             let sender_clone = self.sender.clone();
+                            let path_clone = path.clone();
                             tokio::spawn(async move {
-                                let entries = pages::browse::read_directory(&path);
-                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(entries)));
+                                let entries = pages::browse::read_directory(&path_clone);
+                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
                             });
                             changed = true;
+                        } else if self.select_mode {
+                            self.browse.save_name_box.text = entry.name.clone();
+                            if self.browse.save_name_box.editing {
+                                self.browse.save_name_box.edit_buffer = entry.name.clone();
+                            }
+                            return Some(Message::SelectOpen);
                         }
                     }
                 }
@@ -696,8 +841,14 @@ impl Application for FilesystemApp {
 
         if state == ElementState::Pressed {
             let clicked_search = self.current_page == Page::Browse && self.browse.search_box.hit_test(pos.x, pos.y);
+            let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.browse.save_name_box.hit_test(pos.x, pos.y);
             if !clicked_search {
                 self.browse.search_box.unfocus();
+            }
+            if !clicked_save_name {
+                self.browse.save_name_box.unfocus();
+            }
+            if !clicked_search && !clicked_save_name {
                 clear_ui::widget::focus::clear_focus();
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
@@ -766,6 +917,20 @@ impl Application for FilesystemApp {
             }
         }
 
+        // If the save_name_box is focused, forward key inputs to it
+        if self.select_mode && self.browse.save_name_box.editing {
+            if self.browse.save_name_box.keyboard_input(event) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Enter) {
+                    self.browse.save_name_box.unfocus();
+                    clear_ui::widget::focus::clear_focus();
+                    return Some(Message::SelectOpen);
+                }
+                return None;
+            }
+        }
+
         // Global key navigation
         if self.current_page == Page::Browse {
             let key_char = match &event.logical_key {
@@ -787,13 +952,19 @@ impl Application for FilesystemApp {
                 clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Enter) => {
                     if let Some(idx) = self.browse.selected {
                         if let Some(entry) = self.browse.entries.get(idx) {
-                            if entry.is_dir {
+                            if entry.is_dir && !is_project_dir(&entry.path) {
                                 return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
                             } else if self.select_mode && !self.select_directory {
-                                println!("{}", entry.path.display());
-                                std::process::exit(0);
+                                if self.save_mode {
+                                    return Some(Message::SelectOpen);
+                                } else {
+                                    println!("{}", entry.path.display());
+                                    std::process::exit(0);
+                                }
                             }
                         }
+                    } else if self.save_mode {
+                        return Some(Message::SelectOpen);
                     }
                 }
                 clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) => {
@@ -820,7 +991,7 @@ impl Application for FilesystemApp {
                     Some("l") => {
                         if let Some(idx) = self.browse.selected {
                             if let Some(entry) = self.browse.entries.get(idx) {
-                                if entry.is_dir {
+                                if entry.is_dir && !is_project_dir(&entry.path) {
                                     return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
                                 }
                             }

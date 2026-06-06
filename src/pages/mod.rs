@@ -53,7 +53,7 @@ pub struct ContentButton {
 
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32)>,
-    pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>)>,
+    pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
     pub buttons: Vec<ContentButton>,
 }
 
@@ -71,11 +71,11 @@ impl PageContent {
     }
 
     pub fn text(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4]) {
-        self.texts.push((content.to_string(), size, x, y, color, None));
+        self.texts.push((content.to_string(), size, x, y, color, None, None));
     }
 
     pub fn text_with_font(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: &str) {
-        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string())));
+        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string()), None));
     }
 
     pub fn button(
@@ -139,10 +139,18 @@ impl RenderTarget for PageContent {
     }
 
     fn text(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4]) {
-        self.texts.push((content.to_string(), size, x, y, color, None));
+        self.texts.push((content.to_string(), size, x, y, color, None, None));
     }
 
     fn text_with_font(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: &str) {
-        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string())));
+        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string()), None));
+    }
+
+    fn text_with_bounds(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], bounds: Option<[f32; 4]>) {
+        self.texts.push((content.to_string(), size, x, y, color, None, bounds));
+    }
+
+    fn text_with_font_and_bounds(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: &str, bounds: Option<[f32; 4]>) {
+        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string()), bounds));
     }
 }

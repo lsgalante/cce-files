@@ -3,7 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
-use clear_ui::widget::Widget;
+use clear_ui::widget::{Widget, Breadcrumb};
+use clear_ui::layout::Section;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -26,20 +27,42 @@ pub struct BrowseState {
     pub search_box: clear_ui::widget::TextBox,
     pub list_box: clear_ui::widget::ScrollingList,
     pub selected: Option<usize>,
+    pub breadcrumb: Breadcrumb,
+    pub save_name_box: clear_ui::widget::TextBox,
 }
 
 impl Default for BrowseState {
     fn default() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-        Self {
+        let mut breadcrumb = Breadcrumb::new();
+        breadcrumb.set_network_opacity(0.95);
+        let mut state = Self {
             current_dir: PathBuf::from(home),
             all_entries: Vec::new(),
             entries: Vec::new(),
             show_hidden: false,
-            search_box: clear_ui::widget::TextBox::new(String::new()).with_label("Search files..."),
+            search_box: clear_ui::widget::TextBox::new(String::new()).with_max_width(None),
             list_box: clear_ui::widget::ScrollingList::new(28.0, 2.0),
             selected: None,
+            breadcrumb,
+            save_name_box: clear_ui::widget::TextBox::new(String::new()).with_max_width(None),
+        };
+        state.list_box.scroll_box.show_border = false;
+        state.update_breadcrumb();
+        state
+    }
+}
+
+impl BrowseState {
+    pub fn update_breadcrumb(&mut self) {
+        let mut segments = Vec::new();
+        for component in self.current_dir.components() {
+            let s = component.as_os_str().to_string_lossy().to_string();
+            if s != "/" && !s.is_empty() {
+                segments.push(s);
+            }
         }
+        self.breadcrumb.set_path(&segments);
     }
 }
 
@@ -49,7 +72,7 @@ pub enum BrowseMessage {
     SelectEntry(usize),
     NavigateTo(usize),
     NavigateToPath(PathBuf),
-    DirectoryLoaded(Vec<DirEntry>),
+    DirectoryLoaded(PathBuf, Vec<DirEntry>),
     ToggleHidden,
 }
 
@@ -57,6 +80,10 @@ pub enum BrowseMessage {
 pub enum BrowseNavigation {
     Up,
     Down,
+}
+
+pub fn is_project_dir(path: &Path) -> bool {
+    path.is_dir() && path.join("state.json").exists()
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -163,7 +190,7 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageContent {
+pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool) -> PageContent {
     let mut pc = PageContent::new();
     let text_dim = [0.53, 0.53, 0.60, 1.0];
     let heading_fg = [0.56, 0.83, 0.56, 1.0]; // Color::from_rgb8(0x8f, 0xd4, 0x8f)
@@ -172,34 +199,91 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32) -> Page
     let accent_fg = [0.36, 0.56, 0.38, 1.0]; // Color::from_rgb8(0x5c, 0x90, 0x60)
     let text_fg = [0.83, 0.83, 0.83, 1.0];
 
-    // Breadcrumb path
-    let path_str = state.current_dir.to_string_lossy().to_string();
-    pc.text(&path_str, cx + 12.0, cy + 12.0, 11.0, text_dim);
+    // Render the Breadcrumb widget into PageContent
+    clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 12.0, cy + 6.0, cw - 24.0, 24.0);
 
-    // Search textbox
-    let search_w = cw - 80.0;
-    let search_h = 28.0;
-    let search_y = cy + 28.0 + state.search_box.top_room();
-    state.search_box.set_row_rect(cx + 12.0, search_w);
-    clear_ui::layout::render_widget(&mut pc, &mut state.search_box, cx + 12.0, search_y, search_w, search_h);
+    // 1. Files Section layout
+    let outer_x = cx + 12.0;
+    let outer_y = cy + 42.0;
+    let outer_w = cw - 24.0;
 
-    // Count label next to search
+    // Search Section starts at the bottom
+    let search_sec_h = 56.0;
+    let search_sec_y = cy + ch - search_sec_h;
+
+    // Files Section height takes the remaining space above Search Section
+    let outer_h = search_sec_y - outer_y - 12.0;
+
+    let mut files_sec = Section::new(&mut pc, outer_x - 8.0, outer_y - 12.0, outer_w + 16.0, "Files");
+    files_sec.content_y = outer_y + outer_h - 12.0;
+    files_sec.finish(&mut pc);
+
+    // Inner file list scroll box (inset inside the Files Section)
+    let list_x = outer_x + 4.0;
+    let list_y = outer_y + 4.0;
+    let list_w = outer_w - 8.0;
+    let list_h = outer_h - 8.0;
+
+    clear_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h);
+
+    state.list_box.update_bounds(state.entries.len(), list_y, list_h);
+
+    // Count label in the bottom right corner of the scrolling list
     let count_str = format!(
         "{} items{}",
         state.entries.len(),
         if state.show_hidden { " (.)" } else { "" }
     );
-    pc.text(&count_str, cx + 12.0 + search_w + 8.0, search_y + 8.0, 11.0, text_dim);
+    let count_text_w = count_str.len() as f32 * 6.0;
+    let count_x = list_x + list_w - count_text_w - 24.0;
+    let count_y = list_y + list_h - 18.0;
+    pc.text(&count_str, count_x, count_y, 11.0, text_dim);
 
-    // File list scroll box
-    let list_x = cx + 12.0;
-    let list_y = search_y + search_h + 16.0;
-    let list_w = cw - 24.0;
-    let list_h = ch - (list_y - cy) - 12.0;
+    if select_mode {
+        // Two columns at the bottom: Search and File Name
+        let sec_w = (outer_w - 12.0) / 2.0;
 
-    clear_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h);
+        // Left column: Search
+        let mut search_sec = Section::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "Search");
+        search_sec.content_y = search_sec_y + search_sec_h - 12.0;
+        search_sec.finish(&mut pc);
 
-    state.list_box.update_bounds(state.entries.len(), list_y, list_h);
+        let search_x = outer_x + 12.0;
+        let search_y = search_sec_y + 14.0;
+        let search_w = sec_w - 24.0;
+        let search_h = 28.0;
+
+        state.search_box.set_row_rect(search_x, search_w);
+        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, search_y, search_w, search_h);
+
+        // Right column: File Name
+        let filename_sec_x = outer_x + sec_w + 12.0;
+        let mut filename_sec = Section::new(&mut pc, filename_sec_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "File Name");
+        filename_sec.content_y = search_sec_y + search_sec_h - 12.0;
+        filename_sec.finish(&mut pc);
+
+        let filename_x = filename_sec_x + 12.0;
+        let filename_y = search_sec_y + 14.0;
+        let filename_w = sec_w - 24.0;
+        let filename_h = 28.0;
+
+        state.save_name_box.set_row_rect(filename_x, filename_w);
+        clear_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, filename_y, filename_w, filename_h);
+    } else {
+        // 2. Search Section borders (Full Width)
+        let mut search_sec = Section::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, outer_w + 16.0, "Search");
+        search_sec.content_y = search_sec_y + search_sec_h - 12.0;
+        search_sec.finish(&mut pc);
+
+        // Inner search textbox
+        let search_x = outer_x + 12.0;
+        let search_y = search_sec_y + 14.0;
+        let search_w = outer_w - 24.0;
+        let search_h = 28.0;
+
+        state.search_box.set_row_rect(search_x, search_w);
+        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, search_y, search_w, search_h);
+    }
 
     for (idx, entry) in state.entries.iter().enumerate() {
         if let Some(draw_y) = state.list_box.get_item_draw_y(idx, 2.0) {
@@ -308,46 +392,44 @@ fn apply_filters(state: &mut BrowseState) {
     state.selected = if state.entries.is_empty() { None } else { Some(0) };
 }
 
-pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> tokio::task::JoinHandle<Vec<DirEntry>> {
+pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> (PathBuf, tokio::task::JoinHandle<Vec<DirEntry>>) {
     match msg {
         BrowseMessage::SearchChanged(q) => {
             state.search_box.text = q;
             apply_filters(state);
-            tokio::spawn(async { Vec::new() })
+            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
         }
         BrowseMessage::SelectEntry(i) => {
             state.selected = Some(i);
-            tokio::spawn(async { Vec::new() })
+            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
         }
         BrowseMessage::NavigateTo(idx) => {
             if let Some(entry) = state.entries.get(idx) {
-                if entry.is_dir {
+                if entry.is_dir && !is_project_dir(&entry.path) {
                     let path = entry.path.clone();
-                    return tokio::spawn(async move { read_directory(&path) });
+                    let p = path.clone();
+                    return (path, tokio::spawn(async move { read_directory(&p) }));
                 }
             }
-            tokio::spawn(async { Vec::new() })
+            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
         }
         BrowseMessage::NavigateToPath(path) => {
             let p = path.clone();
-            tokio::spawn(async move { read_directory(&p) })
+            (path, tokio::spawn(async move { read_directory(&p) }))
         }
-        BrowseMessage::DirectoryLoaded(entries) => {
+        BrowseMessage::DirectoryLoaded(path, entries) => {
+            state.current_dir = path;
             state.all_entries = entries;
             state.search_box.text.clear();
             state.search_box.edit_buffer.clear();
             apply_filters(state);
-            if let Some(first) = state.all_entries.first() {
-                if let Some(parent) = first.path.parent() {
-                    state.current_dir = parent.to_path_buf();
-                }
-            }
-            tokio::spawn(async { Vec::new() })
+            state.update_breadcrumb();
+            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
         }
         BrowseMessage::ToggleHidden => {
             state.show_hidden = !state.show_hidden;
             apply_filters(state);
-            tokio::spawn(async { Vec::new() })
+            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
         }
     }
 }
@@ -368,7 +450,7 @@ mod tests {
                     modified: String::new(),
                 })
                 .collect(),
-            search_box: clear_ui::widget::TextBox::new(String::new()),
+            search_box: clear_ui::widget::TextBox::new(String::new()).with_max_width(None),
             list_box: clear_ui::widget::ScrollingList::new(28.0, 2.0),
             ..BrowseState::default()
         }
@@ -436,5 +518,28 @@ mod tests {
         state.show_hidden = true;
         apply_filters(&mut state);
         assert_eq!(state.entries.len(), 2);
+    }
+
+    #[test]
+    fn test_is_project_dir_detection() {
+        let unique_dir = std::env::temp_dir().join(format!("clear_test_dir_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        std::fs::create_dir_all(&unique_dir).unwrap();
+        
+        // Initially, path is a directory but doesn't have state.json
+        assert!(!is_project_dir(&unique_dir));
+        
+        // Create state.json
+        let file_path = unique_dir.join("state.json");
+        std::fs::write(&file_path, "{}").unwrap();
+        
+        // Now it should be recognized as a project dir
+        assert!(is_project_dir(&unique_dir));
+        
+        // If it's a file rather than a directory, even if named state.json, it shouldn't be a project dir itself
+        assert!(!is_project_dir(&file_path));
+
+        // Clean up
+        let _ = std::fs::remove_file(&file_path);
+        let _ = std::fs::remove_dir(&unique_dir);
     }
 }

@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 use crate::pages::PageContent;
 use crate::pages::browse::{BrowseState, DirEntry};
-use clear_ui::widget::{Graph, GraphNode, Widget};
+use clear_ui::widget::{Graph, GraphNode, Widget, Breadcrumb};
 
 pub struct NetworkState {
     pub graph: Graph,
+    pub breadcrumb: Breadcrumb,
     pub last_dir: PathBuf,
 }
 
@@ -20,8 +21,12 @@ impl Default for NetworkState {
         graph.set_uniform_background(false);
         graph.set_network_opacity(0.95);
 
+        let mut breadcrumb = Breadcrumb::new();
+        breadcrumb.set_network_opacity(0.95);
+
         Self {
             graph,
+            breadcrumb,
             last_dir: PathBuf::new(),
         }
     }
@@ -98,9 +103,22 @@ impl NetworkState {
 pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageContent {
     let mut pc = PageContent::new();
 
+    // Render the Breadcrumb widget into PageContent
+    clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, cw - 16.0, 24.0);
+
     // Check if directory changed, or if last_dir is empty, and repopulate
     if state.last_dir != browse.current_dir || state.graph.get_nodes().is_empty() {
         state.populate_graph(&browse.current_dir, &browse.entries);
+
+        // Update breadcrumb path
+        let mut segments = Vec::new();
+        for component in browse.current_dir.components() {
+            let s = component.as_os_str().to_string_lossy().to_string();
+            if s != "/" && !s.is_empty() {
+                segments.push(s);
+            }
+        }
+        state.breadcrumb.set_path(&segments);
 
         // Map browse selection to graph node selection if any
         let has_parent = browse.current_dir.parent().is_some();
@@ -131,8 +149,8 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw
         }
     }
 
-    // Render the Graph widget into PageContent
-    clear_ui::layout::render_widget(&mut pc, &mut state.graph, cx, cy, cw, ch);
+    // Render the Graph widget into PageContent, shifted down by 28.0 to leave room for the breadcrumb
+    clear_ui::layout::render_widget(&mut pc, &mut state.graph, cx, cy + 28.0, cw, ch - 28.0);
 
     pc
 }

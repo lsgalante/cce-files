@@ -76,7 +76,7 @@ const SECTIONS: &[SectionData] = &[
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32) -> PageContent {
+pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32, ctx: &mut clear_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
     let accent = [0.36, 0.56, 0.38, 1.0];
     let text_fg = [0.83, 0.83, 0.83, 1.0];
@@ -89,12 +89,12 @@ pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32) -> P
     let cs_y = cy + 48.0;
 
     state.color_selector.set_row_rect(cx + 12.0, cs_w);
-    clear_ui::layout::render_widget(&mut pc, &mut state.color_selector, cx + 12.0, cs_y, cs_w, cs_h);
+    clear_ui::layout::render_widget(&mut pc, &mut state.color_selector, cx + 12.0, cs_y, cs_w, cs_h, ctx);
 
     let y = cs_y + cs_h + 32.0;
 
     // Keyboard Shortcuts Section
-    let mut sec_keys = SectionContext::new(&mut pc, cx, y, cw, "Keyboard Shortcuts", false);
+    let mut sec_keys = SectionContext::new(&mut pc, cx, y, cw, "Keyboard Shortcuts", false, false);
     sec_keys.spacing(8.0);
 
     for (i, section) in SECTIONS.iter().enumerate() {

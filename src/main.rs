@@ -48,6 +48,7 @@ struct FilesystemApp {
     cursor_y: f32,
     paginator: clear_ui::widget::Paginator,
     just_initialized: bool,
+    ui_context: clear_ui::context::UiContext,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -91,7 +92,7 @@ impl FilesystemApp {
         let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
         self.paginator.set_selected_page(page_idx);
         let mut paginator_pc = pages::PageContent::new();
-        clear_ui::layout::render_widget(&mut paginator_pc, &mut self.paginator, 0.0, 0.0, self.width as f32, self.height as f32);
+        clear_ui::layout::render_widget(&mut paginator_pc, &mut self.paginator, 0.0, 0.0, self.width as f32, self.height as f32, &mut self.ui_context);
 
         let has_sidebar = true;
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
@@ -125,7 +126,7 @@ impl FilesystemApp {
         // 3. Draw Page content
         match self.current_page {
             Page::Browse => {
-                let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h, self.select_mode);
+                let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h, self.select_mode, &mut self.ui_context);
                 let preview_pc = pages::preview::view(&self.preview, preview_x, content_y, preview_w, content_h);
 
                 pc.rects.extend(browse_pc.rects);
@@ -137,7 +138,7 @@ impl FilesystemApp {
                 pc.buttons.extend(preview_pc.buttons);
             }
             Page::Network => {
-                let network_pc = pages::network::view(&mut self.network, &self.browse, browse_x, content_y, browse_w, content_h);
+                let network_pc = pages::network::view(&mut self.network, &self.browse, browse_x, content_y, browse_w, content_h, &mut self.ui_context);
                 let preview_pc = pages::preview::view(&self.preview, preview_x, content_y, preview_w, content_h);
 
                 pc.rects.extend(network_pc.rects);
@@ -149,7 +150,7 @@ impl FilesystemApp {
                 pc.buttons.extend(preview_pc.buttons);
             }
             Page::Settings => {
-                let settings_pc = pages::settings::view(&mut self.settings, browse_x, content_y, usable_w, content_h);
+                let settings_pc = pages::settings::view(&mut self.settings, browse_x, content_y, usable_w, content_h, &mut self.ui_context);
 
                 pc.rects.extend(settings_pc.rects);
                 pc.texts.extend(settings_pc.texts);
@@ -342,6 +343,7 @@ impl Application for FilesystemApp {
             cursor_y: 0.0,
             paginator,
             just_initialized: true,
+            ui_context: clear_ui::context::UiContext::new(),
         };
 
         // Start initial directory loading
@@ -376,7 +378,7 @@ impl Application for FilesystemApp {
         } else {
             WindowSettings {
                 title: "Clear Filesystem Interface".to_string(),
-                app_id: "clear-filesystem-interface".to_string(),
+                app_id: "cce-filesystem-interface".to_string(),
                 width: 1200,
                 height: 720,
                 fullscreen: false,
@@ -513,18 +515,19 @@ impl Application for FilesystemApp {
             self.just_initialized = false;
             if self.save_mode {
                 self.browse.save_name_box.focus();
+                self.ui_context.set_focused(&mut self.browse.save_name_box);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
         }
 
-        if self.paginator.tick(dt) {
+        if self.paginator.tick(dt, &mut self.ui_context) {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
 
         if self.current_page == Page::Settings {
-            if self.settings.color_selector.tick(dt) {
+            if self.settings.color_selector.tick(dt, &mut self.ui_context) {
                 let col = self.settings.color_selector.color;
                 let r_f = col[0] as f32 / 255.0;
                 let g_f = col[1] as f32 / 255.0;
@@ -569,27 +572,27 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
-        if self.paginator.cursor_moved(pos.x, pos.y) {
+        if self.paginator.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
             changed = true;
         }
 
         if self.current_page == Page::Browse {
-            if self.browse.search_box.cursor_moved(pos.x, pos.y) {
+            if self.browse.search_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                 changed = true;
             }
             if self.select_mode {
-                if self.browse.save_name_box.cursor_moved(pos.x, pos.y) {
+                if self.browse.save_name_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                     changed = true;
                 }
             }
-            if self.browse.list_box.cursor_moved(pos.x, pos.y) {
+            if self.browse.list_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                 changed = true;
             }
-            if self.browse.breadcrumb.on_cursor_moved(pos.x, pos.y) {
+            if self.browse.breadcrumb.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                 changed = true;
             }
         } else if self.current_page == Page::Network {
-            if self.network.breadcrumb.on_cursor_moved(pos.x, pos.y) {
+            if self.network.breadcrumb.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                 changed = true;
             }
             if self.network.graph.is_dragging() {
@@ -597,12 +600,12 @@ impl Application for FilesystemApp {
                     changed = true;
                 }
             } else {
-                if self.network.graph.on_cursor_moved(pos.x, pos.y) {
+                if self.network.graph.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                     changed = true;
                 }
             }
         } else if self.current_page == Page::Settings {
-            if self.settings.color_selector.cursor_moved(pos.x, pos.y) {
+            if self.settings.color_selector.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                 changed = true;
             }
         }
@@ -628,14 +631,14 @@ impl Application for FilesystemApp {
         let mut changed = false;
 
         eprintln!("[DEBUG] MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
-        let pag_match = self.paginator.mouse_input(button, state, pos.x, pos.y);
+        let pag_match = self.paginator.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
         eprintln!("[DEBUG] Paginator matched: {}", pag_match);
         if pag_match {
             if self.paginator.take_click() {
                 let idx = self.paginator.selected_page();
                 eprintln!("[DEBUG] Paginator page changed to idx: {}", idx);
                 if idx < Page::ALL.len() {
-                    clear_ui::widget::focus::clear_focus();
+                    self.ui_context.clear_focus();
                     self.current_page = Page::ALL[idx];
                 }
             }
@@ -645,23 +648,29 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
-            if self.browse.search_box.mouse_input(button, state, pos.x, pos.y) {
+            if self.browse.search_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                if state == ElementState::Pressed {
+                    self.ui_context.set_focused(&mut self.browse.search_box);
+                }
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
             if self.select_mode {
-                if self.browse.save_name_box.mouse_input(button, state, pos.x, pos.y) {
+                if self.browse.save_name_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                    if state == ElementState::Pressed {
+                        self.ui_context.set_focused(&mut self.browse.save_name_box);
+                    }
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                 }
             }
-            if self.browse.list_box.mouse_input(button, state, pos.x, pos.y) {
+            if self.browse.list_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
             if button == MouseButton::Left && state == ElementState::Pressed {
-                if self.browse.breadcrumb.hit_test(pos.x, pos.y) {
-                    if self.browse.breadcrumb.mouse_input(button, state, pos.x, pos.y) {
+                if self.browse.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
+                    if self.browse.breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                         if let Some(seg) = self.browse.breadcrumb.path_click() {
                             let mut target_path = std::path::PathBuf::new();
                             let mut current_idx = 0;
@@ -693,8 +702,8 @@ impl Application for FilesystemApp {
         } else if self.current_page == Page::Network {
             if button == MouseButton::Left {
                 if state == ElementState::Pressed {
-                    if self.network.breadcrumb.hit_test(pos.x, pos.y) {
-                        if self.network.breadcrumb.mouse_input(button, state, pos.x, pos.y) {
+                    if self.network.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
+                        if self.network.breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                             if let Some(seg) = self.network.breadcrumb.path_click() {
                                 let mut target_path = std::path::PathBuf::new();
                                 let mut current_idx = 0;
@@ -712,7 +721,7 @@ impl Application for FilesystemApp {
                                     }
                                 }
                                 let sender_clone = self.sender.clone();
-                                let path_clone = target_path.clone();
+                                  let path_clone = target_path.clone();
                                 tokio::spawn(async move {
                                     let entries = pages::browse::read_directory(&path_clone);
                                     let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
@@ -720,7 +729,7 @@ impl Application for FilesystemApp {
                                 changed = true;
                             }
                         }
-                    } else if self.network.graph.mouse_input(button, state, pos.x, pos.y) {
+                    } else if self.network.graph.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                         if self.network.graph.is_dragging() {
                             self.network.graph.drag_begin(pos.x, pos.y);
                         }
@@ -731,7 +740,7 @@ impl Application for FilesystemApp {
                         self.network.graph.drag_end();
                         changed = true;
                     } else {
-                        if self.network.graph.mouse_input(button, state, pos.x, pos.y) {
+                        if self.network.graph.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                             changed = true;
                         }
                     }
@@ -815,7 +824,7 @@ impl Application for FilesystemApp {
                 self.needs_rebuild = true;
             }
         } else if self.current_page == Page::Settings {
-            if self.settings.color_selector.mouse_input(button, state, pos.x, pos.y) {
+            if self.settings.color_selector.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                 if self.settings.color_selector.take_click() {
                     let col = self.settings.color_selector.color;
                     let r_f = col[0] as f32 / 255.0;
@@ -827,9 +836,9 @@ impl Application for FilesystemApp {
                 changed = true;
             }
             // If user clicked outside color selector focus area, unfocus it
-            if state == ElementState::Pressed && !self.settings.color_selector.hit_test(pos.x, pos.y) {
+            if state == ElementState::Pressed && !self.settings.color_selector.hit_test(pos.x, pos.y, &self.ui_context) {
                 self.settings.color_selector.unfocus();
-                clear_ui::widget::focus::clear_focus();
+                self.ui_context.clear_focus();
                 changed = true;
             }
 
@@ -840,8 +849,8 @@ impl Application for FilesystemApp {
         }
 
         if state == ElementState::Pressed {
-            let clicked_search = self.current_page == Page::Browse && self.browse.search_box.hit_test(pos.x, pos.y);
-            let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.browse.save_name_box.hit_test(pos.x, pos.y);
+            let clicked_search = self.current_page == Page::Browse && self.browse.search_box.hit_test(pos.x, pos.y, &self.ui_context);
+            let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.browse.save_name_box.hit_test(pos.x, pos.y, &self.ui_context);
             if !clicked_search {
                 self.browse.search_box.unfocus();
             }
@@ -849,7 +858,7 @@ impl Application for FilesystemApp {
                 self.browse.save_name_box.unfocus();
             }
             if !clicked_search && !clicked_save_name {
-                clear_ui::widget::focus::clear_focus();
+                self.ui_context.clear_focus();
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -870,12 +879,12 @@ impl Application for FilesystemApp {
 
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
         if self.current_page == Page::Browse {
-            if self.browse.list_box.mouse_wheel(delta, pos.x, pos.y) {
+            if self.browse.list_box.mouse_wheel(delta, pos.x, pos.y, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
         } else if self.current_page == Page::Network {
-            if self.network.graph.mouse_wheel(delta, pos.x as f32, pos.y as f32) {
+            if self.network.graph.mouse_wheel(delta, pos.x as f32, pos.y as f32, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -888,7 +897,7 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Settings && self.settings.color_selector.editing {
-            if self.settings.color_selector.keyboard_input(event) {
+            if self.settings.color_selector.keyboard_input(event, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 if !self.settings.color_selector.editing {
@@ -905,7 +914,7 @@ impl Application for FilesystemApp {
 
         // If the search textbox is focused, forward key inputs to it
         if self.current_page == Page::Browse && self.browse.search_box.editing {
-            if self.browse.search_box.keyboard_input(event) {
+            if self.browse.search_box.keyboard_input(event, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 if self.browse.search_box.take_change() {
@@ -919,12 +928,12 @@ impl Application for FilesystemApp {
 
         // If the save_name_box is focused, forward key inputs to it
         if self.select_mode && self.browse.save_name_box.editing {
-            if self.browse.save_name_box.keyboard_input(event) {
+            if self.browse.save_name_box.keyboard_input(event, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Enter) {
                     self.browse.save_name_box.unfocus();
-                    clear_ui::widget::focus::clear_focus();
+                    self.ui_context.clear_focus();
                     return Some(Message::SelectOpen);
                 }
                 return None;
@@ -1007,7 +1016,7 @@ impl Application for FilesystemApp {
                     }
                     Some("/") => {
                         self.browse.search_box.focus();
-                        clear_ui::widget::focus::set_focused(&mut self.browse.search_box);
+                        self.ui_context.set_focused(&mut self.browse.search_box);
                         *needs_rebuild = true;
                         self.needs_rebuild = true;
                     }

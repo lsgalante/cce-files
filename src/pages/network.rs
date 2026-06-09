@@ -100,11 +100,11 @@ impl NetworkState {
     }
 }
 
-pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageContent {
+pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut clear_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
 
     // Render the Breadcrumb widget into PageContent
-    clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, cw - 16.0, 24.0);
+    clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, cw - 16.0, 24.0, ctx);
 
     // Check if directory changed, or if last_dir is empty, and repopulate
     if state.last_dir != browse.current_dir || state.graph.get_nodes().is_empty() {
@@ -150,7 +150,7 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw
     }
 
     // Render the Graph widget into PageContent, shifted down by 28.0 to leave room for the breadcrumb
-    clear_ui::layout::render_widget(&mut pc, &mut state.graph, cx, cy + 28.0, cw, ch - 28.0);
+    clear_ui::layout::render_widget(&mut pc, &mut state.graph, cx, cy + 28.0, cw, ch - 28.0, ctx);
 
     pc
 }

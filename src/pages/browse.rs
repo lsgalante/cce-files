@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
-use clear_ui::widget::{Element, Breadcrumb};
+use clear_ui::widget::{Element, Breadcrumb, PathController};
 use clear_ui::layout::SectionContext;
 
 // ── Data ────────────────────────────────────────────────────────────

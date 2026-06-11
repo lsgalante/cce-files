@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use crate::pages::PageContent;
 use crate::pages::browse::{BrowseState, DirEntry};
-use clear_ui::widget::{Graph, GraphNode, Element, Breadcrumb};
+use clear_ui::widget::{Graph, GraphNode, Element, Breadcrumb, GraphController, PathController};
 
 pub struct NetworkState {
     pub graph: Graph,
@@ -48,6 +48,7 @@ impl NetworkState {
                 .unwrap_or_else(|| "/".to_string());
             let name = format!("📁 .. ({})", parent_name);
             nodes.push(GraphNode {
+                id: String::new(),
                 name: name.clone(),
                 position: (3.0, 0.0),
                 parameters: Vec::new(),
@@ -72,6 +73,7 @@ impl NetworkState {
         };
 
         nodes.push(GraphNode {
+            id: String::new(),
             name: current_node_name.clone(),
             position: (3.0, 1.0),
             parameters: current_params,
@@ -88,6 +90,7 @@ impl NetworkState {
             let row = 2.0 + (idx / 7) as f32;
 
             nodes.push(GraphNode {
+                id: String::new(),
                 name: node_name,
                 position: (col, row),
                 parameters: vec![("input".to_string(), current_node_name.clone(), "string".to_string())],

@@ -5,6 +5,7 @@ use glyphon::{Attrs, Buffer, FontSystem, Metrics};
 
 use clear_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
 use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element};
+use clear_ui::widget::{GraphController, PathController};
 
 use pages::Page;
 use pages::browse::is_project_dir;

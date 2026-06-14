@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use crate::pages::PageContent;
+use clear_ui::layout::SectionContext;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -18,6 +19,7 @@ pub struct PreviewState {
     pub file_type: String,
     pub target: String, // for symlinks
     pub content_preview: Option<String>,
+    pub scroll_line: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +90,44 @@ fn infer_file_type(name: &str, is_dir: bool) -> String {
     }
 }
 
+impl PreviewState {
+    pub fn handle_mouse_wheel(&mut self, delta: &clear_ui::widget::MouseScrollDelta, ch: f32) -> bool {
+        let content = match &self.content_preview {
+            Some(c) => c,
+            None => return false,
+        };
+        let total_lines = content.lines().count();
+        let half_h = ch * 0.5;
+        let mut max_visible_lines = 0;
+        let mut text_y = 44.0;
+        while text_y + 14.0 <= half_h - 16.0 {
+            max_visible_lines += 1;
+            text_y += 15.0;
+        }
+        if total_lines <= max_visible_lines {
+            if self.scroll_line != 0 {
+                self.scroll_line = 0;
+                return true;
+            }
+            return false;
+        }
+        let max_scroll = total_lines.saturating_sub(max_visible_lines);
+        let scroll_speed = 3.0;
+        let diff = match delta {
+            clear_ui::widget::MouseScrollDelta::LineDelta(_, y) => {
+                -y * scroll_speed
+            }
+            clear_ui::widget::MouseScrollDelta::PixelDelta(pos) => {
+                -pos.y as f32 / 15.0
+            }
+        };
+        let prev_scroll = self.scroll_line;
+        let new_scroll = (self.scroll_line as f32 + diff).round() as isize;
+        self.scroll_line = new_scroll.clamp(0, max_scroll as isize) as usize;
+        self.scroll_line != prev_scroll
+    }
+}
+
 // ── View ────────────────────────────────────────────────────────────
 
 pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageContent {
@@ -103,49 +143,38 @@ pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageCon
 
     let half_h = ch * 0.5;
 
-    // 1. Top pane: File Preview
-    pc.text("Preview", cx + 12.0, cy + 12.0, 14.0, label_fg);
+    // 1. Top pane: File Preview Section
+    let mut preview_sec = SectionContext::new(&mut pc, cx + 4.0, cy + 12.0, cw - 8.0, "Preview", false, false);
+    preview_sec.content_y = cy + half_h - 20.0;
+    preview_sec.finish(); // Releases borrow on pc
 
     let bg_color = [0.07, 0.11, 0.08, 0.5];
     pc.rect(bg_color, cx + 12.0, cy + 32.0, cw - 24.0, half_h - 40.0);
 
     if let Some(content) = &state.content_preview {
         let mut text_y = cy + 44.0;
-        for line in content.lines() {
+        for line in content.lines().skip(state.scroll_line) {
             if text_y + 14.0 > cy + half_h - 16.0 {
                 break;
             }
-            let line_truncated = if line.chars().count() > 45 {
-                let mut s: String = line.chars().take(42).collect();
+            let limit = (((cw - 40.0) / 6.8).floor() as usize).max(20);
+            let line_truncated = if line.chars().count() > limit {
+                let mut s: String = line.chars().take(limit - 3).collect();
                 s.push_str("...");
                 s
             } else {
                 line.to_string()
             };
-            pc.text(&line_truncated, cx + 20.0, text_y, 11.0, text_fg);
+            pc.text_with_font(&line_truncated, cx + 20.0, text_y, 11.0, text_fg, "monospace");
             text_y += 15.0;
         }
     } else {
         pc.text("No preview available", cx + 20.0, cy + 44.0, 11.0, text_dim);
     }
 
-    // 2. Bottom pane: Details
+    // 2. Bottom pane: Details Section
     let bottom_y = cy + half_h + 12.0;
-
-    // Pane divider
-    pc.rect([0.15, 0.20, 0.16, 1.0], cx + 12.0, bottom_y - 6.0, cw - 24.0, 1.0);
-
     let icon = if state.is_dir { "📁" } else { "📄" };
-
-    // Details header
-    pc.text(icon, cx + 12.0, bottom_y + 6.0, 20.0, text_fg);
-    
-    let name_truncated = if state.name.len() > 30 {
-        format!("{}...", &state.name[..27])
-    } else {
-        state.name.clone()
-    };
-    pc.text(&name_truncated, cx + 42.0, bottom_y + 10.0, 16.0, text_fg);
 
     // Metadata details
     let details = [
@@ -156,7 +185,27 @@ pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageCon
         ("Modified", &state.modified),
     ];
 
-    let mut y = bottom_y + 36.0;
+    let details_content_start_y = bottom_y + 19.0;
+    let mut details_content_end_y = details_content_start_y + 36.0 + details.len() as f32 * 20.0;
+    if !state.target.is_empty() {
+        details_content_end_y += 24.0;
+    }
+
+    let mut details_sec = SectionContext::new(&mut pc, cx + 4.0, bottom_y, cw - 8.0, "Details", false, false);
+    details_sec.content_y = details_content_end_y;
+    details_sec.finish(); // Releases borrow on pc
+
+    let header_y = details_content_start_y + 6.0;
+    pc.text(icon, cx + 12.0, header_y, 20.0, text_fg);
+    
+    let name_truncated = if state.name.len() > 30 {
+        format!("{}...", &state.name[..27])
+    } else {
+        state.name.clone()
+    };
+    pc.text(&name_truncated, cx + 42.0, header_y + 4.0, 16.0, text_fg);
+
+    let mut y = details_content_start_y + 36.0;
     for (label, val) in &details {
         pc.text(label, cx + 12.0, y, 12.0, label_fg);
         
@@ -228,7 +277,7 @@ pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
             let content_preview = if is_dir {
                 if let Ok(entries) = fs::read_dir(&path) {
                     let mut names = Vec::new();
-                    for entry in entries.flatten().take(15) {
+                    for entry in entries.flatten().take(100) {
                         let name = entry.file_name().to_string_lossy().to_string();
                         let is_sub_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
                         let icon = if is_sub_dir { "📁" } else { "📄" };
@@ -244,13 +293,16 @@ pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
                 }
             } else if let Ok(mut file) = fs::File::open(&path) {
                 use std::io::Read;
-                let mut buf = vec![0u8; 1024];
+                let mut buf = vec![0u8; 65536];
                 if let Ok(n) = file.read(&mut buf) {
                     buf.truncate(n);
-                    if let Ok(utf8_str) = String::from_utf8(buf) {
-                        let lines: Vec<&str> = utf8_str.lines().take(15).collect();
-                        let preview_text = lines.join("\n");
-                        Some(preview_text)
+                    let is_text = match std::str::from_utf8(&buf) {
+                        Ok(_) => true,
+                        Err(err) => err.error_len().is_none() && err.valid_up_to() > 0,
+                    };
+                    if is_text {
+                        let utf8_str = String::from_utf8_lossy(&buf).into_owned();
+                        Some(utf8_str)
                     } else {
                         Some("[Binary file content]".to_string())
                     }
@@ -272,6 +324,7 @@ pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
                 file_type,
                 target,
                 content_preview,
+                scroll_line: 0,
             };
         }
     }

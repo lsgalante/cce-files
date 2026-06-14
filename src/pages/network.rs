@@ -53,6 +53,9 @@ impl NetworkState {
                 position: (3.0, 0.0),
                 parameters: Vec::new(),
                 geom_visible: true,
+                node_type: String::new(),
+                inputs: 0,
+                outputs: 1,
             });
             Some(name)
         } else {
@@ -78,6 +81,9 @@ impl NetworkState {
             position: (3.0, 1.0),
             parameters: current_params,
             geom_visible: true,
+            node_type: String::new(),
+            inputs: 1,
+            outputs: 1,
         });
 
         // 3. Children nodes
@@ -95,6 +101,9 @@ impl NetworkState {
                 position: (col, row),
                 parameters: vec![("input".to_string(), current_node_name.clone(), "string".to_string())],
                 geom_visible: true,
+                node_type: String::new(),
+                inputs: 1,
+                outputs: 1,
             });
         }
 

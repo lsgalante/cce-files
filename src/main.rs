@@ -44,7 +44,7 @@ struct FilesystemApp {
     height: u32,
     scale_factor: f64,
     sender: calloop::channel::Sender<Message>,
-    page_buttons: Vec<pages::ContentButton>,
+    page_buttons: Vec<(clear_ui::widget::Button, Message)>,
     cursor_x: f32,
     cursor_y: f32,
     paginator: clear_ui::widget::Paginator,
@@ -66,10 +66,22 @@ pub enum Message {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-fn make_text_buffer(fs: &mut FontSystem, text: &str, size: f32) -> Buffer {
-    let metrics = Metrics::new(size, size * 1.4);
+fn make_text_buffer(fs: &mut FontSystem, text: &str, size: f32, font: Option<&str>) -> Buffer {
+    let scale = clear_ui::scale::scale_factor();
+    let physical_size = size * scale;
+    let metrics = Metrics::new(physical_size, physical_size * 1.4);
     let mut buf = Buffer::new(fs, metrics);
-    buf.set_text(fs, text, Attrs::new(), glyphon::Shaping::Advanced);
+    let mut attrs = Attrs::new();
+    if let Some(f) = font {
+        let family = match f {
+            "monospace" => glyphon::Family::Name(clear_ui::layout::get_system_monospace_font()),
+            "sans-serif" => glyphon::Family::SansSerif,
+            "serif" => glyphon::Family::Serif,
+            _ => glyphon::Family::Name(f),
+        };
+        attrs = attrs.family(family);
+    }
+    buf.set_text(fs, text, attrs, glyphon::Shaping::Advanced);
     buf.shape_until_scroll(fs, true);
     buf
 }
@@ -95,12 +107,12 @@ impl FilesystemApp {
         let mut paginator_pc = pages::PageContent::new();
         clear_ui::layout::render_widget(&mut paginator_pc, &mut self.paginator, 0.0, 0.0, self.width as f32, self.height as f32, &mut self.ui_context);
 
-        let has_sidebar = true;
+        let has_sidebar = !self.select_mode;
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
         let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
-        let browse_w = usable_w * 0.55;
-        let preview_w = usable_w * 0.45;
+        let browse_w = (usable_w - 12.0) * 0.5;
+        let preview_w = (usable_w - 12.0) * 0.5;
         let preview_x = browse_x + browse_w + 12.0;
         let content_y = 16.0;
 
@@ -127,6 +139,24 @@ impl FilesystemApp {
         // 3. Draw Page content
         match self.current_page {
             Page::Browse => {
+                // Draw background plates for columns
+                let plate_bg = [0.08, 0.13, 0.09, 0.45];
+                let border_color = [0.15, 0.23, 0.17, 0.7];
+
+                // Left column plate (Browse)
+                pc.rect(plate_bg, browse_x, content_y, browse_w, content_h);
+                pc.rect(border_color, browse_x, content_y, browse_w, 1.0);
+                pc.rect(border_color, browse_x, content_y + content_h - 1.0, browse_w, 1.0);
+                pc.rect(border_color, browse_x, content_y, 1.0, content_h);
+                pc.rect(border_color, browse_x + browse_w - 1.0, content_y, 1.0, content_h);
+
+                // Right column plate (Preview)
+                pc.rect(plate_bg, preview_x, content_y, preview_w, content_h);
+                pc.rect(border_color, preview_x, content_y, preview_w, 1.0);
+                pc.rect(border_color, preview_x, content_y + content_h - 1.0, preview_w, 1.0);
+                pc.rect(border_color, preview_x, content_y, 1.0, content_h);
+                pc.rect(border_color, preview_x + preview_w - 1.0, content_y, 1.0, content_h);
+
                 let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h, self.select_mode, &mut self.ui_context);
                 let preview_pc = pages::preview::view(&self.preview, preview_x, content_y, preview_w, content_h);
 
@@ -238,48 +268,55 @@ impl FilesystemApp {
         }
 
         // Add page buttons
-        for btn in &pc.buttons {
-            let hovering = self.cursor_x >= btn.x && self.cursor_x <= btn.x + btn.w
-                && self.cursor_y >= btn.y && self.cursor_y <= btn.y + btn.h;
-            let col = if hovering { btn.hover_bg } else { btn.bg };
+        for (btn, action) in &pc.buttons {
+            let base = btn.base().unwrap();
+            let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
+            let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
+            let label = base.label.as_deref().unwrap_or("");
+            let label_size = 12.0;
+            let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
+
+            let hovering = self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
+                && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h;
+            let col = if hovering { hover_bg } else { bg };
 
             widgets.push(AppWidget {
-                x: btn.x,
-                y: btn.y,
-                w: btn.w,
-                h: btn.h,
+                x: base.x,
+                y: base.y,
+                w: base.w,
+                h: base.h,
                 color: col,
-                hover_color: btn.hover_bg,
+                hover_color: hover_bg,
                 hovering,
-                action: Some(btn.action.clone()),
+                action: Some(action.clone()),
             });
 
             // Draw button text
             let text_x = if btn.left_align {
-                btn.x + 8.0
+                base.x + 8.0
             } else {
-                let text_w = btn.label.chars().count() as f32 * btn.label_size * 0.65;
-                btn.x + (btn.w - text_w) / 2.0
+                let text_w = label.chars().count() as f32 * label_size * 0.65;
+                base.x + (base.w - text_w) / 2.0
             };
-            let text_y = btn.y + (btn.h - btn.label_size * 1.4) / 2.0;
+            let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
 
             text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, &btn.label, btn.label_size),
+                buffer: make_text_buffer(&mut self.font_system, label, label_size, None),
                 x: text_x,
                 y: text_y,
                 color: glyphon::Color::rgb(
-                    (btn.label_color[0] * 255.0) as u8,
-                    (btn.label_color[1] * 255.0) as u8,
-                    (btn.label_color[2] * 255.0) as u8,
+                    (label_color[0] * 255.0) as u8,
+                    (label_color[1] * 255.0) as u8,
+                    (label_color[2] * 255.0) as u8,
                 ),
                 bounds: None,
             });
         }
 
         // Add raw texts
-        for (text, size, x, y, col, _font, bounds) in &pc.texts {
+        for (text, size, x, y, col, font, bounds) in &pc.texts {
             text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, text, *size),
+                buffer: make_text_buffer(&mut self.font_system, text, *size, font.as_deref()),
                 x: *x,
                 y: *y,
                 color: glyphon::Color::rgb(
@@ -333,7 +370,11 @@ impl Application for FilesystemApp {
             save_mode,
             widgets: Vec::new(),
             text_items: Vec::new(),
-            font_system: FontSystem::new(),
+            font_system: {
+                let mut fs = FontSystem::new();
+                fs.db_mut().load_fonts_dir("/home/lsgalante/Dropbox/Fonts");
+                fs
+            },
             needs_rebuild: true,
             width: if select_mode { 900 } else { 1200 },
             height: if select_mode { 500 } else { 720 },
@@ -573,7 +614,7 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
-        if self.paginator.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+        if !self.select_mode && self.paginator.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
             changed = true;
         }
 
@@ -612,9 +653,10 @@ impl Application for FilesystemApp {
         }
 
         // Always check if buttons hover state changed
-        for btn in &self.page_buttons {
-            let _hovering = self.cursor_x >= btn.x && self.cursor_x <= btn.x + btn.w
-                && self.cursor_y >= btn.y && self.cursor_y <= btn.y + btn.h;
+        for (btn, _action) in &self.page_buttons {
+            let base = btn.base().unwrap();
+            let _hovering = self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
+                && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h;
             // Trigger redraw on pointer moves so hover transitions are smooth
             changed = true;
         }
@@ -632,7 +674,7 @@ impl Application for FilesystemApp {
         let mut changed = false;
 
         eprintln!("[DEBUG] MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
-        let pag_match = self.paginator.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
+        let pag_match = !self.select_mode && self.paginator.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
         eprintln!("[DEBUG] Paginator matched: {}", pag_match);
         if pag_match {
             if self.paginator.take_click() {
@@ -866,11 +908,12 @@ impl Application for FilesystemApp {
         }
 
         if button == MouseButton::Left && state == ElementState::Released {
-            for btn in &self.page_buttons {
-                if pos.x >= btn.x && pos.x <= btn.x + btn.w && pos.y >= btn.y && pos.y <= btn.y + btn.h {
+            for (btn, action) in &self.page_buttons {
+                let base = btn.base().unwrap();
+                if pos.x >= base.x && pos.x <= base.x + base.w && pos.y >= base.y && pos.y <= base.y + base.h {
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
-                    return Some(btn.action.clone());
+                    return Some(action.clone());
                 }
             }
         }
@@ -879,6 +922,38 @@ impl Application for FilesystemApp {
     }
 
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
+        if self.current_page == Page::Browse || self.current_page == Page::Network {
+            let has_sidebar = !self.select_mode;
+            let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
+            let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
+            let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
+            let browse_w = (usable_w - 12.0) * 0.5;
+            let preview_w = (usable_w - 12.0) * 0.5;
+            let preview_x = browse_x + browse_w + 12.0;
+            let content_y = 16.0;
+
+            let select_bar_h = 48.0;
+            let content_h = if self.select_mode {
+                self.height as f32 - 32.0 - select_bar_h
+            } else {
+                self.height as f32 - 32.0
+            };
+
+            let half_h = content_h * 0.5;
+            let px = preview_x + 12.0;
+            let py = content_y + 32.0;
+            let pw = preview_w - 24.0;
+            let ph = half_h - 40.0;
+
+            if pos.x as f32 >= px && pos.x as f32 <= px + pw && pos.y as f32 >= py && pos.y as f32 <= py + ph {
+                if self.preview.handle_mouse_wheel(delta, content_h) {
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                }
+                return;
+            }
+        }
+
         if self.current_page == Page::Browse {
             if self.browse.list_box.mouse_wheel(delta, pos.x, pos.y, &mut self.ui_context) {
                 *needs_rebuild = true;

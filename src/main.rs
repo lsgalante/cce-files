@@ -1,4 +1,5 @@
 mod pages;
+mod services;
 
 use wayland_client::QueueHandle;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics};
@@ -53,6 +54,7 @@ struct FilesystemApp {
     just_initialized: bool,
     ui_context: clear_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
+    fs_service: crate::services::fs::FsService,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -97,7 +99,7 @@ impl FilesystemApp {
         use std::time::Duration;
 
         let (tx, mut rx) = mpsc::channel::<()>(100);
-        let sender_clone = self.sender.clone();
+        let fs_service = self.fs_service.sender.clone();
         let path_clone = path.clone();
 
         tokio::spawn(async move {
@@ -105,11 +107,7 @@ impl FilesystemApp {
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 while rx.try_recv().is_ok() {}
 
-                let entries = pages::browse::read_directory(&path_clone);
-                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryRefreshed(
-                    path_clone.clone(),
-                    entries,
-                )));
+                let _ = fs_service.send(crate::services::fs::FsRequest::RefreshDirectory(path_clone.clone())).await;
             }
         });
 
@@ -409,6 +407,7 @@ impl Application for FilesystemApp {
             .with_sidebar_label("CLEAR")
             .with_tabs_rotated(true);
 
+        let fs_service = crate::services::fs::FsService::new(sender.clone());
         let mut app = Self {
             current_page: Page::Browse,
             browse,
@@ -437,15 +436,11 @@ impl Application for FilesystemApp {
             just_initialized: true,
             ui_context: clear_ui::context::UiContext::new(),
             watcher: None,
+            fs_service,
         };
 
-        // Start initial directory loading
-        let sender_clone = sender.clone();
-        let path_clone = current_dir.clone();
-        tokio::spawn(async move {
-            let entries = pages::browse::read_directory(&path_clone);
-            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
-        });
+        // Start initial directory loading via FsService
+        app.fs_service.send(crate::services::fs::FsRequest::ReadLastDir);
 
         app.rebuild_layout();
         app
@@ -496,36 +491,13 @@ impl Application for FilesystemApp {
                     false
                 };
 
-                let is_navigation = match &msg {
-                    pages::browse::BrowseMessage::NavigateTo(idx) => {
-                        self.browse.entries.get(*idx).map(|e| e.is_dir && !is_project_dir(&e.path)).unwrap_or(false)
-                    }
-                    pages::browse::BrowseMessage::NavigateToPath(_) => true,
-                    _ => false,
-                };
-                let is_delete = match &msg {
-                    pages::browse::BrowseMessage::DeleteEntry(_) => true,
-                    _ => false,
-                };
                 let is_directory_loaded = match &msg {
                     pages::browse::BrowseMessage::DirectoryLoaded(path, _) => Some(path.clone()),
                     _ => None,
                 };
 
-                let (target_path, handle) = pages::browse::update(&mut self.browse, msg);
-                if is_navigation || is_delete {
-                    let sender_clone = self.sender.clone();
-                    let is_delete_clone = is_delete;
-                    let target_path_clone = target_path.clone();
-                    tokio::spawn(async move {
-                        let entries = handle.await.unwrap_or_default();
-                        let response_msg = if is_delete_clone {
-                            Message::Browse(pages::browse::BrowseMessage::DirectoryRefreshed(target_path_clone, entries))
-                        } else {
-                            Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(target_path_clone, entries))
-                        };
-                        let _ = sender_clone.send(response_msg);
-                    });
+                if let Some(req) = pages::browse::update(&mut self.browse, msg) {
+                    self.fs_service.send(req);
                 }
 
                 if let Some(path) = is_directory_loaded {
@@ -539,7 +511,7 @@ impl Application for FilesystemApp {
                     None
                 };
                 if let Some(path) = selected_path {
-                    pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::SetPath { path });
+                    self.fs_service.send(crate::services::fs::FsRequest::ReadPreview(path));
                 } else {
                     pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
                 }
@@ -594,12 +566,7 @@ impl Application for FilesystemApp {
                     if !filename.is_empty() {
                         let path = self.browse.current_dir.join(filename);
                         if path.is_dir() && !is_project_dir(&path) {
-                            let sender_clone = self.sender.clone();
-                            let path_clone = path.clone();
-                            tokio::spawn(async move {
-                                let entries = pages::browse::read_directory(&path_clone);
-                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
-                            });
+                            self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(path));
                         } else {
                             println!("{}", path.display());
                             std::process::exit(0);
@@ -612,12 +579,7 @@ impl Application for FilesystemApp {
                         };
                         if let Some(path) = selected_path {
                             if path.is_dir() && !is_project_dir(&path) {
-                                let sender_clone = self.sender.clone();
-                                let path_clone = path.clone();
-                                tokio::spawn(async move {
-                                    let entries = pages::browse::read_directory(&path_clone);
-                                    let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
-                                });
+                                self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(path));
                             } else {
                                 println!("{}", path.display());
                                 std::process::exit(0);
@@ -810,12 +772,7 @@ impl Application for FilesystemApp {
                                     }
                                 }
                             }
-                            let sender_clone = self.sender.clone();
-                            let path_clone = target_path.clone();
-                            tokio::spawn(async move {
-                                let entries = pages::browse::read_directory(&path_clone);
-                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
-                            });
+                            self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(target_path));
                             *needs_rebuild = true;
                             self.needs_rebuild = true;
                         }
@@ -843,12 +800,7 @@ impl Application for FilesystemApp {
                                         }
                                     }
                                 }
-                                let sender_clone = self.sender.clone();
-                                  let path_clone = target_path.clone();
-                                tokio::spawn(async move {
-                                    let entries = pages::browse::read_directory(&path_clone);
-                                    let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
-                                });
+                                self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(target_path));
                                 changed = true;
                             }
                         }
@@ -887,7 +839,7 @@ impl Application for FilesystemApp {
                             }
                             let selected_path = Some(entry.path.clone());
                             if let Some(path) = selected_path {
-                                pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::SetPath { path });
+                                self.fs_service.send(crate::services::fs::FsRequest::ReadPreview(path));
                             }
                         }
                         changed = true;
@@ -913,12 +865,7 @@ impl Application for FilesystemApp {
                 if has_parent && dbl_idx == 0 {
                     if let Some(parent) = self.browse.current_dir.parent() {
                         let parent_path = parent.to_path_buf();
-                        let sender_clone = self.sender.clone();
-                        let path_clone = parent_path.clone();
-                        tokio::spawn(async move {
-                            let entries = pages::browse::read_directory(&path_clone);
-                            let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
-                        });
+                        self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(parent_path));
                         changed = true;
                     }
                 } else if dbl_idx >= offset {
@@ -926,12 +873,7 @@ impl Application for FilesystemApp {
                     if let Some(entry) = self.browse.entries.get(entry_idx) {
                         if entry.is_dir && !is_project_dir(&entry.path) {
                             let path = entry.path.clone();
-                            let sender_clone = self.sender.clone();
-                            let path_clone = path.clone();
-                            tokio::spawn(async move {
-                                let entries = pages::browse::read_directory(&path_clone);
-                                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(path_clone, entries)));
-                            });
+                            self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(path));
                             changed = true;
                         } else if self.select_mode {
                             self.browse.save_name_box.text = entry.name.clone();

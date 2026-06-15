@@ -31,38 +31,10 @@ pub struct BrowseState {
     pub save_name_box: clear_ui::widget::TextBox,
 }
 
-fn get_last_dir_file_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let dir = PathBuf::from(home).join(".config").join("cce");
-    let _ = fs::create_dir_all(&dir);
-    Some(dir.join("cce-filesystem-interface-last-dir.txt"))
-}
-
-fn read_last_dir() -> Option<PathBuf> {
-    let path = get_last_dir_file_path()?;
-    if path.exists() {
-        let content = fs::read_to_string(path).ok()?;
-        let trimmed = content.trim();
-        if !trimmed.is_empty() {
-            let pb = PathBuf::from(trimmed);
-            if pb.exists() && pb.is_dir() {
-                return Some(pb);
-            }
-        }
-    }
-    None
-}
-
-fn save_last_dir(dir: &Path) {
-    if let Some(path) = get_last_dir_file_path() {
-        let _ = fs::write(path, dir.to_string_lossy().as_bytes());
-    }
-}
-
 impl Default for BrowseState {
     fn default() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-        let initial_dir = read_last_dir().unwrap_or_else(|| PathBuf::from(home));
+        let initial_dir = PathBuf::from(home);
         let mut breadcrumb = Breadcrumb::new();
         breadcrumb.set_network_opacity(0.95);
         let mut state = Self {
@@ -105,6 +77,8 @@ pub enum BrowseMessage {
     DirectoryRefreshed(PathBuf, Vec<DirEntry>),
     ToggleHidden,
     DeleteEntry(usize),
+    Deleted(PathBuf, Result<(), String>),
+    LastDirLoaded(Option<PathBuf>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,48 +94,7 @@ pub fn is_project_dir(path: &Path) -> bool {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 pub fn read_directory(path: &Path) -> Vec<DirEntry> {
-    let mut entries: Vec<DirEntry> = match fs::read_dir(path) {
-        Ok(rd) => rd
-            .filter_map(|e| e.ok())
-            .filter_map(|e| {
-                let meta = e.metadata().ok()?;
-                let name = e.file_name().to_string_lossy().to_string();
-                let is_dir = meta.is_dir();
-                let size = meta.len();
-                let permissions = meta.permissions().mode();
-                let modified = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| {
-                        let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?;
-                        let datetime =
-                            chrono::DateTime::from_timestamp(secs.as_secs() as i64, 0)?;
-                        Some(datetime.format("%Y-%m-%d %H:%M").to_string())
-                    })
-                    .unwrap_or_else(|| "—".to_string());
-                Some(DirEntry {
-                    name,
-                    path: e.path(),
-                    is_dir,
-                    size,
-                    permissions,
-                    modified,
-                })
-            })
-            .collect(),
-        Err(_) => return Vec::new(),
-    };
-
-    // Sort: directories first, then files; alphabetically within each group
-    entries.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
-    });
-
-    entries
+    crate::services::fs::read_directory_internal(path)
 }
 
 fn format_size(size: u64) -> String {
@@ -423,40 +356,36 @@ fn apply_filters(state: &mut BrowseState) {
     state.selected = if state.entries.is_empty() { None } else { Some(0) };
 }
 
-pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> (PathBuf, tokio::task::JoinHandle<Vec<DirEntry>>) {
+pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::services::fs::FsRequest> {
     match msg {
         BrowseMessage::SearchChanged(q) => {
             state.search_box.text = q;
             apply_filters(state);
-            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
+            None
         }
         BrowseMessage::SelectEntry(i) => {
             state.selected = Some(i);
-            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
+            None
         }
         BrowseMessage::NavigateTo(idx) => {
             if let Some(entry) = state.entries.get(idx) {
                 if entry.is_dir && !is_project_dir(&entry.path) {
-                    let path = entry.path.clone();
-                    let p = path.clone();
-                    return (path, tokio::spawn(async move { read_directory(&p) }));
+                    return Some(crate::services::fs::FsRequest::ReadDirectory(entry.path.clone()));
                 }
             }
-            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
+            None
         }
         BrowseMessage::NavigateToPath(path) => {
-            let p = path.clone();
-            (path, tokio::spawn(async move { read_directory(&p) }))
+            Some(crate::services::fs::FsRequest::ReadDirectory(path))
         }
         BrowseMessage::DirectoryLoaded(path, entries) => {
-            state.current_dir = path;
-            save_last_dir(&state.current_dir);
+            state.current_dir = path.clone();
             state.all_entries = entries;
             state.search_box.text.clear();
             state.search_box.edit_buffer.clear();
             apply_filters(state);
             state.update_breadcrumb();
-            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
+            Some(crate::services::fs::FsRequest::SaveLastDir(path))
         }
         BrowseMessage::DirectoryRefreshed(path, entries) => {
             if state.current_dir == path {
@@ -467,37 +396,43 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> (PathBuf, tokio::t
                     state.selected = state.entries.iter().position(|e| e.path == path);
                 }
             }
-            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
+            None
         }
         BrowseMessage::ToggleHidden => {
             state.show_hidden = !state.show_hidden;
             apply_filters(state);
-            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
+            None
         }
         BrowseMessage::DeleteEntry(idx) => {
             if let Some(entry) = state.entries.get(idx) {
-                let path = entry.path.clone();
-                let is_dir = entry.is_dir;
-                let res = if is_dir {
-                    std::fs::remove_dir_all(&path)
-                } else {
-                    std::fs::remove_file(&path)
-                };
-                if let Err(e) = res {
-                    eprintln!("Failed to delete {}: {:?}", path.display(), e);
-                } else {
-                    // Remove from local entries list immediately for responsive UI
+                Some(crate::services::fs::FsRequest::DeletePath(entry.path.clone(), entry.is_dir))
+            } else {
+                None
+            }
+        }
+        BrowseMessage::Deleted(path, result) => {
+            match result {
+                Ok(_) => {
                     state.all_entries.retain(|e| e.path != path);
                     state.entries.retain(|e| e.path != path);
                     if state.entries.is_empty() {
                         state.selected = None;
-                    } else {
+                    } else if let Some(idx) = state.selected {
                         state.selected = Some(idx.min(state.entries.len() - 1));
                     }
                 }
+                Err(e) => {
+                    eprintln!("Failed to delete {}: {}", path.display(), e);
+                }
             }
-            let p = state.current_dir.clone();
-            (state.current_dir.clone(), tokio::spawn(async move { read_directory(&p) }))
+            Some(crate::services::fs::FsRequest::ReadDirectory(state.current_dir.clone()))
+        }
+        BrowseMessage::LastDirLoaded(last_dir) => {
+            let path = last_dir.unwrap_or_else(|| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+                PathBuf::from(home)
+            });
+            Some(crate::services::fs::FsRequest::ReadDirectory(path))
         }
     }
 }
@@ -625,10 +560,10 @@ mod tests {
         let _ = std::fs::create_dir_all(&test_dir);
         
         // Save last directory
-        save_last_dir(&test_dir);
+        crate::services::fs::save_last_dir_internal(&test_dir);
         
         // Read last directory
-        let restored = read_last_dir();
+        let restored = crate::services::fs::read_last_dir_internal();
         assert_eq!(restored, Some(test_dir.clone()));
         
         // Restore HOME env var
@@ -681,11 +616,17 @@ mod tests {
         // Assert file exists before deletion
         assert!(file_path.exists());
 
-        // Perform update call
-        let (_, _handle) = update(&mut state, BrowseMessage::DeleteEntry(0));
+        // Perform update call for DeleteEntry
+        let req = update(&mut state, BrowseMessage::DeleteEntry(0));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::DeletePath(_, _))));
 
-        // Check if file is deleted from disk
+        // Directly delete the file to simulate the FsService action
+        std::fs::remove_file(&file_path).unwrap();
         assert!(!file_path.exists());
+
+        // Perform update call for Deleted response
+        let req2 = update(&mut state, BrowseMessage::Deleted(file_path.clone(), Ok(())));
+        assert!(matches!(req2, Some(crate::services::fs::FsRequest::ReadDirectory(_))));
 
         // Check if state entries are updated
         assert!(state.entries.is_empty());

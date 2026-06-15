@@ -31,13 +31,42 @@ pub struct BrowseState {
     pub save_name_box: clear_ui::widget::TextBox,
 }
 
+fn get_last_dir_file_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let dir = PathBuf::from(home).join(".config").join("cce");
+    let _ = fs::create_dir_all(&dir);
+    Some(dir.join("cce-filesystem-interface-last-dir.txt"))
+}
+
+fn read_last_dir() -> Option<PathBuf> {
+    let path = get_last_dir_file_path()?;
+    if path.exists() {
+        let content = fs::read_to_string(path).ok()?;
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            let pb = PathBuf::from(trimmed);
+            if pb.exists() && pb.is_dir() {
+                return Some(pb);
+            }
+        }
+    }
+    None
+}
+
+fn save_last_dir(dir: &Path) {
+    if let Some(path) = get_last_dir_file_path() {
+        let _ = fs::write(path, dir.to_string_lossy().as_bytes());
+    }
+}
+
 impl Default for BrowseState {
     fn default() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+        let initial_dir = read_last_dir().unwrap_or_else(|| PathBuf::from(home));
         let mut breadcrumb = Breadcrumb::new();
         breadcrumb.set_network_opacity(0.95);
         let mut state = Self {
-            current_dir: PathBuf::from(home),
+            current_dir: initial_dir,
             all_entries: Vec::new(),
             entries: Vec::new(),
             show_hidden: false,
@@ -419,6 +448,7 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> (PathBuf, tokio::t
         }
         BrowseMessage::DirectoryLoaded(path, entries) => {
             state.current_dir = path;
+            save_last_dir(&state.current_dir);
             state.all_entries = entries;
             state.search_box.text.clear();
             state.search_box.edit_buffer.clear();
@@ -541,5 +571,37 @@ mod tests {
         // Clean up
         let _ = std::fs::remove_file(&file_path);
         let _ = std::fs::remove_dir(&unique_dir);
+    }
+
+    #[test]
+    fn test_directory_persistence() {
+        let temp_dir = std::env::temp_dir();
+        let original_home = std::env::var("HOME");
+        
+        // Mock HOME env variable so we don't overwrite user's actual config
+        let mock_home = temp_dir.join("mock_home_dir_cce");
+        let _ = std::fs::create_dir_all(&mock_home);
+        unsafe { std::env::set_var("HOME", &mock_home); }
+        
+        let test_dir = temp_dir.join("test_persist_dir");
+        let _ = std::fs::create_dir_all(&test_dir);
+        
+        // Save last directory
+        save_last_dir(&test_dir);
+        
+        // Read last directory
+        let restored = read_last_dir();
+        assert_eq!(restored, Some(test_dir.clone()));
+        
+        // Restore HOME env var
+        if let Ok(val) = original_home {
+            unsafe { std::env::set_var("HOME", val); }
+        } else {
+            unsafe { std::env::remove_var("HOME"); }
+        }
+        
+        // Clean up
+        let _ = std::fs::remove_dir_all(&mock_home);
+        let _ = std::fs::remove_dir(&test_dir);
     }
 }

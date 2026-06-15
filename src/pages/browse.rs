@@ -102,6 +102,7 @@ pub enum BrowseMessage {
     NavigateTo(usize),
     NavigateToPath(PathBuf),
     DirectoryLoaded(PathBuf, Vec<DirEntry>),
+    DirectoryRefreshed(PathBuf, Vec<DirEntry>),
     ToggleHidden,
 }
 
@@ -454,6 +455,17 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> (PathBuf, tokio::t
             state.search_box.edit_buffer.clear();
             apply_filters(state);
             state.update_breadcrumb();
+            (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
+        }
+        BrowseMessage::DirectoryRefreshed(path, entries) => {
+            if state.current_dir == path {
+                let selected_path = state.selected.and_then(|idx| state.entries.get(idx).map(|e| e.path.clone()));
+                state.all_entries = entries;
+                apply_filters(state);
+                if let Some(path) = selected_path {
+                    state.selected = state.entries.iter().position(|e| e.path == path);
+                }
+            }
             (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
         }
         BrowseMessage::ToggleHidden => {

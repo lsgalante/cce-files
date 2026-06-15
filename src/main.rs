@@ -7,6 +7,8 @@ use clear_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings
 use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element};
 use clear_ui::widget::{GraphController, PathController};
 
+use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
+
 use pages::Page;
 use pages::browse::is_project_dir;
 
@@ -50,6 +52,7 @@ struct FilesystemApp {
     paginator: clear_ui::widget::Paginator,
     just_initialized: bool,
     ui_context: clear_ui::context::UiContext,
+    watcher: Option<notify::RecommendedWatcher>,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -89,6 +92,55 @@ fn make_text_buffer(fs: &mut FontSystem, text: &str, size: f32, font: Option<&st
 // ── Layout Rebuild ──────────────────────────────────────────────────
 
 impl FilesystemApp {
+    fn start_watching(&mut self, path: std::path::PathBuf) {
+        use tokio::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, mut rx) = mpsc::channel::<()>(100);
+        let sender_clone = self.sender.clone();
+        let path_clone = path.clone();
+
+        tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                while rx.try_recv().is_ok() {}
+
+                let entries = pages::browse::read_directory(&path_clone);
+                let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryRefreshed(
+                    path_clone.clone(),
+                    entries,
+                )));
+            }
+        });
+
+        let mut watcher = match RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    match event.kind {
+                        notify::EventKind::Create(_) | notify::EventKind::Modify(_) | notify::EventKind::Remove(_) => {
+                            let _ = tx.try_send(());
+                        }
+                        _ => {}
+                    }
+                }
+            },
+            Config::default(),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("Failed to create watcher: {:?}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&path, RecursiveMode::NonRecursive) {
+            eprintln!("Failed to watch path {}: {:?}", path.display(), e);
+            return;
+        }
+
+        self.watcher = Some(watcher);
+    }
+
     fn rebuild_layout(&mut self) {
         self.browse.save_name_box.prepare_text(&mut self.font_system);
         self.browse.search_box.prepare_text(&mut self.font_system);
@@ -384,6 +436,7 @@ impl Application for FilesystemApp {
             paginator,
             just_initialized: true,
             ui_context: clear_ui::context::UiContext::new(),
+            watcher: None,
         };
 
         // Start initial directory loading
@@ -450,6 +503,11 @@ impl Application for FilesystemApp {
                     pages::browse::BrowseMessage::NavigateToPath(_) => true,
                     _ => false,
                 };
+                let is_directory_loaded = match &msg {
+                    pages::browse::BrowseMessage::DirectoryLoaded(path, _) => Some(path.clone()),
+                    _ => None,
+                };
+
                 let (target_path, handle) = pages::browse::update(&mut self.browse, msg);
                 if is_navigation {
                     let sender_clone = self.sender.clone();
@@ -457,6 +515,10 @@ impl Application for FilesystemApp {
                         let entries = handle.await.unwrap_or_default();
                         let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(target_path, entries)));
                     });
+                }
+
+                if let Some(path) = is_directory_loaded {
+                    self.start_watching(path);
                 }
 
                 // If NavigateTo or SelectEntry happened, update Preview path

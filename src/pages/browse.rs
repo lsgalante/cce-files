@@ -104,6 +104,7 @@ pub enum BrowseMessage {
     DirectoryLoaded(PathBuf, Vec<DirEntry>),
     DirectoryRefreshed(PathBuf, Vec<DirEntry>),
     ToggleHidden,
+    DeleteEntry(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -473,6 +474,31 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> (PathBuf, tokio::t
             apply_filters(state);
             (state.current_dir.clone(), tokio::spawn(async { Vec::new() }))
         }
+        BrowseMessage::DeleteEntry(idx) => {
+            if let Some(entry) = state.entries.get(idx) {
+                let path = entry.path.clone();
+                let is_dir = entry.is_dir;
+                let res = if is_dir {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                };
+                if let Err(e) = res {
+                    eprintln!("Failed to delete {}: {:?}", path.display(), e);
+                } else {
+                    // Remove from local entries list immediately for responsive UI
+                    state.all_entries.retain(|e| e.path != path);
+                    state.entries.retain(|e| e.path != path);
+                    if state.entries.is_empty() {
+                        state.selected = None;
+                    } else {
+                        state.selected = Some(idx.min(state.entries.len() - 1));
+                    }
+                }
+            }
+            let p = state.current_dir.clone();
+            (state.current_dir.clone(), tokio::spawn(async move { read_directory(&p) }))
+        }
     }
 }
 
@@ -615,5 +641,58 @@ mod tests {
         // Clean up
         let _ = std::fs::remove_dir_all(&mock_home);
         let _ = std::fs::remove_dir(&test_dir);
+    }
+
+    #[tokio::test]
+    async fn test_delete_entry() {
+        let temp_dir = std::env::temp_dir();
+        let test_subdir = temp_dir.join(format!("cce_test_delete_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        std::fs::create_dir_all(&test_subdir).unwrap();
+
+        let file_path = test_subdir.join("delete_me.txt");
+        std::fs::write(&file_path, "test delete content").unwrap();
+
+        let mut state = BrowseState {
+            current_dir: test_subdir.clone(),
+            all_entries: vec![
+                DirEntry {
+                    name: "delete_me.txt".to_string(),
+                    path: file_path.clone(),
+                    is_dir: false,
+                    size: 19,
+                    permissions: 0o644,
+                    modified: String::new(),
+                }
+            ],
+            entries: vec![
+                DirEntry {
+                    name: "delete_me.txt".to_string(),
+                    path: file_path.clone(),
+                    is_dir: false,
+                    size: 19,
+                    permissions: 0o644,
+                    modified: String::new(),
+                }
+            ],
+            selected: Some(0),
+            ..BrowseState::default()
+        };
+
+        // Assert file exists before deletion
+        assert!(file_path.exists());
+
+        // Perform update call
+        let (_, _handle) = update(&mut state, BrowseMessage::DeleteEntry(0));
+
+        // Check if file is deleted from disk
+        assert!(!file_path.exists());
+
+        // Check if state entries are updated
+        assert!(state.entries.is_empty());
+        assert!(state.all_entries.is_empty());
+        assert_eq!(state.selected, None);
+
+        // Clean up directory
+        let _ = std::fs::remove_dir_all(&test_subdir);
     }
 }

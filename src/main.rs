@@ -503,17 +503,28 @@ impl Application for FilesystemApp {
                     pages::browse::BrowseMessage::NavigateToPath(_) => true,
                     _ => false,
                 };
+                let is_delete = match &msg {
+                    pages::browse::BrowseMessage::DeleteEntry(_) => true,
+                    _ => false,
+                };
                 let is_directory_loaded = match &msg {
                     pages::browse::BrowseMessage::DirectoryLoaded(path, _) => Some(path.clone()),
                     _ => None,
                 };
 
                 let (target_path, handle) = pages::browse::update(&mut self.browse, msg);
-                if is_navigation {
+                if is_navigation || is_delete {
                     let sender_clone = self.sender.clone();
+                    let is_delete_clone = is_delete;
+                    let target_path_clone = target_path.clone();
                     tokio::spawn(async move {
                         let entries = handle.await.unwrap_or_default();
-                        let _ = sender_clone.send(Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(target_path, entries)));
+                        let response_msg = if is_delete_clone {
+                            Message::Browse(pages::browse::BrowseMessage::DirectoryRefreshed(target_path_clone, entries))
+                        } else {
+                            Message::Browse(pages::browse::BrowseMessage::DirectoryLoaded(target_path_clone, entries))
+                        };
+                        let _ = sender_clone.send(response_msg);
                     });
                 }
 
@@ -529,6 +540,8 @@ impl Application for FilesystemApp {
                 };
                 if let Some(path) = selected_path {
                     pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::SetPath { path });
+                } else {
+                    pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
                 }
 
                 if let Some(idx) = self.browse.selected {
@@ -538,6 +551,13 @@ impl Application for FilesystemApp {
                             if self.browse.save_name_box.editing {
                                 self.browse.save_name_box.edit_buffer = entry.name.clone();
                             }
+                        }
+                    }
+                } else {
+                    if self.select_mode {
+                        self.browse.save_name_box.text.clear();
+                        if self.browse.save_name_box.editing {
+                            self.browse.save_name_box.edit_buffer.clear();
                         }
                     }
                 }
@@ -875,12 +895,14 @@ impl Application for FilesystemApp {
                 } else {
                     if self.browse.selected.is_some() {
                         self.browse.selected = None;
+                        pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
                         changed = true;
                     }
                 }
             } else {
                 if self.browse.selected.is_some() {
                     self.browse.selected = None;
+                    pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
                     changed = true;
                 }
             }
@@ -1110,6 +1132,11 @@ impl Application for FilesystemApp {
                         }
                     } else if self.save_mode {
                         return Some(Message::SelectOpen);
+                    }
+                }
+                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Delete) => {
+                    if let Some(idx) = self.browse.selected {
+                        return Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)));
                     }
                 }
                 clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) => {

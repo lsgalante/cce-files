@@ -55,6 +55,7 @@ const SECTIONS: &[SectionData] = &[
             Binding { keys: "Click", action: "Select file or directory" },
             Binding { keys: "Double-click", action: "Open directory" },
             Binding { keys: "Search", action: "Filter files by name" },
+            Binding { keys: "Delete", action: "Delete selected file or directory" },
         ],
     },
     SectionData {

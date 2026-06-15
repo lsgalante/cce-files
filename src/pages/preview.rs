@@ -25,6 +25,7 @@ pub struct PreviewState {
 #[derive(Debug, Clone)]
 pub enum PreviewMessage {
     SetPath { path: PathBuf },
+    Clear,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -237,6 +238,9 @@ pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageCon
 
 pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
     match msg {
+        PreviewMessage::Clear => {
+            *state = PreviewState::default();
+        }
         PreviewMessage::SetPath { path } => {
             let meta = fs::symlink_metadata(&path).ok();
             let name = path

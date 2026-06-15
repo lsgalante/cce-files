@@ -347,8 +347,6 @@ impl Application for FilesystemApp {
         let save_mode = args.iter().any(|arg| arg == "--save");
         let select_mode = save_mode || args.iter().any(|arg| arg == "--select" || arg == "--select-dir");
 
-        // Use signature green theme for the content background of the paginator
-        clear_ui::color::set_page_low_color([0.10, 0.165, 0.11, 1.0]);
         clear_ui::scale::set_scale_factor(1.0);
 
         let browse = pages::browse::BrowseState::default();
@@ -601,7 +599,7 @@ impl Application for FilesystemApp {
     }
 
     fn clear_color(&self) -> [f32; 4] {
-        let mut color = [0.10, 0.165, 0.11, 1.0];
+        let mut color = clear_ui::color::page_low_color();
         if let Some(opacity) = clear_ui::color::read_opacity_if_configured() {
             color[3] = opacity;
         }

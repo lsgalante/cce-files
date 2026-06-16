@@ -67,6 +67,7 @@ struct FilesystemApp {
     watcher: Option<notify::RecommendedWatcher>,
     fs_service: crate::services::fs::FsService,
     context_menu: ContextMenu,
+    open_with_dialog: Option<(std::path::PathBuf, clear_ui::widget::TextBox)>,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -79,6 +80,9 @@ pub enum Message {
     KeyboardEvent(KeyEvent),
     SelectOpen,
     SelectCancel,
+    PromptOpenWith(std::path::PathBuf),
+    OpenWithSubmit,
+    OpenWithCancel,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -411,6 +415,37 @@ impl FilesystemApp {
                 }
             }
 
+            if self.open_with_dialog.is_some() {
+                let cx = (self.width as f32 - 400.0) / 2.0;
+                let cy = (self.height as f32 - 160.0) / 2.0;
+                let cw = 400.0;
+                let ch = 160.0;
+
+                let text_w = text.chars().count() as f32 * *size * 0.6;
+                let text_h = *size;
+
+                let tx1 = *x;
+                let tx2 = *x + text_w;
+                let ty1 = *y - text_h * 0.8;
+                let ty2 = *y + text_h * 0.2;
+
+                if tx1 < cx + cw && tx2 > cx && ty1 < cy + ch && ty2 > cy {
+                    let mut b_left = final_bounds.map(|b| b[0]).unwrap_or(0.0);
+                    let b_top = final_bounds.map(|b| b[1]).unwrap_or(0.0);
+                    let mut b_right = final_bounds.map(|b| b[2]).unwrap_or(99999.0);
+                    let b_bottom = final_bounds.map(|b| b[3]).unwrap_or(99999.0);
+
+                    if tx1 < cx && tx2 > cx {
+                        b_right = b_right.min(cx);
+                    } else if tx1 < cx + cw && tx2 > cx + cw {
+                        b_left = b_left.max(cx + cw);
+                    } else {
+                        b_right = b_left; // completely covered
+                    }
+                    final_bounds = Some([b_left, b_top, b_right, b_bottom]);
+                }
+            }
+
             text_items.push(TextItem {
                 buffer: make_text_buffer(&mut self.font_system, text, *size, font.as_deref()),
                 x: *x,
@@ -472,6 +507,137 @@ impl FilesystemApp {
                     bounds: None,
                 });
             }
+        }
+
+        // Render open-with dialog overlay if active
+        if let Some((_path, textbox)) = &mut self.open_with_dialog {
+            let dialog_w = 400.0;
+            let dialog_h = 160.0;
+            let dialog_x = (self.width as f32 - dialog_w) / 2.0;
+            let dialog_y = (self.height as f32 - dialog_h) / 2.0;
+
+            // Semi-transparent backdrop overlay
+            widgets.push(AppWidget {
+                x: 0.0, y: 0.0, w: self.width as f32, h: self.height as f32,
+                color: [0.02, 0.02, 0.03, 0.6], hover_color: [0.02, 0.02, 0.03, 0.6],
+                hovering: false,
+                action: None,
+            });
+
+            // Dialog panel border
+            widgets.push(AppWidget {
+                x: dialog_x, y: dialog_y, w: dialog_w, h: dialog_h,
+                color: [0.22, 0.22, 0.28, 1.0], hover_color: [0.22, 0.22, 0.28, 1.0],
+                hovering: false,
+                action: None,
+            });
+
+            // Dialog panel background
+            widgets.push(AppWidget {
+                x: dialog_x + 1.0, y: dialog_y + 1.0, w: dialog_w - 2.0, h: dialog_h - 2.0,
+                color: [0.08, 0.08, 0.12, 1.0], hover_color: [0.08, 0.08, 0.12, 1.0],
+                hovering: false,
+                action: None,
+            });
+
+            // Dialog Title text
+            text_items.push(TextItem {
+                buffer: make_text_buffer(&mut self.font_system, "Open with...", 14.0, None),
+                x: dialog_x + 20.0, y: dialog_y + 20.0,
+                color: glyphon::Color::rgb(0xff, 0xff, 0xff),
+                bounds: None,
+            });
+
+            // Dialog description
+            text_items.push(TextItem {
+                buffer: make_text_buffer(&mut self.font_system, "Enter command:", 11.0, None),
+                x: dialog_x + 20.0, y: dialog_y + 42.0,
+                color: glyphon::Color::rgb(0x8a, 0x8a, 0x93),
+                bounds: None,
+            });
+
+            // Render textbox
+            let tb_x = dialog_x + 20.0;
+            let tb_y = dialog_y + 60.0;
+            let tb_w = dialog_w - 40.0;
+            let tb_h = 28.0;
+
+            textbox.prepare_text(&mut self.font_system);
+            textbox.set_rect(tb_x, tb_y, tb_w, tb_h);
+            
+            // Textbox quads
+            for (qx, qy, qw, qh, qc) in textbox.all_quads(&mut self.ui_context) {
+                widgets.push(AppWidget {
+                    x: qx, y: qy, w: qw, h: qh,
+                    color: qc, hover_color: qc,
+                    hovering: false,
+                    action: None,
+                });
+            }
+
+            // Textbox text label
+            let font_opt = textbox.widget_font();
+            for (label, bounds) in textbox.text_labels_with_bounds(&mut self.ui_context) {
+                let color_rgb = glyphon::Color::rgb(label.color[0], label.color[1], label.color[2]);
+                text_items.push(TextItem {
+                    buffer: make_text_buffer(&mut self.font_system, &label.text, label.font_size, font_opt.as_deref()),
+                    x: label.x,
+                    y: label.y,
+                    color: color_rgb,
+                    bounds: bounds,
+                });
+            }
+
+            // Render Buttons: Cancel & Open
+            let btn_cancel_x = dialog_x + dialog_w - 180.0;
+            let btn_cancel_y = dialog_y + dialog_h - 44.0;
+            let btn_cancel_w = 70.0;
+            let btn_cancel_h = 28.0;
+
+            let btn_open_x = dialog_x + dialog_w - 100.0;
+            let btn_open_y = dialog_y + dialog_h - 44.0;
+            let btn_open_w = 80.0;
+            let btn_open_h = 28.0;
+
+            // Cancel button background & hover
+            let cancel_hover = self.cursor_x >= btn_cancel_x && self.cursor_x <= btn_cancel_x + btn_cancel_w
+                && self.cursor_y >= btn_cancel_y && self.cursor_y <= btn_cancel_y + btn_cancel_h;
+            let cancel_bg = if cancel_hover { [0.35, 0.15, 0.15, 0.8] } else { [0.25, 0.12, 0.12, 0.5] };
+
+            widgets.push(AppWidget {
+                x: btn_cancel_x, y: btn_cancel_y, w: btn_cancel_w, h: btn_cancel_h,
+                color: cancel_bg, hover_color: [0.35, 0.15, 0.15, 0.8],
+                hovering: cancel_hover,
+                action: Some(Message::OpenWithCancel),
+            });
+            let cancel_text_w = "Cancel".chars().count() as f32 * 12.0 * 0.65;
+            text_items.push(TextItem {
+                buffer: make_text_buffer(&mut self.font_system, "Cancel", 12.0, None),
+                x: btn_cancel_x + (btn_cancel_w - cancel_text_w) / 2.0,
+                y: btn_cancel_y + (btn_cancel_h - 12.0 * 1.4) / 2.0,
+                color: glyphon::Color::rgb(0xd4, 0xd4, 0xd4),
+                bounds: None,
+            });
+
+            // Open button background & hover
+            let open_hover = self.cursor_x >= btn_open_x && self.cursor_x <= btn_open_x + btn_open_w
+                && self.cursor_y >= btn_open_y && self.cursor_y <= btn_open_y + btn_open_h;
+            let open_bg = if open_hover { [0.46, 0.66, 0.48, 1.0] } else { [0.36, 0.56, 0.38, 1.0] };
+
+            widgets.push(AppWidget {
+                x: btn_open_x, y: btn_open_y, w: btn_open_w, h: btn_open_h,
+                color: open_bg, hover_color: [0.46, 0.66, 0.48, 1.0],
+                hovering: open_hover,
+                action: Some(Message::OpenWithSubmit),
+            });
+            let open_text_w = "Open".chars().count() as f32 * 12.0 * 0.65;
+            text_items.push(TextItem {
+                buffer: make_text_buffer(&mut self.font_system, "Open", 12.0, None),
+                x: btn_open_x + (btn_open_w - open_text_w) / 2.0,
+                y: btn_open_y + (btn_open_h - 12.0 * 1.4) / 2.0,
+                color: glyphon::Color::rgb(0x1a, 0x29, 0x1c),
+                bounds: None,
+            });
         }
 
         self.widgets = widgets;
@@ -543,6 +709,7 @@ impl Application for FilesystemApp {
                 options: Vec::new(),
                 hovered: None,
             },
+            open_with_dialog: None,
         };
 
         // Start initial directory loading via FsService
@@ -697,6 +864,44 @@ impl Application for FilesystemApp {
             Message::SelectCancel => {
                 std::process::exit(1);
             }
+            Message::PromptOpenWith(path) => {
+                let mut tb = clear_ui::widget::TextBox::new(String::new())
+                    .with_max_width(None)
+                    .with_placeholder("Program/Command");
+                tb.focus();
+                self.ui_context.set_focused(&mut tb);
+                self.open_with_dialog = Some((path, tb));
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            Message::OpenWithSubmit => {
+                if let Some((path, textbox)) = self.open_with_dialog.take() {
+                    let cmd_str = if textbox.editing {
+                        textbox.edit_buffer.trim().to_string()
+                    } else {
+                        textbox.text.trim().to_string()
+                    };
+                    if !cmd_str.is_empty() {
+                        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                        if !parts.is_empty() {
+                            let program = parts[0];
+                            let mut command = std::process::Command::new(program);
+                            for arg in &parts[1..] {
+                                command.arg(arg);
+                            }
+                            command.arg(&path);
+                            let _ = command.spawn();
+                        }
+                    }
+                }
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            Message::OpenWithCancel => {
+                self.open_with_dialog = None;
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
         }
     }
 
@@ -761,6 +966,15 @@ impl Application for FilesystemApp {
         self.cursor_y = pos.y;
 
         let mut changed = false;
+
+        if self.open_with_dialog.is_some() {
+            if let Some((_path, textbox)) = &mut self.open_with_dialog {
+                let _ = textbox.cursor_moved(pos.x, pos.y, &mut self.ui_context);
+            }
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+            return;
+        }
 
         if self.context_menu.visible {
             let cx = self.context_menu.x;
@@ -842,6 +1056,68 @@ impl Application for FilesystemApp {
             return None;
         }
 
+        if let Some((_path, textbox)) = &mut self.open_with_dialog {
+            let dialog_w = 400.0;
+            let dialog_h = 160.0;
+            let dialog_x = (self.width as f32 - dialog_w) / 2.0;
+            let dialog_y = (self.height as f32 - dialog_h) / 2.0;
+
+            let tb_x = dialog_x + 20.0;
+            let tb_y = dialog_y + 60.0;
+            let tb_w = dialog_w - 40.0;
+            let tb_h = 28.0;
+
+            let btn_cancel_x = dialog_x + dialog_w - 180.0;
+            let btn_cancel_y = dialog_y + dialog_h - 44.0;
+            let btn_cancel_w = 70.0;
+            let btn_cancel_h = 28.0;
+
+            let btn_open_x = dialog_x + dialog_w - 100.0;
+            let btn_open_y = dialog_y + dialog_h - 44.0;
+            let btn_open_w = 80.0;
+            let btn_open_h = 28.0;
+
+            if state == ElementState::Pressed {
+                let clicked_inside = pos.x >= dialog_x && pos.x <= dialog_x + dialog_w && pos.y >= dialog_y && pos.y <= dialog_y + dialog_h;
+                if !clicked_inside {
+                    textbox.unfocus();
+                    self.ui_context.clear_focus();
+                    return Some(Message::OpenWithCancel);
+                }
+
+                if button == MouseButton::Left {
+                    if pos.x >= tb_x && pos.x <= tb_x + tb_w && pos.y >= tb_y && pos.y <= tb_y + tb_h {
+                        if textbox.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                            self.ui_context.set_focused(textbox);
+                            *needs_rebuild = true;
+                            self.needs_rebuild = true;
+                        }
+                    } else if pos.x >= btn_cancel_x && pos.x <= btn_cancel_x + btn_cancel_w && pos.y >= btn_cancel_y && pos.y <= btn_cancel_y + btn_cancel_h {
+                        textbox.unfocus();
+                        self.ui_context.clear_focus();
+                        return Some(Message::OpenWithCancel);
+                    } else if pos.x >= btn_open_x && pos.x <= btn_open_x + btn_open_w && pos.y >= btn_open_y && pos.y <= btn_open_y + btn_open_h {
+                        textbox.unfocus();
+                        self.ui_context.clear_focus();
+                        return Some(Message::OpenWithSubmit);
+                    } else {
+                        textbox.unfocus();
+                        self.ui_context.clear_focus();
+                        *needs_rebuild = true;
+                        self.needs_rebuild = true;
+                    }
+                }
+            } else {
+                if button == MouseButton::Left && textbox.editing {
+                    if textbox.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                        *needs_rebuild = true;
+                        self.needs_rebuild = true;
+                    }
+                }
+            }
+            return None;
+        }
+
         if self.context_menu.visible {
             if state == ElementState::Pressed {
                 let cx = self.context_menu.x;
@@ -910,6 +1186,8 @@ impl Application for FilesystemApp {
                         } else {
                             options.push(("Select".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)))));
                         }
+
+                        options.push(("Open with...".to_string(), Some(Message::PromptOpenWith(entry.path.clone()))));
 
                         options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
 
@@ -1212,6 +1490,24 @@ impl Application for FilesystemApp {
 
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if event.state != ElementState::Pressed {
+            return None;
+        }
+
+        if let Some((_path, textbox)) = &mut self.open_with_dialog {
+            if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Enter) {
+                textbox.unfocus();
+                self.ui_context.clear_focus();
+                return Some(Message::OpenWithSubmit);
+            }
+            if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) {
+                textbox.unfocus();
+                self.ui_context.clear_focus();
+                return Some(Message::OpenWithCancel);
+            }
+            if textbox.keyboard_input(event, &mut self.ui_context) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
             return None;
         }
 

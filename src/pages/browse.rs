@@ -168,7 +168,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     // Render the Breadcrumb widget into PageContent
     clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 12.0, cy + 6.0, cw - 24.0, 24.0, ctx);
 
-    // 1. Files Section layout
+    // 1. Files List layout (aligned directly, Files Section removed)
     let outer_x = cx + 12.0;
     let outer_y = cy + 42.0;
     let outer_w = cw - 24.0;
@@ -177,18 +177,13 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let search_sec_h = 56.0;
     let search_sec_y = cy + ch - search_sec_h;
 
-    // Files Section height takes the remaining space above Search Section
+    // Files List height takes the remaining space above Search Section
     let outer_h = search_sec_y - outer_y - 12.0;
 
-    let mut files_sec = SectionContext::new(&mut pc, outer_x - 8.0, outer_y - 12.0, outer_w + 16.0, "Files", false, false);
-    files_sec.content_y = outer_y + outer_h - 12.0;
-    files_sec.finish();
-
-    // Inner file list scroll box (inset inside the Files Section)
-    let list_x = outer_x + 4.0;
-    let list_y = outer_y + 4.0;
-    let list_w = outer_w - 8.0;
-    let list_h = outer_h - 8.0;
+    let list_x = outer_x;
+    let list_y = outer_y;
+    let list_w = outer_w;
+    let list_h = outer_h;
 
     clear_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h, ctx);
 

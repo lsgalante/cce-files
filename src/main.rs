@@ -2,7 +2,7 @@ mod pages;
 mod services;
 
 use wayland_client::QueueHandle;
-use glyphon::{Attrs, Buffer, FontSystem, Metrics};
+use glyphon::FontSystem;
 
 use clear_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
 use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element, PageSelector, MenuController};
@@ -85,40 +85,6 @@ pub enum Message {
     OpenWithCancel,
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
-
-fn make_text_buffer(fs: &mut FontSystem, text: &str, size: f32, font: Option<&str>) -> Buffer {
-    let scale = clear_ui::scale::scale_factor();
-    let mut font_size = size;
-    let mut family_name = None;
-
-    if let Some(f) = font {
-        let (parsed_family, parsed_size) = clear_ui::layout::parse_font_string(f);
-        if let Some(ps) = parsed_size {
-            font_size = ps;
-        }
-        family_name = Some(parsed_family);
-    }
-
-    let physical_size = font_size * scale;
-    let metrics = Metrics::new(physical_size, physical_size * 1.4);
-    let mut buf = Buffer::new(fs, metrics);
-    let mut attrs = Attrs::new();
-
-    if let Some(ref fam) = family_name {
-        let family = match fam.as_str() {
-            "monospace" => glyphon::Family::Name(clear_ui::layout::get_system_monospace_font()),
-            "sans-serif" => glyphon::Family::SansSerif,
-            "serif" => glyphon::Family::Serif,
-            _ => glyphon::Family::Name(fam),
-        };
-        attrs = attrs.family(family);
-    }
-
-    buf.set_text(fs, text, attrs, glyphon::Shaping::Advanced);
-    buf.shape_until_scroll(fs, true);
-    buf
-}
 
 // ── Layout Rebuild ──────────────────────────────────────────────────
 
@@ -368,17 +334,20 @@ impl FilesystemApp {
             };
             let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
 
-            text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, label, label_size, None),
-                x: text_x,
-                y: text_y,
-                color: glyphon::Color::rgb(
+            text_items.push(TextItem::new(
+                &mut self.font_system,
+                label,
+                label_size,
+                text_x,
+                text_y,
+                glyphon::Color::rgb(
                     (label_color[0] * 255.0) as u8,
                     (label_color[1] * 255.0) as u8,
                     (label_color[2] * 255.0) as u8,
                 ),
-                bounds: None,
-            });
+                None,
+                None,
+            ));
         }
 
         // Add raw texts
@@ -446,17 +415,20 @@ impl FilesystemApp {
                 }
             }
 
-            text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, text, *size, font.as_deref()),
-                x: *x,
-                y: *y,
-                color: glyphon::Color::rgb(
+            text_items.push(TextItem::new(
+                &mut self.font_system,
+                text,
+                *size,
+                *x,
+                *y,
+                glyphon::Color::rgb(
                     (col[0] * 255.0) as u8,
                     (col[1] * 255.0) as u8,
                     (col[2] * 255.0) as u8,
                 ),
-                bounds: final_bounds,
-            });
+                font.as_deref(),
+                final_bounds,
+            ));
         }
 
         // Render context menu overlay if visible
@@ -500,12 +472,16 @@ impl FilesystemApp {
                 } else {
                     glyphon::Color::rgb(0xcc, 0xcc, 0xd4)
                 };
-                text_items.push(TextItem {
-                    buffer: make_text_buffer(&mut self.font_system, opt, 12.0, None),
-                    x: cx + 8.0, y: iy,
-                    color: text_color,
-                    bounds: None,
-                });
+                text_items.push(TextItem::new(
+                    &mut self.font_system,
+                    opt,
+                    12.0,
+                    cx + 8.0,
+                    iy,
+                    text_color,
+                    None,
+                    None,
+                ));
             }
         }
 
@@ -541,20 +517,28 @@ impl FilesystemApp {
             });
 
             // Dialog Title text
-            text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, "Open with...", 14.0, None),
-                x: dialog_x + 20.0, y: dialog_y + 20.0,
-                color: glyphon::Color::rgb(0xff, 0xff, 0xff),
-                bounds: None,
-            });
+            text_items.push(TextItem::new(
+                &mut self.font_system,
+                "Open with...",
+                14.0,
+                dialog_x + 20.0,
+                dialog_y + 20.0,
+                glyphon::Color::rgb(0xff, 0xff, 0xff),
+                None,
+                None,
+            ));
 
             // Dialog description
-            text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, "Enter command:", 11.0, None),
-                x: dialog_x + 20.0, y: dialog_y + 42.0,
-                color: glyphon::Color::rgb(0x8a, 0x8a, 0x93),
-                bounds: None,
-            });
+            text_items.push(TextItem::new(
+                &mut self.font_system,
+                "Enter command:",
+                11.0,
+                dialog_x + 20.0,
+                dialog_y + 42.0,
+                glyphon::Color::rgb(0x8a, 0x8a, 0x93),
+                None,
+                None,
+            ));
 
             // Render textbox
             let tb_x = dialog_x + 20.0;
@@ -579,13 +563,16 @@ impl FilesystemApp {
             let font_opt = textbox.widget_font();
             for (label, bounds) in textbox.text_labels_with_bounds(&mut self.ui_context) {
                 let color_rgb = glyphon::Color::rgb(label.color[0], label.color[1], label.color[2]);
-                text_items.push(TextItem {
-                    buffer: make_text_buffer(&mut self.font_system, &label.text, label.font_size, font_opt.as_deref()),
-                    x: label.x,
-                    y: label.y,
-                    color: color_rgb,
-                    bounds: bounds,
-                });
+                text_items.push(TextItem::new(
+                    &mut self.font_system,
+                    &label.text,
+                    label.font_size,
+                    label.x,
+                    label.y,
+                    color_rgb,
+                    font_opt.as_deref(),
+                    bounds,
+                ));
             }
 
             // Render Buttons: Cancel & Open
@@ -611,13 +598,16 @@ impl FilesystemApp {
                 action: Some(Message::OpenWithCancel),
             });
             let cancel_text_w = "Cancel".chars().count() as f32 * 12.0 * 0.65;
-            text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, "Cancel", 12.0, None),
-                x: btn_cancel_x + (btn_cancel_w - cancel_text_w) / 2.0,
-                y: btn_cancel_y + (btn_cancel_h - 12.0 * 1.4) / 2.0,
-                color: glyphon::Color::rgb(0xd4, 0xd4, 0xd4),
-                bounds: None,
-            });
+            text_items.push(TextItem::new(
+                &mut self.font_system,
+                "Cancel",
+                12.0,
+                btn_cancel_x + (btn_cancel_w - cancel_text_w) / 2.0,
+                btn_cancel_y + (btn_cancel_h - 12.0 * 1.4) / 2.0,
+                glyphon::Color::rgb(0xd4, 0xd4, 0xd4),
+                None,
+                None,
+            ));
 
             // Open button background & hover
             let open_hover = self.cursor_x >= btn_open_x && self.cursor_x <= btn_open_x + btn_open_w
@@ -631,13 +621,16 @@ impl FilesystemApp {
                 action: Some(Message::OpenWithSubmit),
             });
             let open_text_w = "Open".chars().count() as f32 * 12.0 * 0.65;
-            text_items.push(TextItem {
-                buffer: make_text_buffer(&mut self.font_system, "Open", 12.0, None),
-                x: btn_open_x + (btn_open_w - open_text_w) / 2.0,
-                y: btn_open_y + (btn_open_h - 12.0 * 1.4) / 2.0,
-                color: glyphon::Color::rgb(0x1a, 0x29, 0x1c),
-                bounds: None,
-            });
+            text_items.push(TextItem::new(
+                &mut self.font_system,
+                "Open",
+                12.0,
+                btn_open_x + (btn_open_w - open_text_w) / 2.0,
+                btn_open_y + (btn_open_h - 12.0 * 1.4) / 2.0,
+                glyphon::Color::rgb(0x1a, 0x29, 0x1c),
+                None,
+                None,
+            ));
         }
 
         self.widgets = widgets;

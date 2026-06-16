@@ -379,6 +379,38 @@ impl FilesystemApp {
 
         // Add raw texts
         for (text, size, x, y, col, font, bounds) in &pc.texts {
+            let mut final_bounds = *bounds;
+            if self.context_menu.visible {
+                let cx = self.context_menu.x;
+                let cy = self.context_menu.y;
+                let cw = self.context_menu.w;
+                let ch = self.context_menu.h;
+
+                let text_w = text.chars().count() as f32 * *size * 0.6;
+                let text_h = *size;
+
+                let tx1 = *x;
+                let tx2 = *x + text_w;
+                let ty1 = *y - text_h * 0.8;
+                let ty2 = *y + text_h * 0.2;
+
+                if tx1 < cx + cw && tx2 > cx && ty1 < cy + ch && ty2 > cy {
+                    let mut b_left = bounds.map(|b| b[0]).unwrap_or(0.0);
+                    let b_top = bounds.map(|b| b[1]).unwrap_or(0.0);
+                    let mut b_right = bounds.map(|b| b[2]).unwrap_or(99999.0);
+                    let b_bottom = bounds.map(|b| b[3]).unwrap_or(99999.0);
+
+                    if tx1 < cx && tx2 > cx {
+                        b_right = b_right.min(cx);
+                    } else if tx1 < cx + cw && tx2 > cx + cw {
+                        b_left = b_left.max(cx + cw);
+                    } else {
+                        b_right = b_left; // completely covered
+                    }
+                    final_bounds = Some([b_left, b_top, b_right, b_bottom]);
+                }
+            }
+
             text_items.push(TextItem {
                 buffer: make_text_buffer(&mut self.font_system, text, *size, font.as_deref()),
                 x: *x,
@@ -388,7 +420,7 @@ impl FilesystemApp {
                     (col[1] * 255.0) as u8,
                     (col[2] * 255.0) as u8,
                 ),
-                bounds: *bounds,
+                bounds: final_bounds,
             });
         }
 

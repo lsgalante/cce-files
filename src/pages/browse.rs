@@ -42,7 +42,9 @@ impl Default for BrowseState {
             all_entries: Vec::new(),
             entries: Vec::new(),
             show_hidden: false,
-            search_box: clear_ui::widget::TextBox::new(String::new()).with_max_width(None),
+            search_box: clear_ui::widget::TextBox::new(String::new())
+                .with_max_width(None)
+                .with_placeholder("Search"),
             list_box: clear_ui::widget::ScrollingList::new(28.0, 2.0),
             selected: None,
             breadcrumb,
@@ -207,14 +209,10 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         // Two columns at the bottom: Search and File Name
         let sec_w = (outer_w - 12.0) / 2.0;
 
-        // Left column: Search
-        let mut search_sec = SectionContext::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "Search", false, false);
-        search_sec.content_y = search_sec_y + search_sec_h - 12.0;
-        search_sec.finish();
-
-        let search_x = outer_x + 12.0;
+        // Left column: Search (rendered directly without section borders)
+        let search_x = outer_x + 4.0;
         let search_y = search_sec_y + 14.0;
-        let search_w = sec_w - 24.0;
+        let search_w = sec_w - 8.0;
         let search_h = 28.0;
 
         state.search_box.set_row_rect(search_x, search_w);
@@ -234,15 +232,10 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         state.save_name_box.set_row_rect(filename_x, filename_w);
         clear_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, filename_y, filename_w, filename_h, ctx);
     } else {
-        // 2. Search Section borders (Full Width)
-        let mut search_sec = SectionContext::new(&mut pc, outer_x - 8.0, search_sec_y - 12.0, outer_w + 16.0, "Search", false, false);
-        search_sec.content_y = search_sec_y + search_sec_h - 12.0;
-        search_sec.finish();
-
-        // Inner search textbox
-        let search_x = outer_x + 12.0;
+        // Inner search textbox (rendered directly at the bottom without section borders)
+        let search_x = outer_x + 4.0;
         let search_y = search_sec_y + 14.0;
-        let search_w = outer_w - 24.0;
+        let search_w = outer_w - 8.0;
         let search_h = 28.0;
 
         state.search_box.set_row_rect(search_x, search_w);

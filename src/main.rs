@@ -73,19 +73,32 @@ pub enum Message {
 
 fn make_text_buffer(fs: &mut FontSystem, text: &str, size: f32, font: Option<&str>) -> Buffer {
     let scale = clear_ui::scale::scale_factor();
-    let physical_size = size * scale;
+    let mut font_size = size;
+    let mut family_name = None;
+
+    if let Some(f) = font {
+        let (parsed_family, parsed_size) = clear_ui::layout::parse_font_string(f);
+        if let Some(ps) = parsed_size {
+            font_size = ps;
+        }
+        family_name = Some(parsed_family);
+    }
+
+    let physical_size = font_size * scale;
     let metrics = Metrics::new(physical_size, physical_size * 1.4);
     let mut buf = Buffer::new(fs, metrics);
     let mut attrs = Attrs::new();
-    if let Some(f) = font {
-        let family = match f {
+
+    if let Some(ref fam) = family_name {
+        let family = match fam.as_str() {
             "monospace" => glyphon::Family::Name(clear_ui::layout::get_system_monospace_font()),
             "sans-serif" => glyphon::Family::SansSerif,
             "serif" => glyphon::Family::Serif,
-            _ => glyphon::Family::Name(f),
+            _ => glyphon::Family::Name(fam),
         };
         attrs = attrs.family(family);
     }
+
     buf.set_text(fs, text, attrs, glyphon::Shaping::Advanced);
     buf.shape_until_scroll(fs, true);
     buf

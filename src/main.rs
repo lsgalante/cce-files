@@ -246,8 +246,7 @@ impl FilesystemApp {
             // Add Sidebar Background and elements directly from the menubar to pc
             pc.rects.extend(menubar_pc.rects);
 
-            // Sidebar Divider Line (accent border)
-            pc.rect([0.36, 0.56, 0.38, 1.0], sidebar_w, 0.0, 1.0, self.height as f32);
+
 
             // Add the menubar's texts (tab labels) on top of the sidebar background
             pc.texts.extend(menubar_pc.texts);

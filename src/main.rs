@@ -26,6 +26,17 @@ struct AppWidget {
     action: Option<Message>,
 }
 
+#[derive(Clone)]
+struct ContextMenu {
+    visible: bool,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    options: Vec<(String, Option<Message>)>,
+    hovered: Option<usize>,
+}
+
 struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
@@ -55,6 +66,7 @@ struct FilesystemApp {
     ui_context: clear_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
     fs_service: crate::services::fs::FsService,
+    context_menu: ContextMenu,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -380,6 +392,56 @@ impl FilesystemApp {
             });
         }
 
+        // Render context menu overlay if visible
+        if self.context_menu.visible {
+            let cx = self.context_menu.x;
+            let cy = self.context_menu.y;
+            let cw = self.context_menu.w;
+            let ch = self.context_menu.h;
+
+            // Border
+            widgets.push(AppWidget {
+                x: cx, y: cy, w: cw, h: ch,
+                color: [0.22, 0.22, 0.28, 1.0], hover_color: [0.22, 0.22, 0.28, 1.0],
+                hovering: false,
+                action: None,
+            });
+            // Background
+            widgets.push(AppWidget {
+                x: cx + 1.0, y: cy + 1.0, w: cw - 2.0, h: ch - 2.0,
+                color: [0.06, 0.06, 0.09, 1.0], hover_color: [0.06, 0.06, 0.09, 1.0],
+                hovering: false,
+                action: None,
+            });
+            // Hover highlight
+            if let Some(h_idx) = self.context_menu.hovered {
+                let iy = cy + h_idx as f32 * 24.0;
+                widgets.push(AppWidget {
+                    x: cx + 2.0, y: iy + 2.0, w: cw - 4.0, h: 20.0,
+                    color: [0.20, 0.40, 0.65, 0.6], hover_color: [0.20, 0.40, 0.65, 0.6],
+                    hovering: false,
+                    action: None,
+                });
+            }
+            // Text options
+            for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
+                let iy = cy + idx as f32 * 24.0 + (24.0 - 12.0) / 2.0;
+                let text_color = if idx == 0 {
+                    glyphon::Color::rgb(0x70, 0x70, 0x78)
+                } else if self.context_menu.hovered == Some(idx) {
+                    glyphon::Color::rgb(0xff, 0xff, 0xff)
+                } else {
+                    glyphon::Color::rgb(0xcc, 0xcc, 0xd4)
+                };
+                text_items.push(TextItem {
+                    buffer: make_text_buffer(&mut self.font_system, opt, 12.0, None),
+                    x: cx + 8.0, y: iy,
+                    color: text_color,
+                    bounds: None,
+                });
+            }
+        }
+
         self.widgets = widgets;
         self.text_items = text_items;
         self.page_buttons = pc.buttons;
@@ -440,6 +502,15 @@ impl Application for FilesystemApp {
             ui_context: clear_ui::context::UiContext::new(),
             watcher: None,
             fs_service,
+            context_menu: ContextMenu {
+                visible: false,
+                x: 0.0,
+                y: 0.0,
+                w: 120.0,
+                h: 0.0,
+                options: Vec::new(),
+                hovered: None,
+            },
         };
 
         // Start initial directory loading via FsService
@@ -659,6 +730,29 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
+        if self.context_menu.visible {
+            let cx = self.context_menu.x;
+            let cy = self.context_menu.y;
+            let cw = self.context_menu.w;
+            let ch = self.context_menu.h;
+            let was_hovered = self.context_menu.hovered;
+            self.context_menu.hovered = None;
+            if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + ch {
+                let idx = ((pos.y - cy) / 24.0) as usize;
+                if idx < self.context_menu.options.len() && idx > 0 {
+                    self.context_menu.hovered = Some(idx);
+                }
+            }
+            if self.context_menu.hovered != was_hovered {
+                changed = true;
+            }
+            if changed {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            return;
+        }
+
         if !self.select_mode && self.menubar.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
             changed = true;
         }
@@ -714,6 +808,99 @@ impl Application for FilesystemApp {
     fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, pos: LogicalPosition, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if button != MouseButton::Left && button != MouseButton::Right {
             return None;
+        }
+
+        if self.context_menu.visible {
+            if state == ElementState::Pressed {
+                let cx = self.context_menu.x;
+                let cy = self.context_menu.y;
+                let cw = self.context_menu.w;
+                let ch = self.context_menu.h;
+
+                let mut clicked_option = None;
+                if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + ch {
+                    let idx = ((pos.y - cy) / 24.0) as usize;
+                    if idx < self.context_menu.options.len() && idx > 0 {
+                        clicked_option = self.context_menu.options[idx].1.clone();
+                    }
+                }
+
+                self.context_menu.visible = false;
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+
+                if let Some(action) = clicked_option {
+                    return Some(action);
+                }
+
+                if button == MouseButton::Right {
+                    // Fall through to allow right-clicking another item to show a new context menu
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+
+        if button == MouseButton::Right && state == ElementState::Pressed {
+            // Check if right-clicked on a list button
+            let mut right_clicked_action = None;
+            for (btn, action) in &self.page_buttons {
+                let base = btn.base().unwrap();
+                if pos.x >= base.x && pos.x <= base.x + base.w && pos.y >= base.y && pos.y <= base.y + base.h {
+                    right_clicked_action = Some(action.clone());
+                    break;
+                }
+            }
+
+            if let Some(Message::Browse(browse_action)) = right_clicked_action {
+                let entry_idx = match browse_action {
+                    pages::browse::BrowseMessage::SelectEntry(idx) => Some(idx),
+                    pages::browse::BrowseMessage::NavigateTo(idx) => Some(idx),
+                    _ => None,
+                };
+
+                if let Some(idx) = entry_idx {
+                    if let Some(entry) = self.browse.entries.get(idx) {
+                        let header = if entry.is_dir {
+                            format!("[Directory] {}", entry.name)
+                        } else {
+                            format!("[File] {}", entry.name)
+                        };
+
+                        let mut options = vec![
+                            (header, None),
+                        ];
+
+                        if entry.is_dir {
+                            options.push(("Open".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)))));
+                        } else {
+                            options.push(("Select".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)))));
+                        }
+
+                        options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
+
+                        // Calculate width
+                        let max_len = options.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
+                        let menu_w = ((max_len as f32 * 7.5) + 24.0).max(120.0);
+                        let menu_h = options.len() as f32 * 24.0;
+
+                        self.context_menu = ContextMenu {
+                            visible: true,
+                            x: pos.x,
+                            y: pos.y,
+                            w: menu_w,
+                            h: menu_h,
+                            options,
+                            hovered: None,
+                        };
+                        *needs_rebuild = true;
+                        self.needs_rebuild = true;
+                        return None;
+                    }
+                }
+            }
         }
 
         let mut changed = false;
@@ -994,6 +1181,15 @@ impl Application for FilesystemApp {
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if event.state != ElementState::Pressed {
             return None;
+        }
+
+        if self.context_menu.visible {
+            if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) {
+                self.context_menu.visible = false;
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return None;
+            }
         }
 
         if self.current_page == Page::Settings && self.settings.color_selector.editing {

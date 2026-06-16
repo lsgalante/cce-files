@@ -5,7 +5,7 @@ use wayland_client::QueueHandle;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics};
 
 use clear_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
-use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element};
+use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element, PageSelector, MenuController};
 use clear_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
@@ -50,7 +50,7 @@ struct FilesystemApp {
     page_buttons: Vec<(clear_ui::widget::Button, Message)>,
     cursor_x: f32,
     cursor_y: f32,
-    paginator: clear_ui::widget::Paginator,
+    menubar: clear_ui::widget::MenuBar,
     just_initialized: bool,
     ui_context: clear_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
@@ -151,14 +151,8 @@ impl FilesystemApp {
 
         let mut pc = pages::PageContent::new();
 
-        // 1. Render the Paginator widget to separate PageContent first
-        let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
-        self.paginator.set_selected_page(page_idx);
-        let mut paginator_pc = pages::PageContent::new();
-        clear_ui::layout::render_widget(&mut paginator_pc, &mut self.paginator, 0.0, 0.0, self.width as f32, self.height as f32, &mut self.ui_context);
-
         let has_sidebar = !self.select_mode;
-        let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
+        let sidebar_w = if has_sidebar { self.menubar.sidebar_w() } else { 0.0 };
         let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
         let browse_w = (usable_w - 12.0) * 0.5;
@@ -173,17 +167,16 @@ impl FilesystemApp {
             self.height as f32 - 32.0
         };
 
+        // Full window page background
+        let bg_color = clear_ui::color::page_low_color();
+        pc.rect(bg_color, 0.0, 0.0, self.width as f32, self.height as f32);
+
+        let mut menubar_pc = pages::PageContent::new();
         if has_sidebar {
-            // 2. Add Content Background (where x >= sidebar_w) from the paginator to pc first
-            for rect in paginator_pc.rects.iter() {
-                if rect.1 >= sidebar_w {
-                    pc.rects.push(*rect);
-                }
-            }
-        } else {
-            // Full window page background
-            let bg_color = clear_ui::color::page_low_color();
-            pc.rect(bg_color, 0.0, 0.0, self.width as f32, self.height as f32);
+            // 1. Render the Menubar widget directly
+            let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
+            self.menubar.menus.set_selected(Some(page_idx));
+            clear_ui::layout::render_widget(&mut menubar_pc, &mut self.menubar, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
 
         // 3. Draw Page content
@@ -250,18 +243,15 @@ impl FilesystemApp {
         }
 
         if has_sidebar {
-            // 4. Add Sidebar Background and tabs (where x < sidebar_w) from the paginator to pc last
-            for rect in paginator_pc.rects.iter() {
-                if rect.1 < sidebar_w {
-                    pc.rects.push(*rect);
-                }
-            }
+            // Add Sidebar Background and elements directly from the menubar to pc
+            pc.rects.extend(menubar_pc.rects);
 
             // Sidebar Divider Line (accent border)
             pc.rect([0.36, 0.56, 0.38, 1.0], sidebar_w, 0.0, 1.0, self.height as f32);
 
-            // Add the paginator's texts (tab labels) on top of the sidebar background
-            pc.texts.extend(paginator_pc.texts);
+            // Add the menubar's texts (tab labels) on top of the sidebar background
+            pc.texts.extend(menubar_pc.texts);
+            pc.buttons.extend(menubar_pc.buttons);
         }
 
         // Draw bottom selection bar if select_mode is enabled
@@ -403,9 +393,10 @@ impl Application for FilesystemApp {
         let current_dir = browse.current_dir.clone();
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
-        let paginator = clear_ui::widget::Paginator::new(56.0, pages_names)
-            .with_sidebar_label("CLEAR")
-            .with_tabs_rotated(true);
+        let mut menubar = clear_ui::widget::MenuBar::new(0.0, 0.0, 56.0, 0.0)
+            .with_vertical(true);
+        menubar.set_sidebar_label(Some("CLEAR".to_string()));
+        menubar.set_pages(pages_names);
 
         let fs_service = crate::services::fs::FsService::new(sender.clone());
         let mut app = Self {
@@ -432,7 +423,7 @@ impl Application for FilesystemApp {
             page_buttons: Vec::new(),
             cursor_x: 0.0,
             cursor_y: 0.0,
-            paginator,
+            menubar,
             just_initialized: true,
             ui_context: clear_ui::context::UiContext::new(),
             watcher: None,
@@ -480,7 +471,7 @@ impl Application for FilesystemApp {
             Message::SwitchPage(page) => {
                 self.current_page = page;
                 let page_idx = Page::ALL.iter().position(|&p| p == page).unwrap_or(0);
-                self.paginator.set_selected_page(page_idx);
+                self.menubar.menus.set_selected(Some(page_idx));
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -605,7 +596,7 @@ impl Application for FilesystemApp {
             }
         }
 
-        if self.paginator.tick(dt, &mut self.ui_context) {
+        if self.menubar.tick(dt, &mut self.ui_context) {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
@@ -656,7 +647,7 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
-        if !self.select_mode && self.paginator.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+        if !self.select_mode && self.menubar.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
             changed = true;
         }
 
@@ -716,12 +707,9 @@ impl Application for FilesystemApp {
         let mut changed = false;
 
         eprintln!("[DEBUG] MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
-        let pag_match = !self.select_mode && self.paginator.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
-        eprintln!("[DEBUG] Paginator matched: {}", pag_match);
-        if pag_match {
-            if self.paginator.take_click() {
-                let idx = self.paginator.selected_page();
-                eprintln!("[DEBUG] Paginator page changed to idx: {}", idx);
+        let menu_match = !self.select_mode && self.menubar.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
+        if menu_match {
+            if let Some((idx, _)) = self.menubar.menu_click() {
                 if idx < Page::ALL.len() {
                     self.ui_context.clear_focus();
                     self.current_page = Page::ALL[idx];
@@ -948,7 +936,7 @@ impl Application for FilesystemApp {
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
         if self.current_page == Page::Browse || self.current_page == Page::Network {
             let has_sidebar = !self.select_mode;
-            let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
+            let sidebar_w = if has_sidebar { self.menubar.sidebar_w() } else { 0.0 };
             let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
             let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
             let browse_w = (usable_w - 12.0) * 0.5;

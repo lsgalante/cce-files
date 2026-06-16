@@ -409,7 +409,7 @@ impl FilesystemApp {
             // Background
             widgets.push(AppWidget {
                 x: cx + 1.0, y: cy + 1.0, w: cw - 2.0, h: ch - 2.0,
-                color: [0.06, 0.06, 0.09, 1.0], hover_color: [0.06, 0.06, 0.09, 1.0],
+                color: clear_ui::color::popover_bg_color(), hover_color: clear_ui::color::popover_bg_color(),
                 hovering: false,
                 action: None,
             });

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
 use clear_ui::widget::{Element, Breadcrumb, PathController};
-use clear_ui::layout::SectionContext;
+use clear_ui::layout::{ColumnLayout, LayoutStrategy};
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -165,26 +165,27 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let accent_fg = [0.36, 0.56, 0.38, 1.0]; // Color::from_rgb8(0x5c, 0x90, 0x60)
     let text_fg = [0.83, 0.83, 0.83, 1.0];
 
-    // Render the Breadcrumb widget into PageContent
-    clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 12.0, cy + 6.0, cw - 24.0, 24.0, ctx);
+    let gap = 12.0;
+    let margin = 12.0;
+    let mut layout = ColumnLayout::new(gap);
+    let client_x = cx + margin;
+    let client_y = cy + margin;
+    let client_w = cw - 2.0 * margin;
+    let client_h = ch - 2.0 * margin;
+    layout.init(client_x, client_y, client_w, client_h);
 
-    // 1. Files List layout (aligned directly, Files Section removed)
-    let outer_x = cx + 12.0;
-    let outer_y = cy + 42.0;
-    let outer_w = cw - 24.0;
+    let breadcrumb_h = 24.0;
+    let textbox_h = 28.0;
 
-    // Search Section starts at the bottom
-    let search_sec_h = 56.0;
-    let search_sec_y = cy + ch - search_sec_h;
+    // 1. Allocate and render Breadcrumb
+    let (bx, by, bw, bh) = layout.allocate(client_w, breadcrumb_h);
+    clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
 
-    // Files List height takes the remaining space above Search Section
-    let outer_h = search_sec_y - outer_y - 12.0;
-
-    let list_x = outer_x;
-    let list_y = outer_y;
-    let list_w = outer_w;
-    let list_h = outer_h;
-
+    // 2. Allocate and render ScrollingList (ScrollBox)
+    // The scrolling list height occupies the remaining vertical space:
+    // list_h = client_h - breadcrumb_h - textbox_h - (2 * gap)
+    let list_h_val = client_h - breadcrumb_h - textbox_h - 2.0 * gap;
+    let (list_x, list_y, list_w, list_h) = layout.allocate(client_w, list_h_val);
     clear_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h, ctx);
 
     state.list_box.update_bounds(state.entries.len(), list_y, list_h);
@@ -200,41 +201,28 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let count_y = list_y + list_h - 18.0;
     pc.text(&count_str, count_x, count_y, 11.0, text_dim);
 
+    // 3. Allocate and render Textbox(es)
+    let (tx, ty, tw, th) = layout.allocate(client_w, textbox_h);
+
     if select_mode {
         // Two columns at the bottom: Search and File Name
-        let sec_w = (outer_w - 12.0) / 2.0;
+        let sec_w = (tw - 12.0) / 2.0;
 
-        // Left column: Search (rendered directly without section borders)
-        let search_x = outer_x + 4.0;
-        let search_y = search_sec_y + 14.0;
-        let search_w = sec_w - 8.0;
-        let search_h = 28.0;
-
+        // Left column: Search
+        let search_x = tx;
+        let search_w = sec_w;
         state.search_box.set_row_rect(search_x, search_w);
-        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, search_y, search_w, search_h, ctx);
+        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, ty, search_w, th, ctx);
 
         // Right column: File Name
-        let filename_sec_x = outer_x + sec_w + 12.0;
-        let mut filename_sec = SectionContext::new(&mut pc, filename_sec_x - 8.0, search_sec_y - 12.0, sec_w + 16.0, "File Name", false, false);
-        filename_sec.content_y = search_sec_y + search_sec_h - 12.0;
-        filename_sec.finish();
-
-        let filename_x = filename_sec_x + 12.0;
-        let filename_y = search_sec_y + 14.0;
-        let filename_w = sec_w - 24.0;
-        let filename_h = 28.0;
-
+        let filename_x = tx + sec_w + 12.0;
+        let filename_w = sec_w;
         state.save_name_box.set_row_rect(filename_x, filename_w);
-        clear_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, filename_y, filename_w, filename_h, ctx);
+        clear_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, ty, filename_w, th, ctx);
     } else {
-        // Inner search textbox (rendered directly at the bottom without section borders)
-        let search_x = outer_x + 4.0;
-        let search_y = search_sec_y + 14.0;
-        let search_w = outer_w - 8.0;
-        let search_h = 28.0;
-
-        state.search_box.set_row_rect(search_x, search_w);
-        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, search_y, search_w, search_h, ctx);
+        // Full width search textbox
+        state.search_box.set_row_rect(tx, tw);
+        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, tx, ty, tw, th, ctx);
     }
 
     for (idx, entry) in state.entries.iter().enumerate() {

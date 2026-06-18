@@ -132,10 +132,7 @@ impl FilesystemApp {
 
         // Update root window size, background color, opacity, corner radius
         self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
-        let mut bg_color = cce_ui::color::page_low_color();
-        if let Some(opacity) = cce_ui::color::read_opacity_if_configured() {
-            bg_color[3] = opacity;
-        }
+        let bg_color = cce_ui::color::page_low_color();
         self.root_window.background_color = Some(bg_color);
         self.root_window.radius = 12.0;
 
@@ -811,11 +808,7 @@ impl Application for FilesystemApp {
     }
 
     fn clear_color(&self) -> [f32; 4] {
-        let mut color = cce_ui::color::page_low_color();
-        if let Some(opacity) = cce_ui::color::read_opacity_if_configured() {
-            color[3] = opacity;
-        }
-        color
+        cce_ui::color::page_low_color()
     }
 
     fn handle_pointer_move(&mut self, pos: LogicalPosition, needs_rebuild: &mut bool) {

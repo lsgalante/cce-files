@@ -1,6 +1,3 @@
-mod pages;
-mod services;
-
 use wayland_client::QueueHandle;
 use glyphon::FontSystem;
 
@@ -10,8 +7,9 @@ use cce_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
 
-use pages::Page;
-use pages::browse::is_project_dir;
+use cce_filesystem_interface::{Message, pages, services};
+use cce_filesystem_interface::pages::Page;
+use cce_filesystem_interface::pages::browse::is_project_dir;
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -24,6 +22,8 @@ struct AppWidget {
     hover_color: [f32; 4],
     hovering: bool,
     action: Option<Message>,
+    radius: f32,
+    corners: (bool, bool, bool, bool),
 }
 
 #[derive(Clone)]
@@ -65,24 +65,10 @@ struct FilesystemApp {
     just_initialized: bool,
     ui_context: cce_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
-    fs_service: crate::services::fs::FsService,
+    fs_service: services::fs::FsService,
     context_menu: ContextMenu,
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::TextBox)>,
-}
-
-// ── Messages ────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub enum Message {
-    SwitchPage(Page),
-    Browse(pages::browse::BrowseMessage),
-    Preview(pages::preview::PreviewMessage),
-    KeyboardEvent(KeyEvent),
-    SelectOpen,
-    SelectCancel,
-    PromptOpenWith(std::path::PathBuf),
-    OpenWithSubmit,
-    OpenWithCancel,
+    root_window: cce_ui::widget::Window,
 }
 
 
@@ -102,7 +88,7 @@ impl FilesystemApp {
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 while rx.try_recv().is_ok() {}
 
-                let _ = fs_service.send(crate::services::fs::FsRequest::RefreshDirectory(path_clone.clone())).await;
+                let _ = fs_service.send(services::fs::FsRequest::RefreshDirectory(path_clone.clone())).await;
             }
         });
 
@@ -144,8 +130,33 @@ impl FilesystemApp {
         cce_ui::widget::hover_animation::reset_frame_registration();
         cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
 
-        let mut pc = pages::PageContent::new();
+        // Update root window size, background color, opacity, corner radius
+        self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
+        let mut bg_color = cce_ui::color::page_low_color();
+        if let Some(opacity) = cce_ui::color::read_opacity_if_configured() {
+            bg_color[3] = opacity;
+        }
+        self.root_window.background_color = Some(bg_color);
+        self.root_window.radius = 12.0;
 
+        // Rebuild Element Focus Hierarchy
+        self.root_window.clear_children(&mut self.ui_context);
+
+        // Clear all widgets' hierarchy links
+        self.menubar.clear_children(&mut self.ui_context); self.menubar.set_parent(None, &mut self.ui_context);
+        self.browse.search_box.clear_children(&mut self.ui_context); self.browse.search_box.set_parent(None, &mut self.ui_context);
+        self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
+        self.browse.list_box.clear_children(&mut self.ui_context); self.browse.list_box.set_parent(None, &mut self.ui_context);
+        self.browse.breadcrumb.clear_children(&mut self.ui_context); self.browse.breadcrumb.set_parent(None, &mut self.ui_context);
+        self.network.breadcrumb.clear_children(&mut self.ui_context); self.network.breadcrumb.set_parent(None, &mut self.ui_context);
+        self.network.graph.clear_children(&mut self.ui_context); self.network.graph.set_parent(None, &mut self.ui_context);
+        self.settings.color_selector.clear_children(&mut self.ui_context); self.settings.color_selector.set_parent(None, &mut self.ui_context);
+        if let Some((_, textbox)) = &mut self.open_with_dialog {
+            textbox.clear_children(&mut self.ui_context);
+            textbox.set_parent(None, &mut self.ui_context);
+        }
+
+        use cce_ui::widget::focus::link_parent_child;
         let has_sidebar = !self.select_mode;
         let sidebar_w = if has_sidebar { self.menubar.sidebar_w() } else { 0.0 };
         let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
@@ -162,19 +173,47 @@ impl FilesystemApp {
             self.height as f32 - 32.0
         };
 
-        // Full window page background
-        let bg_color = cce_ui::color::page_low_color();
-        pc.rect(bg_color, 0.0, 0.0, self.width as f32, self.height as f32);
-
-        let mut menubar_pc = pages::PageContent::new();
         if has_sidebar {
-            // 1. Render the Menubar widget directly
-            let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
-            self.menubar.menus.set_selected(Some(page_idx));
-            cce_ui::layout::render_widget(&mut menubar_pc, &mut self.menubar, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
+            link_parent_child(&mut self.root_window, &mut self.menubar, &mut self.ui_context);
         }
 
-        // 3. Draw Page content
+        match self.current_page {
+            Page::Browse => {
+                link_parent_child(&mut self.root_window, &mut self.browse.breadcrumb, &mut self.ui_context);
+                link_parent_child(&mut self.root_window, &mut self.browse.list_box, &mut self.ui_context);
+                if self.select_mode {
+                    link_parent_child(&mut self.root_window, &mut self.browse.save_name_box, &mut self.ui_context);
+                } else {
+                    link_parent_child(&mut self.root_window, &mut self.browse.search_box, &mut self.ui_context);
+                }
+            }
+            Page::Network => {
+                link_parent_child(&mut self.root_window, &mut self.network.breadcrumb, &mut self.ui_context);
+                link_parent_child(&mut self.root_window, &mut self.network.graph, &mut self.ui_context);
+            }
+            Page::Settings => {
+                link_parent_child(&mut self.root_window, &mut self.settings.color_selector, &mut self.ui_context);
+            }
+        }
+
+        if let Some((_, textbox)) = &mut self.open_with_dialog {
+            link_parent_child(&mut self.root_window, textbox, &mut self.ui_context);
+        }
+
+        // Layout widgets recursively inside the parent space
+        let mut dummy_pc = pages::PageContent::new();
+        if has_sidebar {
+            let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
+            self.menubar.menus.set_selected(Some(page_idx));
+            cce_ui::layout::render_widget(&mut dummy_pc, &mut self.menubar, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
+        }
+
+        // Render root window recursively
+        let mut window_pc = pages::PageContent::new();
+        cce_ui::layout::render_widget(&mut window_pc, &mut self.root_window, 0.0, 0.0, self.width as f32, self.height as f32, &mut self.ui_context);
+
+        // 3. Draw Page custom/static content (drawn to pc)
+        let mut pc = pages::PageContent::new();
         match self.current_page {
             Page::Browse => {
                 // Draw background plates for columns
@@ -237,17 +276,6 @@ impl FilesystemApp {
             }
         }
 
-        if has_sidebar {
-            // Add Sidebar Background and elements directly from the menubar to pc
-            pc.rects.extend(menubar_pc.rects);
-
-
-
-            // Add the menubar's texts (tab labels) on top of the sidebar background
-            pc.texts.extend(menubar_pc.texts);
-            pc.buttons.extend(menubar_pc.buttons);
-        }
-
         // Draw bottom selection bar if select_mode is enabled
         if self.select_mode {
             let bar_y = self.height as f32 - select_bar_h - 16.0;
@@ -287,151 +315,12 @@ impl FilesystemApp {
             );
         }
 
-        // 4. Translate PageContent into rendering quads and TextItems
-        for (col, x, y, w, h) in &pc.rects {
-            widgets.push(AppWidget {
-                x: *x,
-                y: *y,
-                w: *w,
-                h: *h,
-                color: *col,
-                hover_color: *col,
-                hovering: false,
-                action: None,
-            });
-        }
+        // Gather all popovers
+        let mut popover_pc = pages::PageContent::new();
+        cce_ui::layout::render_popovers(&mut popover_pc, &mut self.ui_context);
 
-        // Add page buttons
-        for (btn, action) in &pc.buttons {
-            let base = btn.base().unwrap();
-            let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
-            let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
-            let label = base.label.as_deref().unwrap_or("");
-            let label_size = 12.0;
-            let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
-
-            let hovering = self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
-                && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h;
-            let col = if hovering { hover_bg } else { bg };
-
-            widgets.push(AppWidget {
-                x: base.x,
-                y: base.y,
-                w: base.w,
-                h: base.h,
-                color: col,
-                hover_color: hover_bg,
-                hovering,
-                action: Some(action.clone()),
-            });
-
-            // Draw button text
-            let text_x = if btn.left_align {
-                base.x + 8.0
-            } else {
-                let text_w = label.chars().count() as f32 * label_size * 0.65;
-                base.x + (base.w - text_w) / 2.0
-            };
-            let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
-
-            text_items.push(TextItem::new(
-                &mut self.font_system,
-                label,
-                label_size,
-                text_x,
-                text_y,
-                glyphon::Color::rgb(
-                    (label_color[0] * 255.0) as u8,
-                    (label_color[1] * 255.0) as u8,
-                    (label_color[2] * 255.0) as u8,
-                ),
-                None,
-                None,
-            ));
-        }
-
-        // Add raw texts
-        for (text, size, x, y, col, font, bounds) in &pc.texts {
-            let mut final_bounds = *bounds;
-            if self.context_menu.visible {
-                let cx = self.context_menu.x;
-                let cy = self.context_menu.y;
-                let cw = self.context_menu.w;
-                let ch = self.context_menu.h;
-
-                let text_w = text.chars().count() as f32 * *size * 0.6;
-                let text_h = *size;
-
-                let tx1 = *x;
-                let tx2 = *x + text_w;
-                let ty1 = *y - text_h * 0.8;
-                let ty2 = *y + text_h * 0.2;
-
-                if tx1 < cx + cw && tx2 > cx && ty1 < cy + ch && ty2 > cy {
-                    let mut b_left = bounds.map(|b| b[0]).unwrap_or(0.0);
-                    let b_top = bounds.map(|b| b[1]).unwrap_or(0.0);
-                    let mut b_right = bounds.map(|b| b[2]).unwrap_or(99999.0);
-                    let b_bottom = bounds.map(|b| b[3]).unwrap_or(99999.0);
-
-                    if tx1 < cx && tx2 > cx {
-                        b_right = b_right.min(cx);
-                    } else if tx1 < cx + cw && tx2 > cx + cw {
-                        b_left = b_left.max(cx + cw);
-                    } else {
-                        b_right = b_left; // completely covered
-                    }
-                    final_bounds = Some([b_left, b_top, b_right, b_bottom]);
-                }
-            }
-
-            if self.open_with_dialog.is_some() {
-                let cx = (self.width as f32 - 400.0) / 2.0;
-                let cy = (self.height as f32 - 160.0) / 2.0;
-                let cw = 400.0;
-                let ch = 160.0;
-
-                let text_w = text.chars().count() as f32 * *size * 0.6;
-                let text_h = *size;
-
-                let tx1 = *x;
-                let tx2 = *x + text_w;
-                let ty1 = *y - text_h * 0.8;
-                let ty2 = *y + text_h * 0.2;
-
-                if tx1 < cx + cw && tx2 > cx && ty1 < cy + ch && ty2 > cy {
-                    let mut b_left = final_bounds.map(|b| b[0]).unwrap_or(0.0);
-                    let b_top = final_bounds.map(|b| b[1]).unwrap_or(0.0);
-                    let mut b_right = final_bounds.map(|b| b[2]).unwrap_or(99999.0);
-                    let b_bottom = final_bounds.map(|b| b[3]).unwrap_or(99999.0);
-
-                    if tx1 < cx && tx2 > cx {
-                        b_right = b_right.min(cx);
-                    } else if tx1 < cx + cw && tx2 > cx + cw {
-                        b_left = b_left.max(cx + cw);
-                    } else {
-                        b_right = b_left; // completely covered
-                    }
-                    final_bounds = Some([b_left, b_top, b_right, b_bottom]);
-                }
-            }
-
-            text_items.push(TextItem::new(
-                &mut self.font_system,
-                text,
-                *size,
-                *x,
-                *y,
-                glyphon::Color::rgb(
-                    (col[0] * 255.0) as u8,
-                    (col[1] * 255.0) as u8,
-                    (col[2] * 255.0) as u8,
-                ),
-                font.as_deref(),
-                final_bounds,
-            ));
-        }
-
-        // Render context menu overlay if visible
+        // Gather context menu overlay if visible
+        let mut context_menu_pc = pages::PageContent::new();
         if self.context_menu.visible {
             let cx = self.context_menu.x;
             let cy = self.context_menu.y;
@@ -439,53 +328,30 @@ impl FilesystemApp {
             let ch = self.context_menu.h;
 
             // Border
-            widgets.push(AppWidget {
-                x: cx, y: cy, w: cw, h: ch,
-                color: [0.22, 0.22, 0.28, 1.0], hover_color: [0.22, 0.22, 0.28, 1.0],
-                hovering: false,
-                action: None,
-            });
+            context_menu_pc.rect([0.22, 0.22, 0.28, 1.0], cx, cy, cw, ch);
             // Background
-            widgets.push(AppWidget {
-                x: cx + 1.0, y: cy + 1.0, w: cw - 2.0, h: ch - 2.0,
-                color: cce_ui::color::popover_bg_color(), hover_color: cce_ui::color::popover_bg_color(),
-                hovering: false,
-                action: None,
-            });
+            context_menu_pc.rect(cce_ui::color::popover_bg_color(), cx + 1.0, cy + 1.0, cw - 2.0, ch - 2.0);
             // Hover highlight
             if let Some(h_idx) = self.context_menu.hovered {
                 let iy = cy + h_idx as f32 * 24.0;
-                widgets.push(AppWidget {
-                    x: cx + 2.0, y: iy + 2.0, w: cw - 4.0, h: 20.0,
-                    color: [0.20, 0.40, 0.65, 0.6], hover_color: [0.20, 0.40, 0.65, 0.6],
-                    hovering: false,
-                    action: None,
-                });
+                context_menu_pc.rect([0.20, 0.40, 0.65, 0.6], cx + 2.0, iy + 2.0, cw - 4.0, 20.0);
             }
             // Text options
             for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
                 let iy = cy + idx as f32 * 24.0 + (24.0 - 12.0) / 2.0;
                 let text_color = if idx == 0 {
-                    glyphon::Color::rgb(0x70, 0x70, 0x78)
+                    [0.44, 0.44, 0.47, 1.0]
                 } else if self.context_menu.hovered == Some(idx) {
-                    glyphon::Color::rgb(0xff, 0xff, 0xff)
+                    [1.0, 1.0, 1.0, 1.0]
                 } else {
-                    glyphon::Color::rgb(0xcc, 0xcc, 0xd4)
+                    [0.8, 0.8, 0.83, 1.0]
                 };
-                text_items.push(TextItem::new(
-                    &mut self.font_system,
-                    opt,
-                    12.0,
-                    cx + 8.0,
-                    iy,
-                    text_color,
-                    None,
-                    None,
-                ));
+                context_menu_pc.text(opt, cx + 8.0, iy, 12.0, text_color);
             }
         }
 
-        // Render open-with dialog overlay if active
+        // Gather open-with dialog backdrop & dialog panel if active (open_with_dialog uses textbox rendering manually but we can gather its other quads/texts)
+        let mut dialog_pc = pages::PageContent::new();
         if let Some((_path, textbox)) = &mut self.open_with_dialog {
             let dialog_w = 400.0;
             let dialog_h = 160.0;
@@ -493,87 +359,18 @@ impl FilesystemApp {
             let dialog_y = (self.height as f32 - dialog_h) / 2.0;
 
             // Semi-transparent backdrop overlay
-            widgets.push(AppWidget {
-                x: 0.0, y: 0.0, w: self.width as f32, h: self.height as f32,
-                color: [0.02, 0.02, 0.03, 0.6], hover_color: [0.02, 0.02, 0.03, 0.6],
-                hovering: false,
-                action: None,
-            });
-
+            dialog_pc.rect([0.02, 0.02, 0.03, 0.6], 0.0, 0.0, self.width as f32, self.height as f32);
             // Dialog panel border
-            widgets.push(AppWidget {
-                x: dialog_x, y: dialog_y, w: dialog_w, h: dialog_h,
-                color: [0.22, 0.22, 0.28, 1.0], hover_color: [0.22, 0.22, 0.28, 1.0],
-                hovering: false,
-                action: None,
-            });
-
+            dialog_pc.rect([0.22, 0.22, 0.28, 1.0], dialog_x, dialog_y, dialog_w, dialog_h);
             // Dialog panel background
-            widgets.push(AppWidget {
-                x: dialog_x + 1.0, y: dialog_y + 1.0, w: dialog_w - 2.0, h: dialog_h - 2.0,
-                color: [0.08, 0.08, 0.12, 1.0], hover_color: [0.08, 0.08, 0.12, 1.0],
-                hovering: false,
-                action: None,
-            });
+            dialog_pc.rect([0.08, 0.08, 0.12, 1.0], dialog_x + 1.0, dialog_y + 1.0, dialog_w - 2.0, dialog_h - 2.0);
 
-            // Dialog Title text
-            text_items.push(TextItem::new(
-                &mut self.font_system,
-                "Open with...",
-                14.0,
-                dialog_x + 20.0,
-                dialog_y + 20.0,
-                glyphon::Color::rgb(0xff, 0xff, 0xff),
-                None,
-                None,
-            ));
+            // Title text
+            dialog_pc.text("Open with...", dialog_x + 20.0, dialog_y + 20.0, 14.0, [1.0, 1.0, 1.0, 1.0]);
+            // Description
+            dialog_pc.text("Enter command:", dialog_x + 20.0, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
 
-            // Dialog description
-            text_items.push(TextItem::new(
-                &mut self.font_system,
-                "Enter command:",
-                11.0,
-                dialog_x + 20.0,
-                dialog_y + 42.0,
-                glyphon::Color::rgb(0x8a, 0x8a, 0x93),
-                None,
-                None,
-            ));
-
-            // Render textbox
-            let tb_x = dialog_x + 20.0;
-            let tb_y = dialog_y + 60.0;
-            let tb_w = dialog_w - 40.0;
-            let tb_h = 28.0;
-
-            textbox.prepare_text(&mut self.font_system);
-            textbox.set_rect(tb_x, tb_y, tb_w, tb_h);
-            
-            // Textbox quads
-            for (qx, qy, qw, qh, qc) in textbox.all_quads(&mut self.ui_context) {
-                widgets.push(AppWidget {
-                    x: qx, y: qy, w: qw, h: qh,
-                    color: qc, hover_color: qc,
-                    hovering: false,
-                    action: None,
-                });
-            }
-
-            // Textbox text label
-            let font_opt = textbox.widget_font();
-            for (label, bounds) in textbox.text_labels_with_bounds(&mut self.ui_context) {
-                let color_rgb = glyphon::Color::rgb(label.color[0], label.color[1], label.color[2]);
-                text_items.push(TextItem::new(
-                    &mut self.font_system,
-                    &label.text,
-                    label.font_size,
-                    label.x,
-                    label.y,
-                    color_rgb,
-                    font_opt.as_deref(),
-                    bounds,
-                ));
-            }
+            // Textbox quads & labels are rendered via textbox.all_quads inside the layout, so we'll grab them from the textbox child widget since textbox is linked to root_window.
 
             // Render Buttons: Cancel & Open
             let btn_cancel_x = dialog_x + dialog_w - 180.0;
@@ -586,56 +383,107 @@ impl FilesystemApp {
             let btn_open_w = 80.0;
             let btn_open_h = 28.0;
 
-            // Cancel button background & hover
             let cancel_hover = self.cursor_x >= btn_cancel_x && self.cursor_x <= btn_cancel_x + btn_cancel_w
                 && self.cursor_y >= btn_cancel_y && self.cursor_y <= btn_cancel_y + btn_cancel_h;
             let cancel_bg = if cancel_hover { [0.35, 0.15, 0.15, 0.8] } else { [0.25, 0.12, 0.12, 0.5] };
+            dialog_pc.button("Cancel", btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h, cancel_bg, [0.35, 0.15, 0.15, 0.8], [0.83, 0.83, 0.83, 1.0], Message::OpenWithCancel);
 
-            widgets.push(AppWidget {
-                x: btn_cancel_x, y: btn_cancel_y, w: btn_cancel_w, h: btn_cancel_h,
-                color: cancel_bg, hover_color: [0.35, 0.15, 0.15, 0.8],
-                hovering: cancel_hover,
-                action: Some(Message::OpenWithCancel),
-            });
-            let cancel_text_w = "Cancel".chars().count() as f32 * 12.0 * 0.65;
-            text_items.push(TextItem::new(
-                &mut self.font_system,
-                "Cancel",
-                12.0,
-                btn_cancel_x + (btn_cancel_w - cancel_text_w) / 2.0,
-                btn_cancel_y + (btn_cancel_h - 12.0 * 1.4) / 2.0,
-                glyphon::Color::rgb(0xd4, 0xd4, 0xd4),
-                None,
-                None,
-            ));
-
-            // Open button background & hover
             let open_hover = self.cursor_x >= btn_open_x && self.cursor_x <= btn_open_x + btn_open_w
                 && self.cursor_y >= btn_open_y && self.cursor_y <= btn_open_y + btn_open_h;
             let open_bg = if open_hover { [0.46, 0.66, 0.48, 1.0] } else { [0.36, 0.56, 0.38, 1.0] };
+            dialog_pc.button("Open", btn_open_x, btn_open_y, btn_open_w, btn_open_h, open_bg, [0.46, 0.66, 0.48, 1.0], [0.1, 0.16, 0.11, 1.0], Message::OpenWithSubmit);
+        }
 
-            widgets.push(AppWidget {
-                x: btn_open_x, y: btn_open_y, w: btn_open_w, h: btn_open_h,
-                color: open_bg, hover_color: [0.46, 0.66, 0.48, 1.0],
-                hovering: open_hover,
-                action: Some(Message::OpenWithSubmit),
-            });
-            let open_text_w = "Open".chars().count() as f32 * 12.0 * 0.65;
-            text_items.push(TextItem::new(
-                &mut self.font_system,
-                "Open",
-                12.0,
-                btn_open_x + (btn_open_w - open_text_w) / 2.0,
-                btn_open_y + (btn_open_h - 12.0 * 1.4) / 2.0,
-                glyphon::Color::rgb(0x1a, 0x29, 0x1c),
-                None,
-                None,
-            ));
+        // Translate everything into widgets and text_items!
+        // We collect from: window_pc, pc, popover_pc, context_menu_pc, dialog_pc
+        let mut page_buttons = Vec::new();
+
+        for pc_part in &[window_pc, pc, popover_pc, context_menu_pc, dialog_pc] {
+            for (c, x, y, w, h, r, corners) in &pc_part.rects {
+                widgets.push(AppWidget {
+                    x: *x,
+                    y: *y,
+                    w: *w,
+                    h: *h,
+                    color: *c,
+                    hover_color: *c,
+                    hovering: false,
+                    radius: *r,
+                    corners: *corners,
+                    action: None,
+                });
+            }
+            for (btn, action) in &pc_part.buttons {
+                let base = btn.base().unwrap();
+                let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
+                let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
+                let label = base.label.as_deref().unwrap_or("");
+                let label_size = 12.0;
+                let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
+
+                let hovering = self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
+                    && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h;
+                let col = if hovering { hover_bg } else { bg };
+
+                widgets.push(AppWidget {
+                    x: base.x,
+                    y: base.y,
+                    w: base.w,
+                    h: base.h,
+                    color: col,
+                    hover_color: hover_bg,
+                    hovering,
+                    radius: 4.0, // standard button radius
+                    corners: (true, true, true, true),
+                    action: Some(action.clone()),
+                });
+
+                let text_x = if btn.left_align {
+                    base.x + 8.0
+                } else {
+                    let text_w = label.chars().count() as f32 * label_size * 0.65;
+                    base.x + (base.w - text_w) / 2.0
+                };
+                let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
+
+                text_items.push(TextItem::new(
+                    &mut self.font_system,
+                    label,
+                    label_size,
+                    text_x,
+                    text_y,
+                    glyphon::Color::rgb(
+                        (label_color[0] * 255.0) as u8,
+                        (label_color[1] * 255.0) as u8,
+                        (label_color[2] * 255.0) as u8,
+                    ),
+                    None,
+                    None,
+                ));
+
+                page_buttons.push((btn.clone(), action.clone()));
+            }
+            for (text, size, x, y, col, font, bounds) in &pc_part.texts {
+                text_items.push(TextItem::new(
+                    &mut self.font_system,
+                    text,
+                    *size,
+                    *x,
+                    *y,
+                    glyphon::Color::rgb(
+                        (col[0] * 255.0) as u8,
+                        (col[1] * 255.0) as u8,
+                        (col[2] * 255.0) as u8,
+                    ),
+                    font.as_deref(),
+                    *bounds,
+                ));
+            }
         }
 
         self.widgets = widgets;
         self.text_items = text_items;
-        self.page_buttons = pc.buttons;
+        self.page_buttons = page_buttons;
         self.needs_rebuild = false;
     }
 }
@@ -663,7 +511,13 @@ impl Application for FilesystemApp {
         menubar.set_sidebar_label(Some("CLEAR".to_string()));
         menubar.set_pages(pages_names);
 
-        let fs_service = crate::services::fs::FsService::new(sender.clone());
+        let fs_service = services::fs::FsService::new(sender.clone());
+        let initial_w = if select_mode { 900 } else { 1200 };
+        let initial_h = if select_mode { 500 } else { 720 };
+        let root_window = cce_ui::widget::Window::new(0.0, 0.0, initial_w as f32, initial_h as f32)
+            .with_background(cce_ui::color::page_low_color())
+            .with_radius(12.0);
+
         let mut app = Self {
             current_page: Page::Browse,
             browse,
@@ -681,8 +535,8 @@ impl Application for FilesystemApp {
                 fs
             },
             needs_rebuild: true,
-            width: if select_mode { 900 } else { 1200 },
-            height: if select_mode { 500 } else { 720 },
+            width: initial_w,
+            height: initial_h,
             scale_factor: 1.0,
             sender: sender.clone(),
             page_buttons: Vec::new(),
@@ -703,10 +557,11 @@ impl Application for FilesystemApp {
                 hovered: None,
             },
             open_with_dialog: None,
+            root_window,
         };
 
         // Start initial directory loading via FsService
-        app.fs_service.send(crate::services::fs::FsRequest::ReadLastDir);
+        app.fs_service.send(services::fs::FsRequest::ReadLastDir);
 
         app.rebuild_layout();
         app
@@ -777,7 +632,7 @@ impl Application for FilesystemApp {
                     None
                 };
                 if let Some(path) = selected_path {
-                    self.fs_service.send(crate::services::fs::FsRequest::ReadPreview(path));
+                    self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
                 } else {
                     pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
                 }
@@ -832,7 +687,7 @@ impl Application for FilesystemApp {
                     if !filename.is_empty() {
                         let path = self.browse.current_dir.join(filename);
                         if path.is_dir() && !is_project_dir(&path) {
-                            self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(path));
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
                         } else {
                             println!("{}", path.display());
                             std::process::exit(0);
@@ -845,7 +700,7 @@ impl Application for FilesystemApp {
                         };
                         if let Some(path) = selected_path {
                             if path.is_dir() && !is_project_dir(&path) {
-                                self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(path));
+                                self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
                             } else {
                                 println!("{}", path.display());
                                 std::process::exit(0);
@@ -928,7 +783,7 @@ impl Application for FilesystemApp {
         }
     }
 
-    fn view(&mut self, quads: &mut Vec<(f32, f32, f32, f32, [f32; 4])>, size: LogicalSize, scale: f64) {
+    fn view(&mut self, _quads: &mut Vec<(f32, f32, f32, f32, [f32; 4])>, size: LogicalSize, scale: f64) {
         if self.needs_rebuild || self.width != size.width as u32 || self.height != size.height as u32 || self.scale_factor != scale {
             self.width = size.width as u32;
             self.height = size.height as u32;
@@ -936,9 +791,18 @@ impl Application for FilesystemApp {
             cce_ui::scale::set_scale_factor(scale as f32);
             self.rebuild_layout();
         }
+    }
 
+    fn view_rounded_quads(&mut self, quads: &mut Vec<(f32, f32, f32, f32, f32, [f32; 4], (bool, bool, bool, bool))>, size: LogicalSize, scale: f64) {
+        if self.needs_rebuild || self.width != size.width as u32 || self.height != size.height as u32 || self.scale_factor != scale {
+            self.width = size.width as u32;
+            self.height = size.height as u32;
+            self.scale_factor = scale;
+            cce_ui::scale::set_scale_factor(scale as f32);
+            self.rebuild_layout();
+        }
         for w in &self.widgets {
-            quads.push((w.x, w.y, w.w, w.h, w.color));
+            quads.push((w.x, w.y, w.w, w.h, w.radius, w.color, w.corners));
         }
     }
 
@@ -1262,7 +1126,7 @@ impl Application for FilesystemApp {
                                     }
                                 }
                             }
-                            self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(target_path));
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
                             *needs_rebuild = true;
                             self.needs_rebuild = true;
                         }
@@ -1290,7 +1154,7 @@ impl Application for FilesystemApp {
                                         }
                                     }
                                 }
-                                self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(target_path));
+                                self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
                                 changed = true;
                             }
                         }
@@ -1329,7 +1193,7 @@ impl Application for FilesystemApp {
                             }
                             let selected_path = Some(entry.path.clone());
                             if let Some(path) = selected_path {
-                                self.fs_service.send(crate::services::fs::FsRequest::ReadPreview(path));
+                                self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
                             }
                         }
                         changed = true;
@@ -1355,7 +1219,7 @@ impl Application for FilesystemApp {
                 if has_parent && dbl_idx == 0 {
                     if let Some(parent) = self.browse.current_dir.parent() {
                         let parent_path = parent.to_path_buf();
-                        self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(parent_path));
+                        self.fs_service.send(services::fs::FsRequest::ReadDirectory(parent_path));
                         changed = true;
                     }
                 } else if dbl_idx >= offset {
@@ -1363,7 +1227,7 @@ impl Application for FilesystemApp {
                     if let Some(entry) = self.browse.entries.get(entry_idx) {
                         if entry.is_dir && !is_project_dir(&entry.path) {
                             let path = entry.path.clone();
-                            self.fs_service.send(crate::services::fs::FsRequest::ReadDirectory(path));
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
                             changed = true;
                         } else if self.select_mode {
                             self.browse.save_name_box.text = entry.name.clone();

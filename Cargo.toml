@@ -14,3 +14,10 @@ chrono = "0.4.44"
 tokio = { version = "1", features = ["full"] }
 notify = "8.2.0"
 
+[lib]
+name = "cce_filesystem_interface"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cce-filesystem-interface"
+path = "src/main.rs"

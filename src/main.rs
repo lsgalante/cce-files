@@ -133,9 +133,7 @@ impl FilesystemApp {
         // Update root window size, background color, opacity, corner radius
         self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
         let mut bg_color = cce_ui::color::page_low_color();
-        if let Some(opacity) = cce_ui::color::read_opacity_if_configured() {
-            bg_color[3] = opacity;
-        }
+        bg_color[3] = 1.0;
         self.root_window.background_color = Some(bg_color);
         self.root_window.radius = 12.0;
 

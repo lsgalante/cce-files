@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clear-ui = { path = "../clear-ui" }
+cce-ui = { path = "../cce-ui" }
 wayland-client = { version = "0.31", features = ["system"] }
 wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }

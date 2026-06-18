@@ -1,6 +1,6 @@
 use crate::pages::PageContent;
-use clear_ui::widget::{ColorSelector, Element};
-use clear_ui::layout::SectionContext;
+use cce_ui::widget::{ColorSelector, Element};
+use cce_ui::layout::SectionContext;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -10,7 +10,7 @@ pub struct SettingsState {
 
 impl Default for SettingsState {
     fn default() -> Self {
-        let col = clear_ui::color::node_color();
+        let col = cce_ui::color::node_color();
         let col_u8 = [
             (col[0] * 255.0) as u8,
             (col[1] * 255.0) as u8,
@@ -77,7 +77,7 @@ const SECTIONS: &[SectionData] = &[
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32, ctx: &mut clear_ui::context::UiContext) -> PageContent {
+pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
     let accent = [0.36, 0.56, 0.38, 1.0];
     let text_fg = [0.83, 0.83, 0.83, 1.0];
@@ -90,7 +90,7 @@ pub fn view(state: &mut SettingsState, cx: f32, cy: f32, cw: f32, _ch: f32, ctx:
     let cs_y = cy + 48.0;
 
     state.color_selector.set_row_rect(cx + 12.0, cs_w);
-    clear_ui::layout::render_widget(&mut pc, &mut state.color_selector, cx + 12.0, cs_y, cs_w, cs_h, ctx);
+    cce_ui::layout::render_widget(&mut pc, &mut state.color_selector, cx + 12.0, cs_y, cs_w, cs_h, ctx);
 
     let y = cs_y + cs_h + 32.0;
 

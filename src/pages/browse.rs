@@ -3,8 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
-use clear_ui::widget::{Element, Breadcrumb, PathController};
-use clear_ui::layout::{ColumnLayout, LayoutStrategy};
+use cce_ui::widget::{Element, Breadcrumb, PathController};
+use cce_ui::layout::{ColumnLayout, LayoutStrategy};
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -24,11 +24,11 @@ pub struct BrowseState {
     pub all_entries: Vec<DirEntry>,
     pub entries: Vec<DirEntry>,
     pub show_hidden: bool,
-    pub search_box: clear_ui::widget::TextBox,
-    pub list_box: clear_ui::widget::ScrollingList,
+    pub search_box: cce_ui::widget::TextBox,
+    pub list_box: cce_ui::widget::ScrollingList,
     pub selected: Option<usize>,
     pub breadcrumb: Breadcrumb,
-    pub save_name_box: clear_ui::widget::TextBox,
+    pub save_name_box: cce_ui::widget::TextBox,
 }
 
 impl Default for BrowseState {
@@ -42,13 +42,13 @@ impl Default for BrowseState {
             all_entries: Vec::new(),
             entries: Vec::new(),
             show_hidden: false,
-            search_box: clear_ui::widget::TextBox::new(String::new())
+            search_box: cce_ui::widget::TextBox::new(String::new())
                 .with_max_width(None)
                 .with_placeholder("Search"),
-            list_box: clear_ui::widget::ScrollingList::new(28.0, 2.0),
+            list_box: cce_ui::widget::ScrollingList::new(28.0, 2.0),
             selected: None,
             breadcrumb,
-            save_name_box: clear_ui::widget::TextBox::new(String::new()).with_max_width(None),
+            save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
         };
         state.list_box.scroll_box.show_border = false;
         state.update_breadcrumb();
@@ -156,7 +156,7 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut clear_ui::context::UiContext) -> PageContent {
+pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
     let text_dim = [0.53, 0.53, 0.60, 1.0];
     let heading_fg = [0.56, 0.83, 0.56, 1.0]; // Color::from_rgb8(0x8f, 0xd4, 0x8f)
@@ -179,14 +179,14 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
 
     // 1. Allocate and render Breadcrumb
     let (bx, by, bw, bh) = layout.allocate(client_w, breadcrumb_h);
-    clear_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
+    cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
 
     // 2. Allocate and render ScrollingList (ScrollBox)
     // The scrolling list height occupies the remaining vertical space:
     // list_h = client_h - breadcrumb_h - textbox_h - (2 * gap)
     let list_h_val = client_h - breadcrumb_h - textbox_h - 2.0 * gap;
     let (list_x, list_y, list_w, list_h) = layout.allocate(client_w, list_h_val);
-    clear_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h, ctx);
+    cce_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h, ctx);
 
     state.list_box.update_bounds(state.entries.len(), list_y, list_h);
 
@@ -212,17 +212,17 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         let search_x = tx;
         let search_w = sec_w;
         state.search_box.set_row_rect(search_x, search_w);
-        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, ty, search_w, th, ctx);
+        cce_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, ty, search_w, th, ctx);
 
         // Right column: File Name
         let filename_x = tx + sec_w + 12.0;
         let filename_w = sec_w;
         state.save_name_box.set_row_rect(filename_x, filename_w);
-        clear_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, ty, filename_w, th, ctx);
+        cce_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, ty, filename_w, th, ctx);
     } else {
         // Full width search textbox
         state.search_box.set_row_rect(tx, tw);
-        clear_ui::layout::render_widget(&mut pc, &mut state.search_box, tx, ty, tw, th, ctx);
+        cce_ui::layout::render_widget(&mut pc, &mut state.search_box, tx, ty, tw, th, ctx);
     }
 
     for (idx, entry) in state.entries.iter().enumerate() {
@@ -429,8 +429,8 @@ mod tests {
                     modified: String::new(),
                 })
                 .collect(),
-            search_box: clear_ui::widget::TextBox::new(String::new()).with_max_width(None),
-            list_box: clear_ui::widget::ScrollingList::new(28.0, 2.0),
+            search_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
+            list_box: cce_ui::widget::ScrollingList::new(28.0, 2.0),
             ..BrowseState::default()
         }
     }

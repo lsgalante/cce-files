@@ -4,9 +4,9 @@ mod services;
 use wayland_client::QueueHandle;
 use glyphon::FontSystem;
 
-use clear_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
-use clear_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element, PageSelector, MenuController};
-use clear_ui::widget::{GraphController, PathController};
+use cce_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
+use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element, PageSelector, MenuController};
+use cce_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
 
@@ -58,16 +58,16 @@ struct FilesystemApp {
     height: u32,
     scale_factor: f64,
     sender: calloop::channel::Sender<Message>,
-    page_buttons: Vec<(clear_ui::widget::Button, Message)>,
+    page_buttons: Vec<(cce_ui::widget::Button, Message)>,
     cursor_x: f32,
     cursor_y: f32,
-    menubar: clear_ui::widget::MenuBar,
+    menubar: cce_ui::widget::MenuBar,
     just_initialized: bool,
-    ui_context: clear_ui::context::UiContext,
+    ui_context: cce_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
     fs_service: crate::services::fs::FsService,
     context_menu: ContextMenu,
-    open_with_dialog: Option<(std::path::PathBuf, clear_ui::widget::TextBox)>,
+    open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::TextBox)>,
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -141,8 +141,8 @@ impl FilesystemApp {
         let mut widgets = Vec::new();
         let mut text_items = Vec::new();
 
-        clear_ui::widget::hover_animation::reset_frame_registration();
-        clear_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
+        cce_ui::widget::hover_animation::reset_frame_registration();
+        cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
 
         let mut pc = pages::PageContent::new();
 
@@ -163,7 +163,7 @@ impl FilesystemApp {
         };
 
         // Full window page background
-        let bg_color = clear_ui::color::page_low_color();
+        let bg_color = cce_ui::color::page_low_color();
         pc.rect(bg_color, 0.0, 0.0, self.width as f32, self.height as f32);
 
         let mut menubar_pc = pages::PageContent::new();
@@ -171,7 +171,7 @@ impl FilesystemApp {
             // 1. Render the Menubar widget directly
             let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
             self.menubar.menus.set_selected(Some(page_idx));
-            clear_ui::layout::render_widget(&mut menubar_pc, &mut self.menubar, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
+            cce_ui::layout::render_widget(&mut menubar_pc, &mut self.menubar, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
 
         // 3. Draw Page content
@@ -230,9 +230,9 @@ impl FilesystemApp {
                 let r_f = col[0] as f32 / 255.0;
                 let g_f = col[1] as f32 / 255.0;
                 let b_f = col[2] as f32 / 255.0;
-                let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                if clear_ui::color::node_color() != linear_col {
-                    clear_ui::color::set_node_color(linear_col);
+                let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                if cce_ui::color::node_color() != linear_col {
+                    cce_ui::color::set_node_color(linear_col);
                 }
             }
         }
@@ -448,7 +448,7 @@ impl FilesystemApp {
             // Background
             widgets.push(AppWidget {
                 x: cx + 1.0, y: cy + 1.0, w: cw - 2.0, h: ch - 2.0,
-                color: clear_ui::color::popover_bg_color(), hover_color: clear_ui::color::popover_bg_color(),
+                color: cce_ui::color::popover_bg_color(), hover_color: cce_ui::color::popover_bg_color(),
                 hovering: false,
                 action: None,
             });
@@ -645,20 +645,20 @@ impl FilesystemApp {
 impl Application for FilesystemApp {
     type Message = Message;
 
-    fn new(_qh: &QueueHandle<clear_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
+    fn new(_qh: &QueueHandle<cce_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
         // Parse command line arguments
         let args: Vec<String> = std::env::args().collect();
         let select_directory = args.iter().any(|arg| arg == "--select-dir");
         let save_mode = args.iter().any(|arg| arg == "--save");
         let select_mode = save_mode || args.iter().any(|arg| arg == "--select" || arg == "--select-dir");
 
-        clear_ui::scale::set_scale_factor(1.0);
+        cce_ui::scale::set_scale_factor(1.0);
 
         let browse = pages::browse::BrowseState::default();
         let current_dir = browse.current_dir.clone();
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
-        let mut menubar = clear_ui::widget::MenuBar::new(0.0, 0.0, 56.0, 0.0)
+        let mut menubar = cce_ui::widget::MenuBar::new(0.0, 0.0, 56.0, 0.0)
             .with_vertical(true);
         menubar.set_sidebar_label(Some("CLEAR".to_string()));
         menubar.set_pages(pages_names);
@@ -690,7 +690,7 @@ impl Application for FilesystemApp {
             cursor_y: 0.0,
             menubar,
             just_initialized: true,
-            ui_context: clear_ui::context::UiContext::new(),
+            ui_context: cce_ui::context::UiContext::new(),
             watcher: None,
             fs_service,
             context_menu: ContextMenu {
@@ -858,7 +858,7 @@ impl Application for FilesystemApp {
                 std::process::exit(1);
             }
             Message::PromptOpenWith(path) => {
-                let mut tb = clear_ui::widget::TextBox::new(String::new())
+                let mut tb = cce_ui::widget::TextBox::new(String::new())
                     .with_max_width(None)
                     .with_placeholder("Program/Command");
                 tb.focus();
@@ -920,8 +920,8 @@ impl Application for FilesystemApp {
                 let r_f = col[0] as f32 / 255.0;
                 let g_f = col[1] as f32 / 255.0;
                 let b_f = col[2] as f32 / 255.0;
-                let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                clear_ui::color::set_node_color(linear_col);
+                let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                cce_ui::color::set_node_color(linear_col);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -933,7 +933,7 @@ impl Application for FilesystemApp {
             self.width = size.width as u32;
             self.height = size.height as u32;
             self.scale_factor = scale;
-            clear_ui::scale::set_scale_factor(scale as f32);
+            cce_ui::scale::set_scale_factor(scale as f32);
             self.rebuild_layout();
         }
 
@@ -947,8 +947,8 @@ impl Application for FilesystemApp {
     }
 
     fn clear_color(&self) -> [f32; 4] {
-        let mut color = clear_ui::color::page_low_color();
-        if let Some(opacity) = clear_ui::color::read_opacity_if_configured() {
+        let mut color = cce_ui::color::page_low_color();
+        if let Some(opacity) = cce_ui::color::read_opacity_if_configured() {
             color[3] = opacity;
         }
         color
@@ -1387,8 +1387,8 @@ impl Application for FilesystemApp {
                     let r_f = col[0] as f32 / 255.0;
                     let g_f = col[1] as f32 / 255.0;
                     let b_f = col[2] as f32 / 255.0;
-                    let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                    clear_ui::color::set_node_color(linear_col);
+                    let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                    cce_ui::color::set_node_color(linear_col);
                 }
                 changed = true;
             }
@@ -1487,12 +1487,12 @@ impl Application for FilesystemApp {
         }
 
         if let Some((_path, textbox)) = &mut self.open_with_dialog {
-            if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Enter) {
+            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
                 textbox.unfocus();
                 self.ui_context.clear_focus();
                 return Some(Message::OpenWithSubmit);
             }
-            if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) {
+            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) {
                 textbox.unfocus();
                 self.ui_context.clear_focus();
                 return Some(Message::OpenWithCancel);
@@ -1504,8 +1504,16 @@ impl Application for FilesystemApp {
             return None;
         }
 
+        if self.current_page == Page::Network {
+            if self.network.graph.keyboard_input(event, &mut self.ui_context) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return None;
+            }
+        }
+
         if self.context_menu.visible {
-            if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) {
+            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) {
                 self.context_menu.visible = false;
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
@@ -1522,8 +1530,8 @@ impl Application for FilesystemApp {
                     let r_f = col[0] as f32 / 255.0;
                     let g_f = col[1] as f32 / 255.0;
                     let b_f = col[2] as f32 / 255.0;
-                    let linear_col = clear_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                    clear_ui::color::set_node_color(linear_col);
+                    let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
+                    cce_ui::color::set_node_color(linear_col);
                 }
                 return None;
             }
@@ -1548,7 +1556,7 @@ impl Application for FilesystemApp {
             if self.browse.save_name_box.keyboard_input(event, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
-                if event.logical_key == clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Enter) {
+                if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
                     self.browse.save_name_box.unfocus();
                     self.ui_context.clear_focus();
                     return Some(Message::SelectOpen);
@@ -1560,22 +1568,22 @@ impl Application for FilesystemApp {
         // Global key navigation
         if self.current_page == Page::Browse {
             let key_char = match &event.logical_key {
-                clear_ui::widget::Key::Character(c) => Some(c.as_str()),
+                cce_ui::widget::Key::Character(c) => Some(c.as_str()),
                 _ => None,
             };
 
             match &event.logical_key {
-                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::ArrowUp) => {
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowUp) => {
                     if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
                         return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
                     }
                 }
-                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::ArrowDown) => {
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowDown) => {
                     if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
                         return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
                     }
                 }
-                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Enter) => {
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) => {
                     if let Some(idx) = self.browse.selected {
                         if let Some(entry) = self.browse.entries.get(idx) {
                             if entry.is_dir && !is_project_dir(&entry.path) {
@@ -1593,17 +1601,17 @@ impl Application for FilesystemApp {
                         return Some(Message::SelectOpen);
                     }
                 }
-                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Delete) => {
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Delete) => {
                     if let Some(idx) = self.browse.selected {
                         return Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)));
                     }
                 }
-                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Escape) => {
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) => {
                     if self.select_mode {
                         std::process::exit(1);
                     }
                 }
-                clear_ui::widget::Key::Named(clear_ui::widget::NamedKey::Backspace) => {
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Backspace) => {
                     if let Some(parent) = self.browse.current_dir.parent() {
                         return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
                     }
@@ -1655,5 +1663,5 @@ impl Application for FilesystemApp {
 
 #[tokio::main]
 async fn main() {
-    clear_ui::engine::run::<FilesystemApp>();
+    cce_ui::engine::run::<FilesystemApp>();
 }

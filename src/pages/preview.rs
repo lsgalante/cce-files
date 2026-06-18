@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::pages::PageContent;
-use clear_ui::layout::SectionContext;
+use cce_ui::layout::SectionContext;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ pub enum PreviewMessage {
 
 
 impl PreviewState {
-    pub fn handle_mouse_wheel(&mut self, delta: &clear_ui::widget::MouseScrollDelta, ch: f32) -> bool {
+    pub fn handle_mouse_wheel(&mut self, delta: &cce_ui::widget::MouseScrollDelta, ch: f32) -> bool {
         let content = match &self.content_preview {
             Some(c) => c,
             None => return false,
@@ -53,10 +53,10 @@ impl PreviewState {
         let max_scroll = total_lines.saturating_sub(max_visible_lines);
         let scroll_speed = 3.0;
         let diff = match delta {
-            clear_ui::widget::MouseScrollDelta::LineDelta(_, y) => {
+            cce_ui::widget::MouseScrollDelta::LineDelta(_, y) => {
                 -y * scroll_speed
             }
-            clear_ui::widget::MouseScrollDelta::PixelDelta(pos) => {
+            cce_ui::widget::MouseScrollDelta::PixelDelta(pos) => {
                 -pos.y as f32 / 15.0
             }
         };

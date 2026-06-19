@@ -214,8 +214,8 @@ impl FilesystemApp {
         match self.current_page {
             Page::Browse => {
                 // Draw background plates for columns
-                let plate_bg = [0.08, 0.13, 0.09, 0.45];
-                let border_color = [0.15, 0.23, 0.17, 0.7];
+                let plate_bg = cce_ui::color::scrollinglist_bg_color();
+                let border_color = cce_ui::color::color_borders_color();
 
                 // Left column plate (Browse)
                 pc.rect(plate_bg, browse_x, content_y, browse_w, content_h);

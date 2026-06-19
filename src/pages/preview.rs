@@ -71,9 +71,9 @@ impl PreviewState {
 
 pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageContent {
     let mut pc = PageContent::new();
-    let text_fg = [0.83, 0.83, 0.83, 1.0];
-    let text_dim = [0.53, 0.53, 0.60, 1.0];
-    let label_fg = [0.56, 0.83, 0.56, 1.0];
+    let text_fg = cce_ui::color::TEXT_FG;
+    let text_dim = cce_ui::color::TEXT_DIM;
+    let label_fg = cce_ui::color::TEXT_ACCENT;
 
     if state.path.is_none() {
         pc.text("Select a file to view details", cx + 12.0, cy + 12.0, 13.0, text_dim);
@@ -87,7 +87,7 @@ pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageCon
     preview_sec.content_y = cy + half_h - 20.0;
     preview_sec.finish(); // Releases borrow on pc
 
-    let bg_color = [0.07, 0.11, 0.08, 0.5];
+    let bg_color = cce_ui::color::scrollinglist_bg_color();
     pc.rect(bg_color, cx + 12.0, cy + 32.0, cw - 24.0, half_h - 40.0);
 
     if let Some(content) = &state.content_preview {

@@ -1,5 +1,3 @@
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
@@ -158,12 +156,17 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
 
 pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
-    let text_dim = [0.53, 0.53, 0.60, 1.0];
-    let heading_fg = [0.56, 0.83, 0.56, 1.0]; // Color::from_rgb8(0x8f, 0xd4, 0x8f)
-    let selected_bg = [0.16, 0.29, 0.18, 0.8]; // Color::from_rgb8(0x2a, 0x4a, 0x2e)
-    let row_bg = [0.12, 0.18, 0.13, 0.6]; // Color::from_rgb8(0x1e, 0x2e, 0x20)
-    let accent_fg = [0.36, 0.56, 0.38, 1.0]; // Color::from_rgb8(0x5c, 0x90, 0x60)
-    let text_fg = [0.83, 0.83, 0.83, 1.0];
+    let text_dim = cce_ui::color::TEXT_DIM;
+    let heading_fg = cce_ui::color::TEXT_HEADER;
+    let text_fg = cce_ui::color::TEXT_FG;
+    let accent_fg = cce_ui::color::TEXT_ACCENT;
+
+    let selected_bg = {
+        let mut bg = cce_ui::color::highlight_primary_color();
+        bg[3] = 0.8;
+        bg
+    };
+    let row_bg = [1.0, 1.0, 1.0, 0.04];
 
     let gap = 12.0;
     let margin = 12.0;
@@ -252,6 +255,14 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
                 crate::Message::Browse(BrowseMessage::SelectEntry(idx))
             };
 
+            let hover_bg = if is_selected {
+                selected_bg
+            } else {
+                let mut h_bg = cce_ui::color::highlight_primary_color();
+                h_bg[3] = 0.25;
+                h_bg
+            };
+
             // Button for row selection/navigation
             pc.button(
                 "",
@@ -260,7 +271,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
                 list_w - 24.0,
                 28.0,
                 bg,
-                if is_selected { selected_bg } else { [0.22, 0.32, 0.24, 0.8] },
+                hover_bg,
                 fg,
                 action,
             );

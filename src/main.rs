@@ -13,6 +13,7 @@ use cce_filesystem_interface::pages::browse::is_project_dir;
 
 // ── State ───────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 struct AppWidget {
     x: f32,
     y: f32,
@@ -37,6 +38,7 @@ struct ContextMenu {
     hovered: Option<usize>,
 }
 
+#[allow(dead_code)]
 struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
@@ -349,7 +351,7 @@ impl FilesystemApp {
 
         // Gather open-with dialog backdrop & dialog panel if active (open_with_dialog uses textbox rendering manually but we can gather its other quads/texts)
         let mut dialog_pc = pages::PageContent::new();
-        if let Some((_path, textbox)) = &mut self.open_with_dialog {
+        if let Some((_path, _textbox)) = &mut self.open_with_dialog {
             let dialog_w = 400.0;
             let dialog_h = 160.0;
             let dialog_x = (self.width as f32 - dialog_w) / 2.0;
@@ -500,7 +502,7 @@ impl Application for FilesystemApp {
         cce_ui::scale::set_scale_factor(1.0);
 
         let browse = pages::browse::BrowseState::default();
-        let current_dir = browse.current_dir.clone();
+        let _current_dir = browse.current_dir.clone();
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
         let mut menubar = cce_ui::widget::MenuBar::new(0.0, 0.0, 56.0, 0.0)

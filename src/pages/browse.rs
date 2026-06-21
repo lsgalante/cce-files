@@ -161,12 +161,8 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let text_fg = cce_ui::color::TEXT_FG;
     let accent_fg = cce_ui::color::TEXT_ACCENT;
 
-    let selected_bg = {
-        let mut bg = cce_ui::color::highlight_primary_color();
-        bg[3] = 0.8;
-        bg
-    };
-    let row_bg = [1.0, 1.0, 1.0, 0.04];
+    let selected_bg = cce_ui::color::scrollinglist_entry_highlight_color();
+    let row_bg = cce_ui::color::scrollinglist_entry_bg_color();
 
     let gap = 12.0;
     let margin = 12.0;

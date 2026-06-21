@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
 pub use cce_ui::widget::PreviewState;
-use crate::pages::PageContent;
-use cce_ui::layout::SectionContext;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -11,111 +9,6 @@ pub enum PreviewMessage {
     SetPath { path: PathBuf },
     Clear,
     PreviewLoaded { path: PathBuf, data: crate::services::fs::PreviewData },
-}
-
-// ── View ────────────────────────────────────────────────────────────
-
-pub fn view(state: &PreviewState, cx: f32, cy: f32, cw: f32, ch: f32) -> PageContent {
-    let mut pc = PageContent::new();
-    let text_fg = cce_ui::color::TEXT_FG;
-    let text_dim = cce_ui::color::TEXT_DIM;
-    let label_fg = cce_ui::color::TEXT_ACCENT;
-
-    if state.path.is_none() {
-        pc.text("Select a file to view details", cx + 12.0, cy + 12.0, 13.0, text_dim);
-        return pc;
-    }
-
-    let half_h = ch * 0.5;
-
-    // 1. Top pane: File Preview Section
-    let mut preview_sec = SectionContext::new(&mut pc, cx + 4.0, cy + 12.0, cw - 8.0, "Preview", false, false);
-    preview_sec.content_y = cy + half_h - 20.0;
-    preview_sec.finish(); // Releases borrow on pc
-
-    let bg_color = cce_ui::color::scrollinglist_bg_color();
-    pc.rect(bg_color, cx + 12.0, cy + 32.0, cw - 24.0, half_h - 40.0);
-
-    if let Some(content) = &state.content_preview {
-        let mut text_y = cy + 44.0;
-        for line in content.lines().skip(state.scroll_line) {
-            if text_y + 14.0 > cy + half_h - 16.0 {
-                break;
-            }
-            let limit = (((cw - 40.0) / 6.8).floor() as usize).max(20);
-            let line_truncated = if line.chars().count() > limit {
-                let mut s: String = line.chars().take(limit - 3).collect();
-                s.push_str("...");
-                s
-            } else {
-                line.to_string()
-            };
-            pc.text_with_font(&line_truncated, cx + 20.0, text_y, 11.0, text_fg, "monospace");
-            text_y += 15.0;
-        }
-    } else {
-        pc.text("No preview available", cx + 20.0, cy + 44.0, 11.0, text_dim);
-    }
-
-    // 2. Bottom pane: Details Section
-    let bottom_y = cy + half_h + 12.0;
-    let icon = if state.is_dir { "📁" } else { "📄" };
-
-    // Metadata details
-    let details = [
-        ("Path", &state.path_display),
-        ("Type", &state.file_type),
-        ("Size", &state.size),
-        ("Permissions", &state.permissions),
-        ("Modified", &state.modified),
-    ];
-
-    let details_content_start_y = bottom_y + 19.0;
-    let mut details_content_end_y = details_content_start_y + 36.0 + details.len() as f32 * 20.0;
-    if !state.target.is_empty() {
-        details_content_end_y += 24.0;
-    }
-
-    let mut details_sec = SectionContext::new(&mut pc, cx + 4.0, bottom_y, cw - 8.0, "Details", false, false);
-    details_sec.content_y = details_content_end_y;
-    details_sec.finish(); // Releases borrow on pc
-
-    let header_y = details_content_start_y + 6.0;
-    pc.text(icon, cx + 12.0, header_y, 20.0, text_fg);
-    
-    let name_truncated = if state.name.len() > 30 {
-        format!("{}...", &state.name[..27])
-    } else {
-        state.name.clone()
-    };
-    pc.text(&name_truncated, cx + 42.0, header_y + 4.0, 16.0, text_fg);
-
-    let mut y = details_content_start_y + 36.0;
-    for (label, val) in &details {
-        pc.text(label, cx + 12.0, y, 12.0, label_fg);
-        
-        let val_str = if val.len() > 40 {
-            format!("...{}", &val[val.len() - 37..])
-        } else {
-            val.to_string()
-        };
-        pc.text(&val_str, cx + 112.0, y, 12.0, text_dim);
-        y += 20.0;
-    }
-
-    if !state.target.is_empty() {
-        y += 8.0;
-        pc.text("Target", cx + 12.0, y, 12.0, label_fg);
-        
-        let target_str = if state.target.len() > 40 {
-            format!("...{}", &state.target[state.target.len() - 37..])
-        } else {
-            state.target.clone()
-        };
-        pc.text(&target_str, cx + 112.0, y, 12.0, text_dim);
-    }
-
-    pc
 }
 
 // ── Update ──────────────────────────────────────────────────────────
@@ -142,6 +35,7 @@ pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
                 target: data.target,
                 content_preview: data.content_preview,
                 scroll_line: 0,
+                ..PreviewState::default()
             };
         }
     }

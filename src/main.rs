@@ -143,6 +143,7 @@ impl FilesystemApp {
 
         // Clear all widgets' hierarchy links
         self.menubar.clear_children(&mut self.ui_context); self.menubar.set_parent(None, &mut self.ui_context);
+        self.preview.clear_children(&mut self.ui_context); self.preview.set_parent(None, &mut self.ui_context);
         self.browse.search_box.clear_children(&mut self.ui_context); self.browse.search_box.set_parent(None, &mut self.ui_context);
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
         self.browse.list_box.clear_children(&mut self.ui_context); self.browse.list_box.set_parent(None, &mut self.ui_context);
@@ -175,6 +176,7 @@ impl FilesystemApp {
         if has_sidebar {
             link_parent_child(&mut self.root_window, &mut self.menubar, &mut self.ui_context);
         }
+        link_parent_child(&mut self.root_window, &mut self.preview, &mut self.ui_context);
 
         match self.current_page {
             Page::Browse => {
@@ -234,27 +236,19 @@ impl FilesystemApp {
                 pc.rect(border_color, preview_x + preview_w - 1.0, content_y, 1.0, content_h);
 
                 let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h, self.select_mode, &mut self.ui_context);
-                let preview_pc = pages::preview::view(&self.preview, preview_x, content_y, preview_w, content_h);
+                cce_ui::layout::render_widget(&mut pc, &mut self.preview, preview_x, content_y, preview_w, content_h, &mut self.ui_context);
 
                 pc.rects.extend(browse_pc.rects);
                 pc.texts.extend(browse_pc.texts);
                 pc.buttons.extend(browse_pc.buttons);
-
-                pc.rects.extend(preview_pc.rects);
-                pc.texts.extend(preview_pc.texts);
-                pc.buttons.extend(preview_pc.buttons);
             }
             Page::Network => {
                 let network_pc = pages::network::view(&mut self.network, &self.browse, browse_x, content_y, browse_w, content_h, &mut self.ui_context);
-                let preview_pc = pages::preview::view(&self.preview, preview_x, content_y, preview_w, content_h);
+                cce_ui::layout::render_widget(&mut pc, &mut self.preview, preview_x, content_y, preview_w, content_h, &mut self.ui_context);
 
                 pc.rects.extend(network_pc.rects);
                 pc.texts.extend(network_pc.texts);
                 pc.buttons.extend(network_pc.buttons);
-
-                pc.rects.extend(preview_pc.rects);
-                pc.texts.extend(preview_pc.texts);
-                pc.buttons.extend(preview_pc.buttons);
             }
             Page::Settings => {
                 let settings_pc = pages::settings::view(&mut self.settings, browse_x, content_y, usable_w, content_h, &mut self.ui_context);

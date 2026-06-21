@@ -2,7 +2,7 @@ use wayland_client::QueueHandle;
 use glyphon::FontSystem;
 
 use cce_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
-use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element, PageSelector, MenuController};
+use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element, PageSelector, Paginator, MenuController};
 use cce_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
@@ -63,7 +63,7 @@ struct FilesystemApp {
     page_buttons: Vec<(cce_ui::widget::Button, Message)>,
     cursor_x: f32,
     cursor_y: f32,
-    menubar: cce_ui::widget::MenuBar,
+    paginator: Paginator,
     just_initialized: bool,
     ui_context: cce_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
@@ -142,7 +142,7 @@ impl FilesystemApp {
         self.root_window.clear_children(&mut self.ui_context);
 
         // Clear all widgets' hierarchy links
-        self.menubar.clear_children(&mut self.ui_context); self.menubar.set_parent(None, &mut self.ui_context);
+        self.paginator.clear_children(&mut self.ui_context); self.paginator.set_parent(None, &mut self.ui_context);
         self.preview.clear_children(&mut self.ui_context); self.preview.set_parent(None, &mut self.ui_context);
         self.browse.search_box.clear_children(&mut self.ui_context); self.browse.search_box.set_parent(None, &mut self.ui_context);
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
@@ -158,7 +158,7 @@ impl FilesystemApp {
 
         use cce_ui::widget::focus::link_parent_child;
         let has_sidebar = !self.select_mode;
-        let sidebar_w = if has_sidebar { self.menubar.sidebar_w() } else { 0.0 };
+        let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
         let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
         let browse_w = (usable_w - 12.0) * 0.5;
@@ -174,7 +174,7 @@ impl FilesystemApp {
         };
 
         if has_sidebar {
-            link_parent_child(&mut self.root_window, &mut self.menubar, &mut self.ui_context);
+            link_parent_child(&mut self.root_window, &mut self.paginator, &mut self.ui_context);
         }
         link_parent_child(&mut self.root_window, &mut self.preview, &mut self.ui_context);
 
@@ -205,8 +205,8 @@ impl FilesystemApp {
         let mut dummy_pc = pages::PageContent::new();
         if has_sidebar {
             let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
-            self.menubar.menus.set_selected(Some(page_idx));
-            cce_ui::layout::render_widget(&mut dummy_pc, &mut self.menubar, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
+            self.paginator.set_selected_page(page_idx);
+            cce_ui::layout::render_widget(&mut dummy_pc, &mut self.paginator, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
         if self.current_page == Page::Browse || self.current_page == Page::Network {
             cce_ui::layout::render_widget(&mut dummy_pc, &mut self.preview, preview_x, content_y, preview_w, content_h, &mut self.ui_context);
@@ -500,9 +500,7 @@ impl Application for FilesystemApp {
         let _current_dir = browse.current_dir.clone();
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
-        let mut menubar = cce_ui::widget::MenuBar::new(0.0, 0.0, 56.0, 0.0)
-            .with_vertical(true);
-        menubar.set_pages(pages_names);
+        let paginator = cce_ui::widget::Paginator::new(56.0, pages_names);
 
         let fs_service = services::fs::FsService::new(sender.clone());
         let initial_w = if select_mode { 900 } else { 1200 };
@@ -535,7 +533,7 @@ impl Application for FilesystemApp {
             page_buttons: Vec::new(),
             cursor_x: 0.0,
             cursor_y: 0.0,
-            menubar,
+            paginator,
             just_initialized: true,
             ui_context: cce_ui::context::UiContext::new(),
             watcher: None,
@@ -594,7 +592,7 @@ impl Application for FilesystemApp {
             Message::SwitchPage(page) => {
                 self.current_page = page;
                 let page_idx = Page::ALL.iter().position(|&p| p == page).unwrap_or(0);
-                self.menubar.menus.set_selected(Some(page_idx));
+                self.paginator.set_selected_page(page_idx);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -757,7 +755,7 @@ impl Application for FilesystemApp {
             }
         }
 
-        if self.menubar.tick(dt, &mut self.ui_context) {
+        if self.paginator.tick(dt, &mut self.ui_context) {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
@@ -845,7 +843,7 @@ impl Application for FilesystemApp {
             return;
         }
 
-        if !self.select_mode && self.menubar.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+        if !self.select_mode && self.paginator.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
             changed = true;
         }
 
@@ -1062,9 +1060,9 @@ impl Application for FilesystemApp {
         let mut changed = false;
 
         eprintln!("[DEBUG] MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
-        let menu_match = !self.select_mode && self.menubar.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
+        let menu_match = !self.select_mode && self.paginator.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
         if menu_match {
-            if let Some((idx, _)) = self.menubar.menu_click() {
+            if let Some((idx, _)) = self.paginator.menu_click() {
                 if idx < Page::ALL.len() {
                     self.ui_context.clear_focus();
                     self.current_page = Page::ALL[idx];
@@ -1291,7 +1289,7 @@ impl Application for FilesystemApp {
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
         if self.current_page == Page::Browse || self.current_page == Page::Network {
             let has_sidebar = !self.select_mode;
-            let sidebar_w = if has_sidebar { self.menubar.sidebar_w() } else { 0.0 };
+            let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
             let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
             let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
             let browse_w = (usable_w - 12.0) * 0.5;

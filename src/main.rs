@@ -805,7 +805,7 @@ impl Application for FilesystemApp {
     }
 
     fn clear_color(&self) -> [f32; 4] {
-        cce_ui::color::page_low_color()
+        [0.0, 0.0, 0.0, 0.0]
     }
 
     fn handle_pointer_move(&mut self, pos: LogicalPosition, needs_rebuild: &mut bool) {

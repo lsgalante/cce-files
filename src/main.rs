@@ -136,7 +136,7 @@ impl FilesystemApp {
         self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
         let bg_color = cce_ui::color::page_low_color();
         self.root_window.background_color = Some(bg_color);
-        self.root_window.radius = 12.0;
+        self.root_window.radius = cce_ui::color::window_corner_radius();
 
         // Rebuild Element Focus Hierarchy
         self.root_window.clear_children(&mut self.ui_context);
@@ -510,7 +510,7 @@ impl Application for FilesystemApp {
         let initial_h = if select_mode { 500 } else { 720 };
         let root_window = cce_ui::widget::Window::new(0.0, 0.0, initial_w as f32, initial_h as f32)
             .with_background(cce_ui::color::page_low_color())
-            .with_radius(12.0);
+            .with_radius(cce_ui::color::window_corner_radius());
 
         let mut app = Self {
             current_page: Page::Browse,

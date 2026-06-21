@@ -208,6 +208,9 @@ impl FilesystemApp {
             self.menubar.menus.set_selected(Some(page_idx));
             cce_ui::layout::render_widget(&mut dummy_pc, &mut self.menubar, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
+        if self.current_page == Page::Browse || self.current_page == Page::Network {
+            cce_ui::layout::render_widget(&mut dummy_pc, &mut self.preview, preview_x, content_y, preview_w, content_h, &mut self.ui_context);
+        }
 
         // Render root window recursively
         let mut window_pc = pages::PageContent::new();
@@ -236,7 +239,6 @@ impl FilesystemApp {
                 pc.rect(border_color, preview_x + preview_w - 1.0, content_y, 1.0, content_h);
 
                 let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h, self.select_mode, &mut self.ui_context);
-                cce_ui::layout::render_widget(&mut pc, &mut self.preview, preview_x, content_y, preview_w, content_h, &mut self.ui_context);
 
                 pc.rects.extend(browse_pc.rects);
                 pc.texts.extend(browse_pc.texts);
@@ -244,7 +246,6 @@ impl FilesystemApp {
             }
             Page::Network => {
                 let network_pc = pages::network::view(&mut self.network, &self.browse, browse_x, content_y, browse_w, content_h, &mut self.ui_context);
-                cce_ui::layout::render_widget(&mut pc, &mut self.preview, preview_x, content_y, preview_w, content_h, &mut self.ui_context);
 
                 pc.rects.extend(network_pc.rects);
                 pc.texts.extend(network_pc.texts);

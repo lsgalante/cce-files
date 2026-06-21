@@ -502,7 +502,6 @@ impl Application for FilesystemApp {
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
         let mut menubar = cce_ui::widget::MenuBar::new(0.0, 0.0, 56.0, 0.0)
             .with_vertical(true);
-        menubar.set_sidebar_label(Some("CLEAR".to_string()));
         menubar.set_pages(pages_names);
 
         let fs_service = services::fs::FsService::new(sender.clone());

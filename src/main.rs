@@ -500,7 +500,7 @@ impl Application for FilesystemApp {
         let _current_dir = browse.current_dir.clone();
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
-        let paginator = cce_ui::widget::Paginator::new(56.0, pages_names);
+        let paginator = cce_ui::widget::Paginator::new(pages_names);
 
         let fs_service = services::fs::FsService::new(sender.clone());
         let initial_w = if select_mode { 900 } else { 1200 };

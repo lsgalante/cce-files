@@ -3,6 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 use crate::pages::browse::DirEntry;
+use image::GenericImageView;
+use cce_ui::widget::ImagePreviewData;
 
 #[derive(Debug, Clone, Default)]
 pub struct PreviewData {
@@ -14,6 +16,7 @@ pub struct PreviewData {
     pub file_type: String,
     pub target: String,
     pub content_preview: Option<String>,
+    pub image_preview: Option<ImagePreviewData>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +153,36 @@ pub fn read_directory_internal(path: &Path) -> Vec<DirEntry> {
     entries
 }
 
+fn load_image_preview(path: &Path) -> Option<ImagePreviewData> {
+    let img = image::open(path).ok()?;
+    let (orig_w, orig_h) = img.dimensions();
+    if orig_w == 0 || orig_h == 0 {
+        return None;
+    }
+    let max_dim = 96.0;
+    let ratio = (max_dim / orig_w as f32).min(max_dim / orig_h as f32).min(1.0);
+    let target_w = (orig_w as f32 * ratio).round() as u32;
+    let target_h = (orig_h as f32 * ratio).round() as u32;
+    if target_w == 0 || target_h == 0 {
+        return None;
+    }
+    
+    let resized = if target_w == orig_w && target_h == orig_h {
+        img
+    } else {
+        img.resize(target_w, target_h, image::imageops::FilterType::Triangle)
+    };
+    
+    let rgba = resized.to_rgba8();
+    let pixels = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect();
+    
+    Some(ImagePreviewData {
+        width: target_w,
+        height: target_h,
+        pixels,
+    })
+}
+
 fn load_preview_data_internal(path: &Path) -> PreviewData {
     let meta = fs::symlink_metadata(path).ok();
     let name = path
@@ -184,8 +217,10 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
         String::new()
     };
 
-    // Load content preview
-    let content_preview = if is_dir {
+    let mut content_preview = None;
+    let mut image_preview = None;
+
+    if is_dir {
         if let Ok(entries) = fs::read_dir(path) {
             let mut names = Vec::new();
             for entry in entries.flatten().take(100) {
@@ -195,34 +230,39 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
                 names.push(format!("{} {}", icon, name));
             }
             if names.is_empty() {
-                Some("[Empty directory]".to_string())
+                content_preview = Some("[Empty directory]".to_string())
             } else {
-                Some(names.join("\n"))
+                content_preview = Some(names.join("\n"))
             }
-        } else {
-            None
-        }
-    } else if let Ok(mut file) = fs::File::open(path) {
-        use std::io::Read;
-        let mut buf = vec![0u8; 65536];
-        if let Ok(n) = file.read(&mut buf) {
-            buf.truncate(n);
-            let is_text = match std::str::from_utf8(&buf) {
-                Ok(_) => true,
-                Err(err) => err.error_len().is_none() && err.valid_up_to() > 0,
-            };
-            if is_text {
-                let utf8_str = String::from_utf8_lossy(&buf).into_owned();
-                Some(utf8_str)
-            } else {
-                Some("[Binary file content]".to_string())
-            }
-        } else {
-            None
         }
     } else {
-        None
-    };
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let is_img_ext = matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico");
+        
+        if is_img_ext {
+            image_preview = load_image_preview(path);
+        }
+        
+        if image_preview.is_none() {
+            if let Ok(mut file) = fs::File::open(path) {
+                use std::io::Read;
+                let mut buf = vec![0u8; 65536];
+                if let Ok(n) = file.read(&mut buf) {
+                    buf.truncate(n);
+                    let is_text = match std::str::from_utf8(&buf) {
+                        Ok(_) => true,
+                        Err(err) => err.error_len().is_none() && err.valid_up_to() > 0,
+                    };
+                    if is_text {
+                        let utf8_str = String::from_utf8_lossy(&buf).into_owned();
+                        content_preview = Some(utf8_str);
+                    } else {
+                        content_preview = Some("[Binary file content]".to_string());
+                    }
+                }
+            }
+        }
+    }
 
     PreviewData {
         name,
@@ -233,6 +273,7 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
         file_type,
         target,
         content_preview,
+        image_preview,
     }
 }
 

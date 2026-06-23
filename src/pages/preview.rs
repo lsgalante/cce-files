@@ -34,6 +34,7 @@ pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
                 file_type: data.file_type,
                 target: data.target,
                 content_preview: data.content_preview,
+                image_preview: data.image_preview,
                 scroll_line: 0,
                 ..PreviewState::default()
             };

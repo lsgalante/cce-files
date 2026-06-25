@@ -405,7 +405,7 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to delete {}: {}", path.display(), e);
+                    log::error!("Failed to delete {}: {}", path.display(), e);
                 }
             }
             Some(crate::services::fs::FsRequest::ReadDirectory(state.current_dir.clone()))

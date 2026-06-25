@@ -109,13 +109,13 @@ impl FilesystemApp {
         ) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("Failed to create watcher: {:?}", e);
+                log::error!("Failed to create watcher: {:?}", e);
                 return;
             }
         };
 
         if let Err(e) = watcher.watch(&path, RecursiveMode::NonRecursive) {
-            eprintln!("Failed to watch path {}: {:?}", path.display(), e);
+            log::error!("Failed to watch path {}: {:?}", path.display(), e);
             return;
         }
 
@@ -1063,7 +1063,7 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
-        eprintln!("[DEBUG] MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
+        log::debug!("MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
         let menu_match = !self.select_mode && self.paginator.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
         if menu_match {
             if let Some((idx, _)) = self.paginator.menu_click() {

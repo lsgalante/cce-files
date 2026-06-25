@@ -70,7 +70,7 @@ struct FilesystemApp {
     fs_service: services::fs::FsService,
     context_menu: ContextMenu,
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::TextBox)>,
-    root_window: cce_ui::widget::Window,
+    root_window: cce_ui::widget::Backplate,
 }
 
 
@@ -136,7 +136,7 @@ impl FilesystemApp {
         self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
         let bg_color = cce_ui::color::page_low_color();
         self.root_window.background_color = Some(bg_color);
-        self.root_window.radius = cce_ui::color::window_corner_radius();
+        self.root_window.radius = cce_ui::color::backplate_corner_radius();
 
         // Rebuild Element Focus Hierarchy
         self.root_window.clear_children(&mut self.ui_context);
@@ -491,7 +491,7 @@ impl Application for FilesystemApp {
         Some(&self.ui_context)
     }
 
-    fn is_movable_window_at(&self, px: f32, py: f32) -> bool {
+    fn is_movable_backplate_at(&self, px: f32, py: f32) -> bool {
         // 1. If dialog is open, do not drag
         if self.open_with_dialog.is_some() {
             return false;
@@ -516,7 +516,7 @@ impl Application for FilesystemApp {
             }
         }
         // 5. Fallback to ui_context's check for registered widgets
-        self.ui_context.is_movable_window_at(px, py)
+        self.ui_context.is_movable_backplate_at(px, py)
     }
 
     fn new(_qh: &QueueHandle<cce_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
@@ -537,9 +537,9 @@ impl Application for FilesystemApp {
         let fs_service = services::fs::FsService::new(sender.clone());
         let initial_w = if select_mode { 900 } else { 1200 };
         let initial_h = if select_mode { 500 } else { 720 };
-        let root_window = cce_ui::widget::Window::new(0.0, 0.0, initial_w as f32, initial_h as f32)
+        let root_window = cce_ui::widget::Backplate::new(0.0, 0.0, initial_w as f32, initial_h as f32)
             .with_background(cce_ui::color::page_low_color())
-            .with_radius(cce_ui::color::window_corner_radius());
+            .with_radius(cce_ui::color::backplate_corner_radius());
 
         let mut app = Self {
             current_page: Page::Browse,

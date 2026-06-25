@@ -491,6 +491,34 @@ impl Application for FilesystemApp {
         Some(&self.ui_context)
     }
 
+    fn is_movable_window_at(&self, px: f32, py: f32) -> bool {
+        // 1. If dialog is open, do not drag
+        if self.open_with_dialog.is_some() {
+            return false;
+        }
+        // 2. If context menu is visible, do not drag
+        if self.context_menu.visible {
+            return false;
+        }
+        // 3. If in the sidebar area (when sidebar is active), do not drag
+        if !self.select_mode {
+            let sidebar_w = self.paginator.sidebar_w();
+            if px <= sidebar_w {
+                return false;
+            }
+        }
+        // 4. If over any page button, do not drag
+        for (btn, _) in &self.page_buttons {
+            if let Some(base) = btn.base() {
+                if px >= base.x && px <= base.x + base.w && py >= base.y && py <= base.y + base.h {
+                    return false;
+                }
+            }
+        }
+        // 5. Fallback to ui_context's check for registered widgets
+        self.ui_context.is_movable_window_at(px, py)
+    }
+
     fn new(_qh: &QueueHandle<cce_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
         // Parse command line arguments
         let args: Vec<String> = std::env::args().collect();

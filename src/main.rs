@@ -123,6 +123,7 @@ impl FilesystemApp {
     }
 
     fn rebuild_layout(&mut self) {
+        self.ui_context.clear_hierarchy();
         self.browse.save_name_box.prepare_text(&mut self.font_system);
         self.browse.search_box.prepare_text(&mut self.font_system);
 
@@ -478,6 +479,7 @@ impl FilesystemApp {
         self.widgets = widgets;
         self.text_items = text_items;
         self.page_buttons = page_buttons;
+        self.ui_context.clear_dirty();
         self.needs_rebuild = false;
     }
 }

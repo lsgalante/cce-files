@@ -133,11 +133,10 @@ impl FilesystemApp {
         cce_ui::widget::hover_animation::reset_frame_registration();
         cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
 
-        // Update root window size, background color, opacity, corner radius
+        // Update root window size, background color, opacity
         self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
         let bg_color = cce_ui::color::page_low_color();
         self.root_window.background_color = Some(bg_color);
-        self.root_window.radius = cce_ui::color::backplate_corner_radius();
 
         // Rebuild Element Focus Hierarchy
         self.root_window.clear_children(&mut self.ui_context);
@@ -433,7 +432,7 @@ impl FilesystemApp {
                     action: Some(action.clone()),
                 });
 
-                let text_x = if btn.left_align {
+                let text_x = if btn.justify == cce_ui::widget::Justification::Left {
                     base.x + 8.0
                 } else {
                     let text_w = label.chars().count() as f32 * label_size * 0.65;

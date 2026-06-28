@@ -135,8 +135,6 @@ impl FilesystemApp {
 
         // Update root window size, background color, opacity
         self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
-        let bg_color = cce_ui::color::page_low_color();
-        self.root_window.background_color = Some(bg_color);
 
         // Rebuild Element Focus Hierarchy
         self.root_window.clear_children(&mut self.ui_context);

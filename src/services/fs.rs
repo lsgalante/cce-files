@@ -401,8 +401,54 @@ pub fn get_mime_type(path: &Path) -> Option<String> {
     None
 }
 
+pub fn load_kdl_associations() -> Option<std::collections::HashMap<String, String>> {
+    let home = std::env::var("HOME").ok()?;
+    let path = PathBuf::from(home).join(".config").join("cce").join("mime.kdl");
+    if !path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    let doc: kdl::KdlDocument = content.parse().ok()?;
+    let mut map = std::collections::HashMap::new();
+
+    if let Some(associations_node) = doc.get("associations") {
+        for child in associations_node.iter_children() {
+            if child.name().value() == "association" {
+                let mime = child.get(0)
+                    .or_else(|| child.get("mime"))
+                    .and_then(|val| match val {
+                        kdl::KdlValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    });
+                let exec = child.get(1)
+                    .or_else(|| child.get("exec"))
+                    .and_then(|val| match val {
+                        kdl::KdlValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    });
+                if let (Some(m), Some(e)) = (mime, exec) {
+                    map.insert(m, e);
+                }
+            }
+        }
+    }
+
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
+}
+
 pub fn get_default_application(mime: &str) -> Option<(String, String)> {
-    // Query default handler desktop file name
+    // 1. Check KDL configuration file override
+    if let Some(associations) = load_kdl_associations() {
+        if let Some(custom_exec) = associations.get(mime) {
+            return Some((custom_exec.clone(), custom_exec.clone()));
+        }
+    }
+
+    // 2. Query default handler desktop file name
     let output = std::process::Command::new("xdg-mime")
         .args(&["query", "default", mime])
         .output()
@@ -462,4 +508,32 @@ pub fn get_default_application(mime: &str) -> Option<(String, String)> {
         _ => None,
     }
 }
+
+pub fn open_file(path: &Path) {
+    let mut opened = false;
+    if let Some(mime) = get_mime_type(path) {
+        if let Some((_, cmd)) = get_default_application(&mime) {
+            if !cmd.is_empty() {
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if !parts.is_empty() {
+                    let program = parts[0];
+                    let mut command = std::process::Command::new(program);
+                    for arg in &parts[1..] {
+                        command.arg(arg);
+                    }
+                    command.arg(path);
+                    if command.spawn().is_ok() {
+                        opened = true;
+                    }
+                }
+            }
+        }
+    }
+    if !opened {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn();
+    }
+}
+
 

@@ -715,9 +715,7 @@ impl Application for FilesystemApp {
                                 println!("{}", path.display());
                                 std::process::exit(0);
                             } else {
-                                let _ = std::process::Command::new("xdg-open")
-                                    .arg(&path)
-                                    .spawn();
+                                crate::services::fs::open_file(&path);
                             }
                         }
                     } else {
@@ -734,9 +732,7 @@ impl Application for FilesystemApp {
                                     println!("{}", path.display());
                                     std::process::exit(0);
                                 } else {
-                                    let _ = std::process::Command::new("xdg-open")
-                                        .arg(&path)
-                                        .spawn();
+                                    crate::services::fs::open_file(&path);
                                 }
                             }
                         }

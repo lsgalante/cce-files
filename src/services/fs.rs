@@ -522,7 +522,16 @@ pub fn open_file(path: &Path) {
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if !parts.is_empty() {
                     let program = parts[0];
-                    let mut command = std::process::Command::new(program);
+                    let mut program_path = PathBuf::from(program);
+                    if !program_path.is_absolute() && !program.contains('/') {
+                        if let Ok(home) = std::env::var("HOME") {
+                            let local_bin = PathBuf::from(home).join(".local").join("bin").join(program);
+                            if local_bin.exists() {
+                                program_path = local_bin;
+                            }
+                        }
+                    }
+                    let mut command = std::process::Command::new(program_path);
                     for arg in &parts[1..] {
                         command.arg(arg);
                     }
@@ -540,5 +549,18 @@ pub fn open_file(path: &Path) {
             .spawn();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_kdl() {
+        let assoc = load_kdl_associations();
+        println!("Parsed associations: {:?}", assoc);
+        assert!(assoc.is_some());
+    }
+}
+
 
 

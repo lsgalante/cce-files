@@ -206,7 +206,17 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
         })
         .unwrap_or_else(|| "—".to_string());
 
-    let file_type = infer_file_type(&name, is_dir);
+    let mut file_type = infer_file_type(&name, is_dir);
+    if !is_dir {
+        if let Some(mime) = get_mime_type(path) {
+            if let Some((app_name, _)) = get_default_application(&mime) {
+                file_type = format!("{} ({}) [Open with: {}]", file_type, mime, app_name);
+            } else {
+                file_type = format!("{} ({})", file_type, mime);
+            }
+        }
+    }
+
 
     // Check symlink target
     let target = if meta.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
@@ -375,3 +385,81 @@ pub fn save_last_dir_internal(dir: &Path) {
         let _ = fs::write(path, dir.to_string_lossy().as_bytes());
     }
 }
+
+pub fn get_mime_type(path: &Path) -> Option<String> {
+    let output = std::process::Command::new("xdg-mime")
+        .args(&["query", "filetype"])
+        .arg(path)
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let mime = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !mime.is_empty() {
+            return Some(mime);
+        }
+    }
+    None
+}
+
+pub fn get_default_application(mime: &str) -> Option<(String, String)> {
+    // Query default handler desktop file name
+    let output = std::process::Command::new("xdg-mime")
+        .args(&["query", "default", mime])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let desktop_filename = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if desktop_filename.is_empty() {
+        return None;
+    }
+
+    // Search for .desktop file in common directories
+    let home = std::env::var("HOME").ok().unwrap_or_default();
+    let search_paths = vec![
+        PathBuf::from(&home).join(".local/share/applications"),
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/usr/local/share/applications"),
+    ];
+
+    let mut desktop_path = None;
+    for dir in search_paths {
+        let path = dir.join(&desktop_filename);
+        if path.exists() {
+            desktop_path = Some(path);
+            break;
+        }
+    }
+
+    let path = desktop_path?;
+    let content = fs::read_to_string(path).ok()?;
+
+    let mut name = None;
+    let mut exec = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("Name=") && name.is_none() {
+            name = Some(line["Name=".len()..].trim().to_string());
+        } else if line.starts_with("Exec=") && exec.is_none() {
+            let mut cmd = line["Exec=".len()..].trim().to_string();
+            // Strip standard desktop entry field codes (placeholders)
+            let placeholders = ["%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%i", "%c", "%k", "%v"];
+            for placeholder in &placeholders {
+                cmd = cmd.replace(placeholder, "");
+            }
+            exec = Some(cmd.trim().to_string());
+        }
+    }
+
+    match (name, exec) {
+        (Some(n), Some(e)) => Some((n, e)),
+        (None, Some(e)) => {
+            let n_fallback = desktop_filename.strip_suffix(".desktop").unwrap_or(&desktop_filename).to_string();
+            Some((n_fallback, e))
+        }
+        _ => None,
+    }
+}
+

@@ -680,7 +680,7 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
 
-                if is_file_double_click && self.select_mode {
+                if is_file_double_click {
                     self.update(Message::SelectOpen, needs_rebuild, _exit);
                 }
             }
@@ -711,8 +711,14 @@ impl Application for FilesystemApp {
                         if path.is_dir() && !is_project_dir(&path) {
                             self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
                         } else {
-                            println!("{}", path.display());
-                            std::process::exit(0);
+                            if self.select_mode {
+                                println!("{}", path.display());
+                                std::process::exit(0);
+                            } else {
+                                let _ = std::process::Command::new("xdg-open")
+                                    .arg(&path)
+                                    .spawn();
+                            }
                         }
                     } else {
                         let selected_path = if let Some(idx) = self.browse.selected {
@@ -724,18 +730,34 @@ impl Application for FilesystemApp {
                             if path.is_dir() && !is_project_dir(&path) {
                                 self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
                             } else {
-                                println!("{}", path.display());
-                                std::process::exit(0);
+                                if self.select_mode {
+                                    println!("{}", path.display());
+                                    std::process::exit(0);
+                                } else {
+                                    let _ = std::process::Command::new("xdg-open")
+                                        .arg(&path)
+                                        .spawn();
+                                }
                             }
                         }
                     }
+
                 }
             }
             Message::SelectCancel => {
                 std::process::exit(1);
             }
             Message::PromptOpenWith(path) => {
-                let mut tb = cce_ui::widget::TextBox::new(String::new())
+                let default_cmd = if let Some(mime) = crate::services::fs::get_mime_type(&path) {
+                    if let Some((_, cmd)) = crate::services::fs::get_default_application(&mime) {
+                        cmd
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+                let mut tb = cce_ui::widget::TextBox::new(default_cmd)
                     .with_max_width(None)
                     .with_placeholder("Program/Command");
                 tb.focus();
@@ -1470,13 +1492,8 @@ impl Application for FilesystemApp {
                         if let Some(entry) = self.browse.entries.get(idx) {
                             if entry.is_dir && !is_project_dir(&entry.path) {
                                 return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
-                            } else if self.select_mode && !self.select_directory {
-                                if self.save_mode {
-                                    return Some(Message::SelectOpen);
-                                } else {
-                                    println!("{}", entry.path.display());
-                                    std::process::exit(0);
-                                }
+                            } else {
+                                return Some(Message::SelectOpen);
                             }
                         }
                     } else if self.save_mode {

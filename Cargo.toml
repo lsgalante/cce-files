@@ -1,5 +1,5 @@
 [package]
-name = "cce-filesystem-interface"
+name = "cce-files"
 version = "0.1.0"
 edition = "2024"
 
@@ -18,9 +18,9 @@ log = "0.4"
 
 
 [lib]
-name = "cce_filesystem_interface"
+name = "cce_files"
 path = "src/lib.rs"
 
 [[bin]]
-name = "cce-filesystem-interface"
+name = "cce-files"
 path = "src/main.rs"

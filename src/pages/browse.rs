@@ -533,11 +533,15 @@ mod tests {
     fn test_directory_persistence() {
         let temp_dir = std::env::temp_dir();
         let original_home = std::env::var("HOME");
+        let original_xdg = std::env::var("XDG_CONFIG_HOME");
         
         // Mock HOME env variable so we don't overwrite user's actual config
         let mock_home = temp_dir.join("mock_home_dir_cce");
         let _ = std::fs::create_dir_all(&mock_home);
-        unsafe { std::env::set_var("HOME", &mock_home); }
+        unsafe {
+            std::env::set_var("HOME", &mock_home);
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
         
         let test_dir = temp_dir.join("test_persist_dir");
         let _ = std::fs::create_dir_all(&test_dir);
@@ -554,6 +558,13 @@ mod tests {
             unsafe { std::env::set_var("HOME", val); }
         } else {
             unsafe { std::env::remove_var("HOME"); }
+        }
+        
+        // Restore XDG_CONFIG_HOME
+        if let Ok(val) = original_xdg {
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", val); }
+        } else {
+            unsafe { std::env::remove_var("XDG_CONFIG_HOME"); }
         }
         
         // Clean up

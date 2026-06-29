@@ -7,9 +7,9 @@ use cce_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
 
-use cce_filesystem_interface::{Message, pages, services};
-use cce_filesystem_interface::pages::Page;
-use cce_filesystem_interface::pages::browse::is_project_dir;
+use cce_files::{Message, pages, services};
+use cce_files::pages::Page;
+use cce_files::pages::browse::is_project_dir;
 
 // ── State ───────────────────────────────────────────────────────────
 
@@ -608,8 +608,8 @@ impl Application for FilesystemApp {
             }
         } else {
             WindowSettings {
-                title: "Clear Filesystem Interface".to_string(),
-                app_id: "cce-filesystem-interface".to_string(),
+                title: "Files".to_string(),
+                app_id: "cce-files".to_string(),
                 width: 1200,
                 height: 720,
                 fullscreen: false,

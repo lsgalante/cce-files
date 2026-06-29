@@ -339,10 +339,20 @@ fn infer_file_type(name: &str, is_dir: bool) -> String {
 }
 
 fn get_last_dir_file_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let dir = PathBuf::from(home).join(".config").join("cce");
+    let dir = if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg_config.is_empty() {
+            PathBuf::from(xdg_config)
+        } else {
+            let home = std::env::var("HOME").ok()?;
+            PathBuf::from(home).join(".config")
+        }
+    } else {
+        let home = std::env::var("HOME").ok()?;
+        PathBuf::from(home).join(".config")
+    };
+    let dir = dir.join("cce").join("cce-files");
     let _ = fs::create_dir_all(&dir);
-    Some(dir.join("cce-filesystem-interface-last-dir.txt"))
+    Some(dir.join("cce-files-last-dir.txt"))
 }
 
 pub fn read_last_dir_internal() -> Option<PathBuf> {

@@ -71,6 +71,8 @@ struct FilesystemApp {
     context_menu: ContextMenu,
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::TextBox)>,
     root_window: cce_ui::widget::Backplate,
+    last_click_time: std::time::Instant,
+    last_clicked_idx: Option<usize>,
 }
 
 
@@ -580,6 +582,8 @@ impl Application for FilesystemApp {
             },
             open_with_dialog: None,
             root_window,
+            last_click_time: std::time::Instant::now(),
+            last_clicked_idx: None,
         };
 
         // Start initial directory loading via FsService
@@ -628,11 +632,19 @@ impl Application for FilesystemApp {
                 self.needs_rebuild = true;
             }
             Message::Browse(msg) => {
-                let is_file_double_click = if let pages::browse::BrowseMessage::NavigateTo(idx) = &msg {
-                    self.browse.entries.get(*idx).map(|e| !e.is_dir || (self.select_mode && !self.select_directory && is_project_dir(&e.path))).unwrap_or(false)
-                } else {
-                    false
-                };
+                let mut is_file_double_click = false;
+                if let pages::browse::BrowseMessage::NavigateTo(idx) = &msg {
+                    let now = std::time::Instant::now();
+                    if self.last_clicked_idx == Some(*idx) && now.duration_since(self.last_click_time).as_millis() < 500 {
+                        is_file_double_click = self.browse.entries.get(*idx).map(|e| !e.is_dir || (self.select_mode && !self.select_directory && is_project_dir(&e.path))).unwrap_or(false);
+                    }
+                    self.last_click_time = now;
+                    self.last_clicked_idx = Some(*idx);
+                } else if let pages::browse::BrowseMessage::SelectEntry(idx) = &msg {
+                    let now = std::time::Instant::now();
+                    self.last_click_time = now;
+                    self.last_clicked_idx = Some(*idx);
+                }
 
                 let is_directory_loaded = match &msg {
                     pages::browse::BrowseMessage::DirectoryLoaded(path, _) => Some(path.clone()),

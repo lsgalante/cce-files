@@ -1,7 +1,6 @@
 pub mod browse;
 pub mod preview;
 pub mod network;
-pub mod settings;
 
 use cce_ui::layout::RenderTarget;
 
@@ -9,21 +8,18 @@ use cce_ui::layout::RenderTarget;
 pub enum Page {
     Browse,
     Network,
-    Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 3] = [
+    pub const ALL: [Page; 2] = [
         Page::Browse,
         Page::Network,
-        Page::Settings,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Page::Browse => "Browse",
             Page::Network => "Network",
-            Page::Settings => "Settings",
         }
     }
 
@@ -31,7 +27,6 @@ impl Page {
         match self {
             Page::Browse => "📁",
             Page::Network => "🌐",
-            Page::Settings => "⚙",
         }
     }
 }

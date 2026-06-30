@@ -43,7 +43,6 @@ struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
     network: pages::network::NetworkState,
-    settings: pages::settings::SettingsState,
     preview: pages::preview::PreviewState,
 
     // Command-line chooser options
@@ -150,7 +149,6 @@ impl FilesystemApp {
         self.browse.breadcrumb.clear_children(&mut self.ui_context); self.browse.breadcrumb.set_parent(None, &mut self.ui_context);
         self.network.breadcrumb.clear_children(&mut self.ui_context); self.network.breadcrumb.set_parent(None, &mut self.ui_context);
         self.network.graph.clear_children(&mut self.ui_context); self.network.graph.set_parent(None, &mut self.ui_context);
-        self.settings.color_selector.clear_children(&mut self.ui_context); self.settings.color_selector.set_parent(None, &mut self.ui_context);
         if let Some((_, textbox)) = &mut self.open_with_dialog {
             textbox.clear_children(&mut self.ui_context);
             textbox.set_parent(None, &mut self.ui_context);
@@ -191,9 +189,6 @@ impl FilesystemApp {
             Page::Network => {
                 link_parent_child(&mut self.root_window, &mut self.network.breadcrumb, &mut self.ui_context);
                 link_parent_child(&mut self.root_window, &mut self.network.graph, &mut self.ui_context);
-            }
-            Page::Settings => {
-                link_parent_child(&mut self.root_window, &mut self.settings.color_selector, &mut self.ui_context);
             }
         }
 
@@ -250,23 +245,6 @@ impl FilesystemApp {
                 pc.rects.extend(network_pc.rects);
                 pc.texts.extend(network_pc.texts);
                 pc.buttons.extend(network_pc.buttons);
-            }
-            Page::Settings => {
-                let settings_pc = pages::settings::view(&mut self.settings, browse_x, content_y, usable_w, content_h, &mut self.ui_context);
-
-                pc.rects.extend(settings_pc.rects);
-                pc.texts.extend(settings_pc.texts);
-                pc.buttons.extend(settings_pc.buttons);
-
-                // Sync color selector changes back to global node color
-                let col = self.settings.color_selector.color;
-                let r_f = col[0] as f32 / 255.0;
-                let g_f = col[1] as f32 / 255.0;
-                let b_f = col[2] as f32 / 255.0;
-                let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                if cce_ui::color::node_color() != linear_col {
-                    cce_ui::color::set_node_color(linear_col);
-                }
             }
         }
 
@@ -546,7 +524,6 @@ impl Application for FilesystemApp {
             current_page: Page::Browse,
             browse,
             network: pages::network::NetworkState::default(),
-            settings: pages::settings::SettingsState::default(),
             preview: pages::preview::PreviewState::default(),
             select_mode,
             select_directory,
@@ -829,19 +806,6 @@ impl Application for FilesystemApp {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
-
-        if self.current_page == Page::Settings {
-            if self.settings.color_selector.tick(dt, &mut self.ui_context) {
-                let col = self.settings.color_selector.color;
-                let r_f = col[0] as f32 / 255.0;
-                let g_f = col[1] as f32 / 255.0;
-                let b_f = col[2] as f32 / 255.0;
-                let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                cce_ui::color::set_node_color(linear_col);
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-        }
     }
 
     fn view(&mut self, _quads: &mut Vec<(f32, f32, f32, f32, [f32; 4])>, size: LogicalSize, scale: f64) {
@@ -944,10 +908,6 @@ impl Application for FilesystemApp {
                 if self.network.graph.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                     changed = true;
                 }
-            }
-        } else if self.current_page == Page::Settings {
-            if self.settings.color_selector.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
-                changed = true;
             }
         }
 
@@ -1301,29 +1261,6 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
-        } else if self.current_page == Page::Settings {
-            if self.settings.color_selector.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
-                if self.settings.color_selector.take_click() {
-                    let col = self.settings.color_selector.color;
-                    let r_f = col[0] as f32 / 255.0;
-                    let g_f = col[1] as f32 / 255.0;
-                    let b_f = col[2] as f32 / 255.0;
-                    let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                    cce_ui::color::set_node_color(linear_col);
-                }
-                changed = true;
-            }
-            // If user clicked outside color selector focus area, unfocus it
-            if state == ElementState::Pressed && !self.settings.color_selector.hit_test(pos.x, pos.y, &self.ui_context) {
-                self.settings.color_selector.unfocus();
-                self.ui_context.clear_focus();
-                changed = true;
-            }
-
-            if changed {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
         }
 
         if state == ElementState::Pressed {
@@ -1438,22 +1375,6 @@ impl Application for FilesystemApp {
                 self.context_menu.visible = false;
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
-                return None;
-            }
-        }
-
-        if self.current_page == Page::Settings && self.settings.color_selector.editing {
-            if self.settings.color_selector.keyboard_input(event, &mut self.ui_context) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                if !self.settings.color_selector.editing {
-                    let col = self.settings.color_selector.color;
-                    let r_f = col[0] as f32 / 255.0;
-                    let g_f = col[1] as f32 / 255.0;
-                    let b_f = col[2] as f32 / 255.0;
-                    let linear_col = cce_ui::color::to_linear([r_f, g_f, b_f, 1.0]);
-                    cce_ui::color::set_node_color(linear_col);
-                }
                 return None;
             }
         }

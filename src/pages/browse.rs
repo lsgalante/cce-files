@@ -158,7 +158,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let mut pc = PageContent::new();
     let text_dim = cce_ui::color::TEXT_DIM;
     let heading_fg = cce_ui::color::TEXT_HEADER;
-    let text_fg = cce_ui::color::TEXT_FG;
+    let text_fg = cce_ui::color::list_font_color();
     let accent_fg = cce_ui::color::TEXT_ACCENT;
 
     let selected_bg = cce_ui::color::list_entry_highlight_color();

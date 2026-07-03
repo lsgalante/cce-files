@@ -556,7 +556,28 @@ mod tests {
 
     #[test]
     fn test_kdl() {
+        let unique_dir_name = format!("cce_test_kdl_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let temp_path = std::env::temp_dir().join(unique_dir_name);
+        let config_dir = temp_path.join(".config").join("cce");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let mime_file = config_dir.join("mime.kdl");
+        std::fs::write(&mime_file, "associations { association \"text/plain\" \"cce-text-editor\" }").unwrap();
+        
+        let old_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", &temp_path); }
+        
         let assoc = load_kdl_associations();
+        
+        unsafe {
+            if let Some(ref h) = old_home {
+                std::env::set_var("HOME", h);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
+        
+        let _ = std::fs::remove_dir_all(&temp_path);
+        
         println!("Parsed associations: {:?}", assoc);
         assert!(assoc.is_some());
     }

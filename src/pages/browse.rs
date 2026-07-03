@@ -23,7 +23,7 @@ pub struct BrowseState {
     pub entries: Vec<DirEntry>,
     pub show_hidden: bool,
     pub search_box: cce_ui::widget::TextBox,
-    pub list_box: cce_ui::widget::ScrollingList,
+    pub list_box: cce_ui::widget::List,
     pub selected: Option<usize>,
     pub breadcrumb: Breadcrumb,
     pub save_name_box: cce_ui::widget::TextBox,
@@ -43,7 +43,7 @@ impl Default for BrowseState {
             search_box: cce_ui::widget::TextBox::new(String::new())
                 .with_max_width(None)
                 .with_placeholder("Search"),
-            list_box: cce_ui::widget::ScrollingList::new(28.0, 2.0),
+            list_box: cce_ui::widget::List::new(28.0, 2.0),
             selected: None,
             breadcrumb,
             save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
@@ -161,8 +161,8 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let text_fg = cce_ui::color::TEXT_FG;
     let accent_fg = cce_ui::color::TEXT_ACCENT;
 
-    let selected_bg = cce_ui::color::scrollinglist_entry_highlight_color();
-    let row_bg = cce_ui::color::scrollinglist_entry_bg_color();
+    let selected_bg = cce_ui::color::list_entry_highlight_color();
+    let row_bg = cce_ui::color::list_entry_bg_color();
 
     let gap = 12.0;
     let margin = 12.0;
@@ -180,7 +180,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let (bx, by, bw, bh) = layout.allocate(client_w, breadcrumb_h);
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
 
-    // 2. Allocate and render ScrollingList (ScrollBox)
+    // 2. Allocate and render List (ScrollBox)
     // The scrolling list height occupies the remaining vertical space:
     // list_h = client_h - breadcrumb_h - textbox_h - (2 * gap)
     let list_h_val = client_h - breadcrumb_h - textbox_h - 2.0 * gap;
@@ -437,7 +437,7 @@ mod tests {
                 })
                 .collect(),
             search_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
-            list_box: cce_ui::widget::ScrollingList::new(28.0, 2.0),
+            list_box: cce_ui::widget::List::new(28.0, 2.0),
             ..BrowseState::default()
         }
     }
@@ -588,6 +588,7 @@ mod tests {
                     name: "delete_me.txt".to_string(),
                     path: file_path.clone(),
                     is_dir: false,
+
                     size: 19,
                     permissions: 0o644,
                     modified: String::new(),
@@ -629,5 +630,48 @@ mod tests {
 
         // Clean up directory
         let _ = std::fs::remove_dir_all(&test_subdir);
+    }
+
+    #[test]
+    fn test_component_reconstruction() {
+        let current_dir = PathBuf::from("/home/lsgalante/documents");
+        
+        // Let's say seg is 1 (meaning "home/")
+        let seg = 1;
+        let mut target_path = std::path::PathBuf::new();
+        let mut current_idx = 0;
+        for component in current_dir.components() {
+            target_path.push(component);
+            if component == std::path::Component::RootDir {
+                if seg == 0 {
+                    break;
+                }
+            } else {
+                current_idx += 1;
+                if current_idx == seg {
+                    break;
+                }
+            }
+        }
+        assert_eq!(target_path, PathBuf::from("/home"));
+        
+        // Let's say seg is 0 (meaning "/")
+        let seg = 0;
+        let mut target_path = std::path::PathBuf::new();
+        let mut current_idx = 0;
+        for component in current_dir.components() {
+            target_path.push(component);
+            if component == std::path::Component::RootDir {
+                if seg == 0 {
+                    break;
+                }
+            } else {
+                current_idx += 1;
+                if current_idx == seg {
+                    break;
+                }
+            }
+        }
+        assert_eq!(target_path, PathBuf::from("/"));
     }
 }

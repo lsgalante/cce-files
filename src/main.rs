@@ -215,23 +215,6 @@ impl FilesystemApp {
         let mut pc = pages::PageContent::new();
         match self.current_page {
             Page::Browse => {
-                // Draw background plates for columns
-                let plate_bg = cce_ui::color::scrollinglist_bg_color();
-                let border_color = cce_ui::color::color_borders_color();
-
-                // Left column plate (Browse)
-                pc.rect(plate_bg, browse_x, content_y, browse_w, content_h);
-                pc.rect(border_color, browse_x, content_y, browse_w, 1.0);
-                pc.rect(border_color, browse_x, content_y + content_h - 1.0, browse_w, 1.0);
-                pc.rect(border_color, browse_x, content_y, 1.0, content_h);
-                pc.rect(border_color, browse_x + browse_w - 1.0, content_y, 1.0, content_h);
-
-                // Right column plate (Preview)
-                pc.rect(plate_bg, preview_x, content_y, preview_w, content_h);
-                pc.rect(border_color, preview_x, content_y, preview_w, 1.0);
-                pc.rect(border_color, preview_x, content_y + content_h - 1.0, preview_w, 1.0);
-                pc.rect(border_color, preview_x, content_y, 1.0, content_h);
-                pc.rect(border_color, preview_x + preview_w - 1.0, content_y, 1.0, content_h);
 
                 let browse_pc = pages::browse::view(&mut self.browse, browse_x, content_y, browse_w, content_h, self.select_mode, &mut self.ui_context);
 

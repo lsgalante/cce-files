@@ -387,6 +387,9 @@ pub fn save_last_dir_internal(dir: &Path) {
 }
 
 pub fn get_mime_type(path: &Path) -> Option<String> {
+    if path.is_dir() && path.join("state.json").exists() {
+        return Some("application/x-cce-project".to_string());
+    }
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         if ext.eq_ignore_ascii_case("kdl") {
             return Some("application/x-kdl".to_string());

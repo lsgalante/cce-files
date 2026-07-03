@@ -1074,7 +1074,12 @@ impl Application for FilesystemApp {
                         ];
 
                         if entry.is_dir {
-                            options.push(("Open".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)))));
+                            if is_project_dir(&entry.path) {
+                                options.push(("Open Project".to_string(), Some(Message::SelectOpen)));
+                                options.push(("Enter Directory".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(entry.path.clone())))));
+                            } else {
+                                options.push(("Open".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)))));
+                            }
                         } else {
                             options.push(("Select".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)))));
                         }

@@ -15,4 +15,5 @@ pub enum Message {
     PromptOpenWith(std::path::PathBuf),
     OpenWithSubmit,
     OpenWithCancel,
+    CopyPath(String),
 }

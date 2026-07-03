@@ -771,6 +771,9 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
+            Message::CopyPath(path) => {
+                cce_ui::widget::clipboard::copy_to_clipboard(&path);
+            }
         }
     }
 
@@ -1009,6 +1012,38 @@ impl Application for FilesystemApp {
         }
 
         if button == MouseButton::Right && state == ElementState::Pressed {
+            let is_browse = self.current_page == Page::Browse;
+            let breadcrumb = if is_browse { &mut self.browse.breadcrumb } else { &mut self.network.breadcrumb };
+            if breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
+                if breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                    let idx = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
+                    let path_str = breadcrumb.path_to_seg(idx);
+                    
+                    let header = format!("[Breadcrumb]: {}", path_str);
+                    let options = vec![
+                        (header, None),
+                        ("Copy Path".to_string(), Some(Message::CopyPath(path_str))),
+                    ];
+
+                    let max_len = options.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
+                    let menu_w = ((max_len as f32 * 7.5) + 24.0).max(120.0);
+                    let menu_h = options.len() as f32 * 24.0;
+
+                    self.context_menu = ContextMenu {
+                        visible: true,
+                        x: pos.x,
+                        y: pos.y,
+                        w: menu_w,
+                        h: menu_h,
+                        options,
+                        hovered: None,
+                    };
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            }
+
             // Check if right-clicked on a list button
             let mut right_clicked_action = None;
             for (btn, action) in &self.page_buttons {

@@ -23,7 +23,7 @@ pub struct BrowseState {
     pub entries: Vec<DirEntry>,
     pub show_hidden: bool,
     pub search_box: cce_ui::widget::TextBox,
-    pub list_box: cce_ui::widget::ColumnarList,
+    pub list_box: cce_ui::widget::List,
     pub selected: Option<usize>,
     pub breadcrumb: Breadcrumb,
     pub save_name_box: cce_ui::widget::TextBox,
@@ -43,7 +43,7 @@ impl Default for BrowseState {
             search_box: cce_ui::widget::TextBox::new(String::new())
                 .with_max_width(None)
                 .with_placeholder("Search"),
-            list_box: cce_ui::widget::ColumnarList::new(
+            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0).with_columns(
                 vec![
                     cce_ui::widget::ListColumn {
                         name: "Name".to_string(),
@@ -66,8 +66,6 @@ impl Default for BrowseState {
                         justification: cce_ui::widget::Justification::Left,
                     },
                 ],
-                cce_ui::layout::button_height(),
-                2.0,
             ),
             selected: None,
             breadcrumb,
@@ -206,7 +204,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let list_h_val = client_h - breadcrumb_h - textbox_h - 2.0 * gap;
     let (list_x, list_y, list_w, list_h) = layout.allocate(client_w, list_h_val);
 
-    // Update ColumnarList columns dynamically based on list width
+    // Update List columns dynamically based on list width
     let show_size = list_w > 400.0;
     let show_perm = list_w > 480.0;
     let show_modified = list_w > 280.0;
@@ -239,7 +237,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
             justification: cce_ui::widget::Justification::Left,
         });
     }
-    state.list_box.columns = cols;
+    state.list_box.columns = Some(cols);
 
     // Populate rows
     state.list_box.rows = state.entries.iter().enumerate().map(|(idx, entry)| {
@@ -268,18 +266,18 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         }
     }).collect();
 
-    state.list_box.update_bounds();
+    state.list_box.update_bounds_from_rows();
 
     // Auto-scroll to keep selection in view
     if let Some(selected_idx) = state.selected {
-        let item_height_full = state.list_box.row_height + state.list_box.row_gap;
+        let item_height_full = state.list_box.item_height + state.list_box.item_gap;
         let item_y = selected_idx as f32 * item_height_full + 2.0;
         let viewport_h = state.list_box.scroll_box.viewport_h;
         if viewport_h > 0.0 {
             if item_y < state.list_box.scroll_box.scroll_y {
                 state.list_box.scroll_box.scroll_y = item_y;
-            } else if item_y + state.list_box.row_height > state.list_box.scroll_box.scroll_y + viewport_h {
-                state.list_box.scroll_box.scroll_y = item_y + state.list_box.row_height - viewport_h;
+            } else if item_y + state.list_box.item_height > state.list_box.scroll_box.scroll_y + viewport_h {
+                state.list_box.scroll_box.scroll_y = item_y + state.list_box.item_height - viewport_h;
             }
         }
     }
@@ -445,7 +443,7 @@ mod tests {
                 })
                 .collect(),
             search_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
-            list_box: cce_ui::widget::ColumnarList::new(vec![], cce_ui::layout::button_height(), 2.0),
+            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0),
             ..BrowseState::default()
         }
     }

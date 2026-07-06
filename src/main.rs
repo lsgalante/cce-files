@@ -1228,6 +1228,12 @@ impl Application for FilesystemApp {
             if self.browse.list_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
+                if let Some(idx) = self.browse.list_box.take_double_click() {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
+                }
+                if let Some(idx) = self.browse.list_box.take_click() {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)));
+                }
             }
             if button == MouseButton::Left && state == ElementState::Pressed {
                 if self.browse.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {

@@ -23,7 +23,7 @@ pub struct BrowseState {
     pub entries: Vec<DirEntry>,
     pub show_hidden: bool,
     pub search_box: cce_ui::widget::TextBox,
-    pub list_box: cce_ui::widget::List,
+    pub list_box: cce_ui::widget::ColumnarList,
     pub selected: Option<usize>,
     pub breadcrumb: Breadcrumb,
     pub save_name_box: cce_ui::widget::TextBox,
@@ -43,7 +43,32 @@ impl Default for BrowseState {
             search_box: cce_ui::widget::TextBox::new(String::new())
                 .with_max_width(None)
                 .with_placeholder("Search"),
-            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0),
+            list_box: cce_ui::widget::ColumnarList::new(
+                vec![
+                    cce_ui::widget::ListColumn {
+                        name: "Name".to_string(),
+                        width: cce_ui::widget::ColumnWidth::Flex,
+                        justification: cce_ui::widget::Justification::Left,
+                    },
+                    cce_ui::widget::ListColumn {
+                        name: "Size".to_string(),
+                        width: cce_ui::widget::ColumnWidth::RightOffset(290.0),
+                        justification: cce_ui::widget::Justification::Left,
+                    },
+                    cce_ui::widget::ListColumn {
+                        name: "Permissions".to_string(),
+                        width: cce_ui::widget::ColumnWidth::RightOffset(210.0),
+                        justification: cce_ui::widget::Justification::Left,
+                    },
+                    cce_ui::widget::ListColumn {
+                        name: "Modified".to_string(),
+                        width: cce_ui::widget::ColumnWidth::RightOffset(120.0),
+                        justification: cce_ui::widget::Justification::Left,
+                    },
+                ],
+                cce_ui::layout::button_height(),
+                2.0,
+            ),
             selected: None,
             breadcrumb,
             save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
@@ -157,12 +182,7 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
 pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
     let text_dim = cce_ui::color::TEXT_DIM;
-    let heading_fg = cce_ui::color::TEXT_HEADER;
-    let text_fg = cce_ui::color::list_font_color();
-    let accent_fg = cce_ui::color::TEXT_ACCENT;
 
-    let selected_bg = cce_ui::color::list_entry_highlight_color();
-    let row_bg = cce_ui::color::list_entry_bg_color();
 
     let gap = 12.0;
     let margin = 12.0;
@@ -185,9 +205,86 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     // list_h = client_h - breadcrumb_h - textbox_h - (2 * gap)
     let list_h_val = client_h - breadcrumb_h - textbox_h - 2.0 * gap;
     let (list_x, list_y, list_w, list_h) = layout.allocate(client_w, list_h_val);
-    cce_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h, ctx);
 
-    state.list_box.update_bounds(state.entries.len(), list_y, list_h);
+    // Update ColumnarList columns dynamically based on list width
+    let show_size = list_w > 400.0;
+    let show_perm = list_w > 480.0;
+    let show_modified = list_w > 280.0;
+
+    let mut cols = vec![
+        cce_ui::widget::ListColumn {
+            name: "Name".to_string(),
+            width: cce_ui::widget::ColumnWidth::Flex,
+            justification: cce_ui::widget::Justification::Left,
+        }
+    ];
+    if show_size {
+        cols.push(cce_ui::widget::ListColumn {
+            name: "Size".to_string(),
+            width: cce_ui::widget::ColumnWidth::RightOffset(290.0),
+            justification: cce_ui::widget::Justification::Left,
+        });
+    }
+    if show_perm {
+        cols.push(cce_ui::widget::ListColumn {
+            name: "Permissions".to_string(),
+            width: cce_ui::widget::ColumnWidth::RightOffset(210.0),
+            justification: cce_ui::widget::Justification::Left,
+        });
+    }
+    if show_modified {
+        cols.push(cce_ui::widget::ListColumn {
+            name: "Modified".to_string(),
+            width: cce_ui::widget::ColumnWidth::RightOffset(120.0),
+            justification: cce_ui::widget::Justification::Left,
+        });
+    }
+    state.list_box.columns = cols;
+
+    // Populate rows
+    state.list_box.rows = state.entries.iter().enumerate().map(|(idx, entry)| {
+        let size_str = if entry.is_dir {
+            "—".to_string()
+        } else {
+            format_size(entry.size)
+        };
+        let perm_str = format_permissions(entry.permissions);
+
+        let mut cells = vec![entry.name.clone()];
+        if show_size {
+            cells.push(size_str);
+        }
+        if show_perm {
+            cells.push(perm_str);
+        }
+        if show_modified {
+            cells.push(entry.modified.clone());
+        }
+
+        cce_ui::widget::ListRow {
+            cells,
+            icon: Some(entry_icon(entry.is_dir, &entry.name).to_string()),
+            selected: state.selected == Some(idx),
+        }
+    }).collect();
+
+    state.list_box.update_bounds();
+
+    // Auto-scroll to keep selection in view
+    if let Some(selected_idx) = state.selected {
+        let item_height_full = state.list_box.row_height + state.list_box.row_gap;
+        let item_y = selected_idx as f32 * item_height_full + 2.0;
+        let viewport_h = state.list_box.scroll_box.viewport_h;
+        if viewport_h > 0.0 {
+            if item_y < state.list_box.scroll_box.scroll_y {
+                state.list_box.scroll_box.scroll_y = item_y;
+            } else if item_y + state.list_box.row_height > state.list_box.scroll_box.scroll_y + viewport_h {
+                state.list_box.scroll_box.scroll_y = item_y + state.list_box.row_height - viewport_h;
+            }
+        }
+    }
+
+    cce_ui::layout::render_widget(&mut pc, &mut state.list_box, list_x, list_y, list_w, list_h, ctx);
 
     // Count label in the bottom right corner of the scrolling list
     let count_str = format!(
@@ -222,99 +319,6 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         // Full width search textbox
         state.search_box.set_row_rect(tx, tw);
         cce_ui::layout::render_widget(&mut pc, &mut state.search_box, tx, ty, tw, th, ctx);
-    }
-
-    for (idx, entry) in state.entries.iter().enumerate() {
-        if let Some(draw_y) = state.list_box.get_item_draw_y(idx, 2.0) {
-            let is_selected = state.selected == Some(idx);
-            let bg = if is_selected { selected_bg } else { row_bg };
-            let fg = if is_selected {
-                heading_fg
-            } else if entry.is_dir {
-                accent_fg
-            } else {
-                text_fg
-            };
-
-            let icon = entry_icon(entry.is_dir, &entry.name);
-            let size_str = if entry.is_dir {
-                "—".to_string()
-            } else {
-                format_size(entry.size)
-            };
-            let perm_str = format_permissions(entry.permissions);
-
-            // Determine click action
-            let action = if is_selected {
-                crate::Message::Browse(BrowseMessage::NavigateTo(idx))
-            } else {
-                crate::Message::Browse(BrowseMessage::SelectEntry(idx))
-            };
-
-            let hover_bg = if is_selected {
-                selected_bg
-            } else {
-                let mut h_bg = cce_ui::color::highlight_primary_color();
-                h_bg[3] = 0.25;
-                h_bg
-            };
-
-            // Button for row selection/navigation
-            pc.button(
-                "",
-                list_x + 4.0,
-                draw_y,
-                list_w - 24.0,
-                cce_ui::layout::button_height(),
-                bg,
-                hover_bg,
-                fg,
-                action,
-            );
-
-            // Draw contents inside the button boundary:
-            let row_h = cce_ui::layout::button_height();
-            let y_text_13 = cce_ui::layout::center_text_y(draw_y, row_h, 13.0);
-            let y_text_11 = cce_ui::layout::center_text_y(draw_y, row_h, 11.0);
-
-            pc.text(icon, list_x + 12.0, y_text_13, 13.0, fg);
-            
-            let show_size = list_w > 400.0;
-            let show_perm = list_w > 480.0;
-            let show_modified = list_w > 280.0;
-
-            let next_col_x = if show_size {
-                list_w - 290.0
-            } else if show_modified {
-                list_w - 120.0
-            } else {
-                list_w - 20.0
-            };
-
-            let max_chars = ((next_col_x - 40.0) / 8.0).max(10.0) as usize;
-            let name_truncated = if entry.name.chars().count() > max_chars {
-                if max_chars > 3 {
-                    let mut s: String = entry.name.chars().take(max_chars - 3).collect();
-                    s.push_str("...");
-                    s
-                } else {
-                    entry.name.clone()
-                }
-            } else {
-                entry.name.clone()
-            };
-
-            pc.text(&name_truncated, list_x + 32.0, y_text_13, 13.0, fg);
-            if show_size {
-                pc.text(&size_str, list_x + list_w - 290.0, y_text_11, 11.0, text_dim);
-            }
-            if show_perm {
-                pc.text(&perm_str, list_x + list_w - 210.0, y_text_11, 11.0, text_dim);
-            }
-            if show_modified {
-                pc.text(&entry.modified, list_x + list_w - 120.0, y_text_11, 11.0, text_dim);
-            }
-        }
     }
 
     pc
@@ -441,7 +445,7 @@ mod tests {
                 })
                 .collect(),
             search_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
-            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0),
+            list_box: cce_ui::widget::ColumnarList::new(vec![], cce_ui::layout::button_height(), 2.0),
             ..BrowseState::default()
         }
     }

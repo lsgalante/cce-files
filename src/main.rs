@@ -598,11 +598,7 @@ impl Application for FilesystemApp {
             save_mode,
             widgets: Vec::new(),
             text_items: Vec::new(),
-            font_system: {
-                let mut fs = FontSystem::new();
-                fs.db_mut().load_fonts_dir("/home/lsgalante/Dropbox/Fonts");
-                fs
-            },
+            font_system: cce_ui::create_font_system(),
             needs_rebuild: true,
             width: initial_w,
             height: initial_h,

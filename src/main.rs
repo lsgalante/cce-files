@@ -362,13 +362,36 @@ impl FilesystemApp {
         // We collect from: window_pc, pc, popover_pc, context_menu_pc, dialog_pc
         let mut page_buttons = Vec::new();
 
-        for pc_part in &[window_pc, pc, popover_pc, context_menu_pc, dialog_pc] {
+        for (part_idx, pc_part) in [&window_pc, &pc, &popover_pc, &context_menu_pc, &dialog_pc].into_iter().enumerate() {
+            let is_page_content = part_idx == 1;
+
             for (c, x, y, w, h, r, corners) in &pc_part.rects {
+                let wx = *x;
+                let mut wy = *y;
+                let ww = *w;
+                let mut wh = *h;
+
+                if is_page_content {
+                    let viewport_top = content_y;
+                    let viewport_bottom = content_y + content_h;
+                    if wy >= viewport_bottom || wy + wh <= viewport_top {
+                        continue;
+                    }
+                    if wy < viewport_top {
+                        let diff = viewport_top - wy;
+                        wy = viewport_top;
+                        wh = (wh - diff).max(0.0);
+                    }
+                    if wy + wh > viewport_bottom {
+                        wh = (viewport_bottom - wy).max(0.0);
+                    }
+                }
+
                 widgets.push(AppWidget {
-                    x: *x,
-                    y: *y,
-                    w: *w,
-                    h: *h,
+                    x: wx,
+                    y: wy,
+                    w: ww,
+                    h: wh,
                     color: *c,
                     hover_color: *c,
                     hovering: false,
@@ -385,15 +408,36 @@ impl FilesystemApp {
                 let label_size = 12.0;
                 let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
 
-                let hovering = self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
-                    && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h;
+                let wx = base.x;
+                let mut wy = base.y;
+                let ww = base.w;
+                let mut wh = base.h;
+
+                if is_page_content {
+                    let viewport_top = content_y;
+                    let viewport_bottom = content_y + content_h;
+                    if wy >= viewport_bottom || wy + wh <= viewport_top {
+                        continue;
+                    }
+                    if wy < viewport_top {
+                        let diff = viewport_top - wy;
+                        wy = viewport_top;
+                        wh = (wh - diff).max(0.0);
+                    }
+                    if wy + wh > viewport_bottom {
+                        wh = (viewport_bottom - wy).max(0.0);
+                    }
+                }
+
+                let hovering = self.cursor_x >= wx && self.cursor_x <= wx + ww
+                    && self.cursor_y >= wy && self.cursor_y <= wy + wh;
                 let col = if hovering { hover_bg } else { bg };
 
                 widgets.push(AppWidget {
-                    x: base.x,
-                    y: base.y,
-                    w: base.w,
-                    h: base.h,
+                    x: wx,
+                    y: wy,
+                    w: ww,
+                    h: wh,
                     color: col,
                     hover_color: hover_bg,
                     hovering,
@@ -410,6 +454,17 @@ impl FilesystemApp {
                 };
                 let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
 
+                let final_button_bounds = if is_page_content {
+                    Some([
+                        0.0,
+                        content_y,
+                        self.width as f32,
+                        content_y + content_h,
+                    ])
+                } else {
+                    None
+                };
+
                 text_items.push(TextItem::new(
                     &mut self.font_system,
                     label,
@@ -422,12 +477,33 @@ impl FilesystemApp {
                         (label_color[2] * 255.0) as u8,
                     ),
                     None,
-                    None,
+                    final_button_bounds,
                 ));
 
                 page_buttons.push((btn.clone(), action.clone()));
             }
             for (text, size, x, y, col, font, bounds) in &pc_part.texts {
+                let final_bounds = if is_page_content {
+                    let viewport_top = content_y;
+                    let viewport_bottom = content_y + content_h;
+                    match bounds {
+                        Some(b) => Some([
+                            b[0],
+                            b[1].max(viewport_top),
+                            b[2],
+                            b[3].min(viewport_bottom),
+                        ]),
+                        None => Some([
+                            0.0,
+                            viewport_top,
+                            self.width as f32,
+                            viewport_bottom,
+                        ]),
+                    }
+                } else {
+                    *bounds
+                };
+
                 text_items.push(TextItem::new(
                     &mut self.font_system,
                     text,
@@ -440,7 +516,7 @@ impl FilesystemApp {
                         (col[2] * 255.0) as u8,
                     ),
                     font.as_deref(),
-                    *bounds,
+                    final_bounds,
                 ));
             }
         }

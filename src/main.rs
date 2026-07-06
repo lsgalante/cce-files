@@ -240,14 +240,17 @@ impl FilesystemApp {
             let accent = [0.36, 0.56, 0.38, 1.0];
             let text_fg = [0.83, 0.83, 0.83, 1.0];
 
+            let btn_h = cce_ui::layout::button_height();
+            let btn_y = bar_y + (select_bar_h - btn_h) / 2.0;
+
             // Cancel button
             let cancel_x = self.width as f32 - 180.0;
             pc.button(
                 "Cancel",
                 cancel_x,
-                bar_y + 10.0,
+                btn_y,
                 70.0,
-                28.0,
+                btn_h,
                 [0.25, 0.12, 0.12, 0.5],
                 [0.35, 0.15, 0.15, 0.8],
                 text_fg,
@@ -260,9 +263,9 @@ impl FilesystemApp {
             pc.button(
                 button_label,
                 open_x,
-                bar_y + 10.0,
+                btn_y,
                 80.0,
-                28.0,
+                btn_h,
                 accent,
                 [0.46, 0.66, 0.48, 1.0],
                 [0.10, 0.16, 0.11, 1.0],
@@ -307,7 +310,7 @@ impl FilesystemApp {
 
         // Gather open-with dialog backdrop & dialog panel if active (open_with_dialog uses textbox rendering manually but we can gather its other quads/texts)
         let mut dialog_pc = pages::PageContent::new();
-        if let Some((_path, _textbox)) = &mut self.open_with_dialog {
+        if let Some((_path, textbox)) = &mut self.open_with_dialog {
             let dialog_w = 400.0;
             let dialog_h = 160.0;
             let dialog_x = (self.width as f32 - dialog_w) / 2.0;
@@ -325,18 +328,24 @@ impl FilesystemApp {
             // Description
             dialog_pc.text("Enter command:", dialog_x + 20.0, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
 
-            // Textbox quads & labels are rendered via textbox.all_quads inside the layout, so we'll grab them from the textbox child widget since textbox is linked to root_window.
+            // Set textbox position dynamically using configured textbox height
+            let tb_x = dialog_x + 20.0;
+            let tb_y = dialog_y + 60.0;
+            let tb_w = dialog_w - 40.0;
+            let tb_h = cce_ui::layout::textbox_height();
+            textbox.set_rect(tb_x, tb_y, tb_w, tb_h);
 
             // Render Buttons: Cancel & Open
+            let btn_h = cce_ui::layout::button_height();
             let btn_cancel_x = dialog_x + dialog_w - 180.0;
-            let btn_cancel_y = dialog_y + dialog_h - 44.0;
+            let btn_cancel_y = dialog_y + dialog_h - btn_h - 16.0;
             let btn_cancel_w = 70.0;
-            let btn_cancel_h = 28.0;
+            let btn_cancel_h = btn_h;
 
             let btn_open_x = dialog_x + dialog_w - 100.0;
-            let btn_open_y = dialog_y + dialog_h - 44.0;
+            let btn_open_y = dialog_y + dialog_h - btn_h - 16.0;
             let btn_open_w = 80.0;
-            let btn_open_h = 28.0;
+            let btn_open_h = btn_h;
 
             let cancel_hover = self.cursor_x >= btn_cancel_x && self.cursor_x <= btn_cancel_x + btn_cancel_w
                 && self.cursor_y >= btn_cancel_y && self.cursor_y <= btn_cancel_y + btn_cancel_h;
@@ -759,7 +768,7 @@ impl Application for FilesystemApp {
                                 command.arg(arg);
                             }
                             command.arg(&path);
-                            let _ = command.spawn();
+                            let _ = cce_ui::process::spawn_detached(command);
                         }
                     }
                 }
@@ -925,17 +934,18 @@ impl Application for FilesystemApp {
             let tb_x = dialog_x + 20.0;
             let tb_y = dialog_y + 60.0;
             let tb_w = dialog_w - 40.0;
-            let tb_h = 28.0;
+            let tb_h = cce_ui::layout::textbox_height();
 
+            let btn_h = cce_ui::layout::button_height();
             let btn_cancel_x = dialog_x + dialog_w - 180.0;
-            let btn_cancel_y = dialog_y + dialog_h - 44.0;
+            let btn_cancel_y = dialog_y + dialog_h - btn_h - 16.0;
             let btn_cancel_w = 70.0;
-            let btn_cancel_h = 28.0;
+            let btn_cancel_h = btn_h;
 
             let btn_open_x = dialog_x + dialog_w - 100.0;
-            let btn_open_y = dialog_y + dialog_h - 44.0;
+            let btn_open_y = dialog_y + dialog_h - btn_h - 16.0;
             let btn_open_w = 80.0;
-            let btn_open_h = 28.0;
+            let btn_open_h = btn_h;
 
             if state == ElementState::Pressed {
                 let clicked_inside = pos.x >= dialog_x && pos.x <= dialog_x + dialog_w && pos.y >= dialog_y && pos.y <= dialog_y + dialog_h;

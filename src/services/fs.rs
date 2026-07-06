@@ -387,7 +387,7 @@ pub fn save_last_dir_internal(dir: &Path) {
 }
 
 pub fn get_mime_type(path: &Path) -> Option<String> {
-    if path.is_dir() && path.join("state.json").exists() {
+    if path.is_dir() && (path.join("state.json").exists() || path.join("state.kdl").exists()) {
         return Some("application/x-cce-project".to_string());
     }
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -539,7 +539,7 @@ pub fn open_file(path: &Path) {
                         command.arg(arg);
                     }
                     command.arg(path);
-                    if command.spawn().is_ok() {
+                    if cce_ui::process::spawn_detached(command).is_ok() {
                         opened = true;
                     }
                 }
@@ -547,9 +547,9 @@ pub fn open_file(path: &Path) {
         }
     }
     if !opened {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn();
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path);
+        let _ = cce_ui::process::spawn_detached(command);
     }
 }
 

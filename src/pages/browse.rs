@@ -43,7 +43,7 @@ impl Default for BrowseState {
             search_box: cce_ui::widget::TextBox::new(String::new())
                 .with_max_width(None)
                 .with_placeholder("Search"),
-            list_box: cce_ui::widget::List::new(28.0, 2.0),
+            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0),
             selected: None,
             breadcrumb,
             save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
@@ -88,7 +88,7 @@ pub enum BrowseNavigation {
 }
 
 pub fn is_project_dir(path: &Path) -> bool {
-    path.is_dir() && path.join("state.json").exists()
+    path.is_dir() && (path.join("state.json").exists() || path.join("state.kdl").exists())
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     layout.init(client_x, client_y, client_w, client_h);
 
     let breadcrumb_h = 24.0;
-    let textbox_h = 28.0;
+    let textbox_h = cce_ui::layout::textbox_height();
 
     // 1. Allocate and render Breadcrumb
     let (bx, by, bw, bh) = layout.allocate(client_w, breadcrumb_h);
@@ -265,7 +265,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
                 list_x + 4.0,
                 draw_y,
                 list_w - 24.0,
-                28.0,
+                cce_ui::layout::button_height(),
                 bg,
                 hover_bg,
                 fg,
@@ -273,7 +273,11 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
             );
 
             // Draw contents inside the button boundary:
-            pc.text(icon, list_x + 12.0, draw_y + 7.0, 13.0, fg);
+            let row_h = cce_ui::layout::button_height();
+            let y_text_13 = cce_ui::layout::center_text_y(draw_y, row_h, 13.0);
+            let y_text_11 = cce_ui::layout::center_text_y(draw_y, row_h, 11.0);
+
+            pc.text(icon, list_x + 12.0, y_text_13, 13.0, fg);
             
             let show_size = list_w > 400.0;
             let show_perm = list_w > 480.0;
@@ -300,15 +304,15 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
                 entry.name.clone()
             };
 
-            pc.text(&name_truncated, list_x + 32.0, draw_y + 7.0, 13.0, fg);
+            pc.text(&name_truncated, list_x + 32.0, y_text_13, 13.0, fg);
             if show_size {
-                pc.text(&size_str, list_x + list_w - 290.0, draw_y + 8.0, 11.0, text_dim);
+                pc.text(&size_str, list_x + list_w - 290.0, y_text_11, 11.0, text_dim);
             }
             if show_perm {
-                pc.text(&perm_str, list_x + list_w - 210.0, draw_y + 8.0, 11.0, text_dim);
+                pc.text(&perm_str, list_x + list_w - 210.0, y_text_11, 11.0, text_dim);
             }
             if show_modified {
-                pc.text(&entry.modified, list_x + list_w - 120.0, draw_y + 8.0, 11.0, text_dim);
+                pc.text(&entry.modified, list_x + list_w - 120.0, y_text_11, 11.0, text_dim);
             }
         }
     }
@@ -437,7 +441,7 @@ mod tests {
                 })
                 .collect(),
             search_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
-            list_box: cce_ui::widget::List::new(28.0, 2.0),
+            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0),
             ..BrowseState::default()
         }
     }
@@ -511,21 +515,32 @@ mod tests {
         let unique_dir = std::env::temp_dir().join(format!("clear_test_dir_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
         std::fs::create_dir_all(&unique_dir).unwrap();
         
-        // Initially, path is a directory but doesn't have state.json
+        // Initially, path is a directory but doesn't have state.json or state.kdl
         assert!(!is_project_dir(&unique_dir));
         
         // Create state.json
-        let file_path = unique_dir.join("state.json");
-        std::fs::write(&file_path, "{}").unwrap();
+        let file_path_json = unique_dir.join("state.json");
+        std::fs::write(&file_path_json, "{}").unwrap();
         
         // Now it should be recognized as a project dir
         assert!(is_project_dir(&unique_dir));
         
-        // If it's a file rather than a directory, even if named state.json, it shouldn't be a project dir itself
-        assert!(!is_project_dir(&file_path));
+        // Remove state.json and verify it's not a project dir
+        std::fs::remove_file(&file_path_json).unwrap();
+        assert!(!is_project_dir(&unique_dir));
+
+        // Create state.kdl
+        let file_path_kdl = unique_dir.join("state.kdl");
+        std::fs::write(&file_path_kdl, "name \"test\"").unwrap();
+
+        // Now it should be recognized as a project dir
+        assert!(is_project_dir(&unique_dir));
+
+        // If it's a file rather than a directory, even if named state.kdl, it shouldn't be a project dir itself
+        assert!(!is_project_dir(&file_path_kdl));
 
         // Clean up
-        let _ = std::fs::remove_file(&file_path);
+        let _ = std::fs::remove_file(&file_path_kdl);
         let _ = std::fs::remove_dir(&unique_dir);
     }
 

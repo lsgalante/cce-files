@@ -112,11 +112,14 @@ impl NetworkState {
     }
 }
 
-pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
+pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut cce_ui::widget::Dropdown, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
 
-    // Render the Breadcrumb widget into PageContent
-    cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, cw - 16.0, 24.0, ctx);
+    // Render the Breadcrumb and Dropdown next to it
+    let dropdown_w = 120.0;
+    let breadcrumb_w = cw - 16.0 - dropdown_w - 12.0;
+    cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
+    cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + 12.0, cy + 6.0, dropdown_w, 24.0, ctx);
 
     // Check if directory changed, or if last_dir is empty, and repopulate
     if state.last_dir != browse.current_dir || state.graph.get_nodes().is_empty() {

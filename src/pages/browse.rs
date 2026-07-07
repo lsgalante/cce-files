@@ -177,7 +177,7 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
+pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Dropdown, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
     let text_dim = cce_ui::color::TEXT_DIM;
 
@@ -194,9 +194,12 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let breadcrumb_h = 24.0;
     let textbox_h = cce_ui::layout::textbox_height();
 
-    // 1. Allocate and render Breadcrumb
-    let (bx, by, bw, bh) = layout.allocate(client_w, breadcrumb_h);
+    // 1. Allocate and render Breadcrumb and Dropdown next to it
+    let dropdown_w = 120.0;
+    let breadcrumb_w = client_w - dropdown_w - gap;
+    let (bx, by, bw, bh) = layout.allocate(breadcrumb_w, breadcrumb_h);
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
+    cce_ui::layout::render_widget(&mut pc, view_dropdown, bx + bw + gap, by, dropdown_w, breadcrumb_h, ctx);
 
     // 2. Allocate and render List (ScrollBox)
     // The scrolling list height occupies the remaining vertical space:

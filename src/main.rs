@@ -201,7 +201,19 @@ impl cce_ui::widget::Element for BrowseContainer {
         let textbox_h = 24.0;
 
         unsafe {
-            (*self.breadcrumb).set_rect(x, y, w, breadcrumb_h);
+            // pages/browse::view re-renders the breadcrumb and the view dropdown on top of this
+            // container's paint. Position the breadcrumb here to EXACTLY match that layout
+            // (inset by the page margin, reserving the dropdown's width beside it) so this
+            // container's copy sits fully behind the page copy instead of leaking a dark strip
+            // behind the dropdown and margins. Keep these constants in sync with pages/browse.rs.
+            let page_margin = 12.0;
+            let dropdown_w = 120.0;
+            let page_breadcrumb_h = 24.0;
+            let inner_x = x + page_margin;
+            let inner_y = y + page_margin;
+            let inner_w = w - 2.0 * page_margin;
+            let bc_w = inner_w - dropdown_w - gap;
+            (*self.breadcrumb).set_rect(inner_x, inner_y, bc_w, page_breadcrumb_h);
             let list_h = if self.select_mode {
                 h - breadcrumb_h - textbox_h - 2.0 * gap
             } else {

@@ -1703,15 +1703,6 @@ impl Application for FilesystemApp {
                     Some(".") => {
                         return Some(Message::Browse(pages::browse::BrowseMessage::ToggleHidden));
                     }
-                    Some("/") => {
-                        self.browse.list_box.search_visible = true;
-                        let (lx, ly, lw, lh) = (self.browse.list_box.base.x, self.browse.list_box.base.y, self.browse.list_box.base.w, self.browse.list_box.base.h);
-                        self.browse.list_box.set_rect(lx, ly, lw, lh);
-                        self.browse.list_box.search_box.focus();
-                        self.ui_context.set_focused(&mut self.browse.list_box.search_box);
-                        *needs_rebuild = true;
-                        self.needs_rebuild = true;
-                    }
                     _ => {}
                 }
             }

@@ -369,6 +369,16 @@ impl FilesystemApp {
     }
 
     fn rebuild_layout(&mut self) {
+        // Refresh the container child pointers on every rebuild. They point into
+        // self.browse / self.network, whose addresses change when the app value is
+        // first moved out of new(); re-taking them here (where self is at its final
+        // address) keeps them valid regardless of return-value optimization.
+        self.browse_container.breadcrumb = &mut self.browse.breadcrumb;
+        self.browse_container.list_box = &mut self.browse.list_box;
+        self.browse_container.save_name_box = &mut self.browse.save_name_box;
+        self.network_container.breadcrumb = &mut self.network.breadcrumb;
+        self.network_container.graph = &mut self.network.graph;
+
         self.ui_context.clear_hierarchy();
         self.browse.save_name_box.prepare_text(&mut self.font_system);
         self.browse.list_box.prepare_text(&mut self.font_system);
@@ -913,7 +923,10 @@ impl Application for FilesystemApp {
         // Start initial directory loading via FsService
         app.fs_service.send(services::fs::FsRequest::ReadLastDir);
 
-        app.rebuild_layout();
+        // NOTE: do not call rebuild_layout() here. This value is moved out of new()
+        // into the engine, which changes its address; the container/splitter widgets
+        // capture raw self-pointers during rebuild, so the first rebuild must happen
+        // after the move (the engine triggers it on the first frame via needs_rebuild).
         app
     }
 

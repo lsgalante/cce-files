@@ -22,7 +22,6 @@ pub struct BrowseState {
     pub all_entries: Vec<DirEntry>,
     pub entries: Vec<DirEntry>,
     pub show_hidden: bool,
-    pub search_box: cce_ui::widget::TextBox,
     pub list_box: cce_ui::widget::List,
     pub selected: Option<usize>,
     pub breadcrumb: Breadcrumb,
@@ -40,33 +39,32 @@ impl Default for BrowseState {
             all_entries: Vec::new(),
             entries: Vec::new(),
             show_hidden: false,
-            search_box: cce_ui::widget::TextBox::new(String::new())
-                .with_max_width(None)
-                .with_placeholder("Search"),
-            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0).with_columns(
-                vec![
-                    cce_ui::widget::ListColumn {
-                        name: "Name".to_string(),
-                        width: cce_ui::widget::ColumnWidth::Flex,
-                        justification: cce_ui::widget::Justification::Left,
-                    },
-                    cce_ui::widget::ListColumn {
-                        name: "Size".to_string(),
-                        width: cce_ui::widget::ColumnWidth::RightOffset(290.0),
-                        justification: cce_ui::widget::Justification::Left,
-                    },
-                    cce_ui::widget::ListColumn {
-                        name: "Permissions".to_string(),
-                        width: cce_ui::widget::ColumnWidth::RightOffset(210.0),
-                        justification: cce_ui::widget::Justification::Left,
-                    },
-                    cce_ui::widget::ListColumn {
-                        name: "Modified".to_string(),
-                        width: cce_ui::widget::ColumnWidth::RightOffset(120.0),
-                        justification: cce_ui::widget::Justification::Left,
-                    },
-                ],
-            ),
+            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0)
+                .with_search(true)
+                .with_columns(
+                    vec![
+                        cce_ui::widget::ListColumn {
+                            name: "Name".to_string(),
+                            width: cce_ui::widget::ColumnWidth::Flex,
+                            justification: cce_ui::widget::Justification::Left,
+                        },
+                        cce_ui::widget::ListColumn {
+                            name: "Size".to_string(),
+                            width: cce_ui::widget::ColumnWidth::RightOffset(290.0),
+                            justification: cce_ui::widget::Justification::Left,
+                        },
+                        cce_ui::widget::ListColumn {
+                            name: "Permissions".to_string(),
+                            width: cce_ui::widget::ColumnWidth::RightOffset(210.0),
+                            justification: cce_ui::widget::Justification::Left,
+                        },
+                        cce_ui::widget::ListColumn {
+                            name: "Modified".to_string(),
+                            width: cce_ui::widget::ColumnWidth::RightOffset(120.0),
+                            justification: cce_ui::widget::Justification::Left,
+                        },
+                    ],
+                ),
             selected: None,
             breadcrumb,
             save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
@@ -203,8 +201,11 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Dropdow
 
     // 2. Allocate and render List (ScrollBox)
     // The scrolling list height occupies the remaining vertical space:
-    // list_h = client_h - breadcrumb_h - textbox_h - (2 * gap)
-    let list_h_val = client_h - breadcrumb_h - textbox_h - 2.0 * gap;
+    let list_h_val = if select_mode {
+        client_h - breadcrumb_h - textbox_h - 2.0 * gap
+    } else {
+        client_h - breadcrumb_h - gap
+    };
     let (list_x, list_y, list_w, list_h) = layout.allocate(client_w, list_h_val);
 
     // Update List columns dynamically based on list width
@@ -299,27 +300,10 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Dropdow
     pc.text(&count_str, count_x, count_y, 11.0, text_dim);
 
     // 3. Allocate and render Textbox(es)
-    let (tx, ty, tw, th) = layout.allocate(client_w, textbox_h);
-
     if select_mode {
-        // Two columns at the bottom: Search and File Name
-        let sec_w = (tw - 12.0) / 2.0;
-
-        // Left column: Search
-        let search_x = tx;
-        let search_w = sec_w;
-        state.search_box.set_row_rect(search_x, search_w);
-        cce_ui::layout::render_widget(&mut pc, &mut state.search_box, search_x, ty, search_w, th, ctx);
-
-        // Right column: File Name
-        let filename_x = tx + sec_w + 12.0;
-        let filename_w = sec_w;
-        state.save_name_box.set_row_rect(filename_x, filename_w);
-        cce_ui::layout::render_widget(&mut pc, &mut state.save_name_box, filename_x, ty, filename_w, th, ctx);
-    } else {
-        // Full width search textbox
-        state.search_box.set_row_rect(tx, tw);
-        cce_ui::layout::render_widget(&mut pc, &mut state.search_box, tx, ty, tw, th, ctx);
+        let (tx, ty, tw, th) = layout.allocate(client_w, textbox_h);
+        state.save_name_box.set_row_rect(tx, tw);
+        cce_ui::layout::render_widget(&mut pc, &mut state.save_name_box, tx, ty, tw, th, ctx);
     }
 
     pc
@@ -328,10 +312,10 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Dropdow
 // ── Update ──────────────────────────────────────────────────────────
 
 fn apply_filters(state: &mut BrowseState) {
-    let search_query = if state.search_box.editing {
-        state.search_box.edit_buffer.to_lowercase()
+    let search_query = if state.list_box.search_box.editing {
+        state.list_box.search_box.edit_buffer.to_lowercase()
     } else {
-        state.search_box.text.to_lowercase()
+        state.list_box.search_box.text.to_lowercase()
     };
     state.entries = state
         .all_entries
@@ -351,7 +335,7 @@ fn apply_filters(state: &mut BrowseState) {
 pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::services::fs::FsRequest> {
     match msg {
         BrowseMessage::SearchChanged(q) => {
-            state.search_box.text = q;
+            state.list_box.search_box.text = q;
             apply_filters(state);
             None
         }
@@ -373,8 +357,9 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
         BrowseMessage::DirectoryLoaded(path, entries) => {
             state.current_dir = path.clone();
             state.all_entries = entries;
-            state.search_box.text.clear();
-            state.search_box.edit_buffer.clear();
+            state.list_box.search_box.text.clear();
+            state.list_box.search_box.edit_buffer.clear();
+            state.list_box.search_visible = false;
             apply_filters(state);
             state.update_breadcrumb();
             Some(crate::services::fs::FsRequest::SaveLastDir(path))
@@ -445,8 +430,7 @@ mod tests {
                     modified: String::new(),
                 })
                 .collect(),
-            search_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
-            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0),
+            list_box: cce_ui::widget::List::new(cce_ui::layout::button_height(), 2.0).with_search(true),
             ..BrowseState::default()
         }
     }

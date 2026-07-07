@@ -127,7 +127,7 @@ impl FilesystemApp {
     fn rebuild_layout(&mut self) {
         self.ui_context.clear_hierarchy();
         self.browse.save_name_box.prepare_text(&mut self.font_system);
-        self.browse.search_box.prepare_text(&mut self.font_system);
+        self.browse.list_box.prepare_text(&mut self.font_system);
 
         let mut widgets = Vec::new();
         let mut text_items = Vec::new();
@@ -145,7 +145,7 @@ impl FilesystemApp {
         self.paginator.clear_children(&mut self.ui_context); self.paginator.set_parent(None, &mut self.ui_context);
         self.view_dropdown.clear_children(&mut self.ui_context); self.view_dropdown.set_parent(None, &mut self.ui_context);
         self.preview.clear_children(&mut self.ui_context); self.preview.set_parent(None, &mut self.ui_context);
-        self.browse.search_box.clear_children(&mut self.ui_context); self.browse.search_box.set_parent(None, &mut self.ui_context);
+
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
         self.browse.list_box.clear_children(&mut self.ui_context); self.browse.list_box.set_parent(None, &mut self.ui_context);
         self.browse.breadcrumb.clear_children(&mut self.ui_context); self.browse.breadcrumb.set_parent(None, &mut self.ui_context);
@@ -185,8 +185,6 @@ impl FilesystemApp {
                 link_parent_child(&mut self.root_window, &mut self.browse.list_box, &mut self.ui_context);
                 if self.select_mode {
                     link_parent_child(&mut self.root_window, &mut self.browse.save_name_box, &mut self.ui_context);
-                } else {
-                    link_parent_child(&mut self.root_window, &mut self.browse.search_box, &mut self.ui_context);
                 }
             }
             Page::Network => {
@@ -1055,9 +1053,6 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
-            if self.browse.search_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
-                changed = true;
-            }
             if self.select_mode {
                 if self.browse.save_name_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                     changed = true;
@@ -1325,13 +1320,6 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
-            if self.browse.search_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
-                if state == ElementState::Pressed {
-                    self.ui_context.set_focused(&mut self.browse.search_box);
-                }
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
             if self.select_mode {
                 if self.browse.save_name_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                     if state == ElementState::Pressed {
@@ -1491,10 +1479,10 @@ impl Application for FilesystemApp {
         }
 
         if state == ElementState::Pressed {
-            let clicked_search = self.current_page == Page::Browse && self.browse.search_box.hit_test(pos.x, pos.y, &self.ui_context);
+            let clicked_search = self.current_page == Page::Browse && self.browse.list_box.search_enabled && self.browse.list_box.search_visible && self.browse.list_box.search_box.hit_test(pos.x, pos.y, &self.ui_context);
             let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.browse.save_name_box.hit_test(pos.x, pos.y, &self.ui_context);
-            if !clicked_search {
-                self.browse.search_box.unfocus();
+            if !clicked_search && self.browse.list_box.search_enabled {
+                self.browse.list_box.search_box.unfocus();
             }
             if !clicked_save_name {
                 self.browse.save_name_box.unfocus();
@@ -1607,16 +1595,23 @@ impl Application for FilesystemApp {
         }
 
         // If the search textbox is focused, forward key inputs to it
-        if self.current_page == Page::Browse && self.browse.search_box.editing {
-            if self.browse.search_box.keyboard_input(event, &mut self.ui_context) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                if self.browse.search_box.take_change() {
-                    return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(
-                        self.browse.search_box.text.clone()
-                    )));
+        if self.current_page == Page::Browse {
+            let is_open_search = !self.browse.list_box.search_visible && {
+                let open_key = cce_ui::color::list_open_search_key();
+                event.state == ElementState::Pressed && cce_ui::widget::match_key_shortcut(event, &open_key)
+            };
+            
+            if self.browse.list_box.search_visible || is_open_search {
+                if self.browse.list_box.keyboard_input(event, &mut self.ui_context) {
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    if self.browse.list_box.search_box.take_change() {
+                        return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(
+                            self.browse.list_box.search_box.text.clone()
+                        )));
+                    }
+                    return None;
                 }
-                return None;
             }
         }
 
@@ -1709,8 +1704,11 @@ impl Application for FilesystemApp {
                         return Some(Message::Browse(pages::browse::BrowseMessage::ToggleHidden));
                     }
                     Some("/") => {
-                        self.browse.search_box.focus();
-                        self.ui_context.set_focused(&mut self.browse.search_box);
+                        self.browse.list_box.search_visible = true;
+                        let (lx, ly, lw, lh) = (self.browse.list_box.base.x, self.browse.list_box.base.y, self.browse.list_box.base.w, self.browse.list_box.base.h);
+                        self.browse.list_box.set_rect(lx, ly, lw, lh);
+                        self.browse.list_box.search_box.focus();
+                        self.ui_context.set_focused(&mut self.browse.list_box.search_box);
                         *needs_rebuild = true;
                         self.needs_rebuild = true;
                     }

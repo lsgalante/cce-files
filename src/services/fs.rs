@@ -325,11 +325,7 @@ fn infer_file_type(name: &str, is_dir: bool) -> String {
 /// Base config directory for cce: `$XDG_CONFIG_HOME/cce`, else `$HOME/.config/cce`.
 /// Returns `None` only when neither variable is usable.
 pub fn cce_config_dir() -> Option<PathBuf> {
-    let base = match std::env::var("XDG_CONFIG_HOME") {
-        Ok(xdg) if !xdg.is_empty() => PathBuf::from(xdg),
-        _ => PathBuf::from(std::env::var("HOME").ok()?).join(".config"),
-    };
-    Some(base.join("cce"))
+    Some(cce_ui::config::cce_config_dir())
 }
 
 fn get_last_dir_file_path() -> Option<PathBuf> {

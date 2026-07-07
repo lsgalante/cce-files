@@ -32,10 +32,6 @@ impl Default for NetworkState {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum NetworkMessage {}
-
 impl NetworkState {
     pub fn populate_graph(&mut self, current_dir: &Path, entries: &[DirEntry]) {
         let mut nodes = Vec::new();
@@ -169,9 +165,6 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut 
 
     pc
 }
-
-#[allow(dead_code)]
-pub fn update(_state: &mut NetworkState, _msg: NetworkMessage) {}
 
 #[cfg(test)]
 mod tests {

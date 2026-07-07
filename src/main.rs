@@ -11,18 +11,116 @@ use cce_files::{Message, pages, services};
 use cce_files::pages::Page;
 use cce_files::pages::browse::is_project_dir;
 
+// ── Layout constants ────────────────────────────────────────────────
+
+const ROW_H: f32 = 24.0;        // context-menu / breadcrumb row height
+const DIALOG_W: f32 = 400.0;
+const DIALOG_H: f32 = 160.0;
+const MENU_MIN_W: f32 = 120.0;
+const MENU_CHAR_W: f32 = 7.5;   // approximate glyph advance used for menu sizing
+
+/// Context-menu width/height for a given set of options.
+fn context_menu_size(options: &[(String, Option<Message>)]) -> (f32, f32) {
+    let max_len = options.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
+    let w = ((max_len as f32 * MENU_CHAR_W) + 24.0).max(MENU_MIN_W);
+    let h = options.len() as f32 * ROW_H;
+    (w, h)
+}
+
+/// Computed rects for the "Open with…" modal, so layout and hit-testing agree.
+struct OpenWithRects {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    tb: (f32, f32, f32, f32),
+    cancel: (f32, f32, f32, f32),
+    open: (f32, f32, f32, f32),
+}
+
+fn open_with_rects(win_w: f32, win_h: f32) -> OpenWithRects {
+    let x = (win_w - DIALOG_W) / 2.0;
+    let y = (win_h - DIALOG_H) / 2.0;
+    let tb_h = cce_ui::layout::textbox_height();
+    let btn_h = cce_ui::layout::button_height();
+    OpenWithRects {
+        x,
+        y,
+        w: DIALOG_W,
+        h: DIALOG_H,
+        tb: (x + 20.0, y + 60.0, DIALOG_W - 40.0, tb_h),
+        cancel: (x + DIALOG_W - 180.0, y + DIALOG_H - btn_h - 16.0, 70.0, btn_h),
+        open: (x + DIALOG_W - 100.0, y + DIALOG_H - btn_h - 16.0, 80.0, btn_h),
+    }
+}
+
+/// Clip a vertical span `[y, y+h)` to the viewport `[top, bottom)`.
+/// Returns the clipped `(y, h)`, or `None` if fully outside.
+fn clip_to_viewport(y: f32, h: f32, top: f32, bottom: f32) -> Option<(f32, f32)> {
+    if y >= bottom || y + h <= top {
+        return None;
+    }
+    let mut ny = y;
+    let mut nh = h;
+    if ny < top {
+        let diff = top - ny;
+        ny = top;
+        nh = (nh - diff).max(0.0);
+    }
+    if ny + nh > bottom {
+        nh = (bottom - ny).max(0.0);
+    }
+    Some((ny, nh))
+}
+
+/// Clip a text/label box against overlay rects so it does not bleed through
+/// popovers/menus/dialogs. Returns the adjusted clip bounds, or `None` if the
+/// box is fully covered (should be discarded).
+fn occlude_against(
+    mut bounds: [f32; 4],
+    t_min_x: f32,
+    t_max_x: f32,
+    t_min_y: f32,
+    t_max_y: f32,
+    overlays: &[&pages::PageContent],
+) -> Option<[f32; 4]> {
+    for overlay_pc in overlays {
+        for (_, ox, oy, ow, oh, _, _) in &overlay_pc.rects {
+            let o_min_x = *ox;
+            let o_max_x = *ox + *ow;
+            let o_min_y = *oy;
+            let o_max_y = *oy + *oh;
+
+            if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
+                if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
+                    return None;
+                }
+                if o_min_x > t_min_x && o_min_x < t_max_x {
+                    bounds[2] = bounds[2].min(o_min_x);
+                }
+                if o_max_x > t_min_x && o_max_x < t_max_x {
+                    bounds[0] = bounds[0].max(o_max_x);
+                }
+                if o_min_y > t_min_y && o_min_y < t_max_y {
+                    bounds[3] = bounds[3].min(o_min_y);
+                }
+                if o_max_y > t_min_y && o_max_y < t_max_y {
+                    bounds[1] = bounds[1].max(o_max_y);
+                }
+            }
+        }
+    }
+    Some(bounds)
+}
+
 // ── State ───────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 struct AppWidget {
     x: f32,
     y: f32,
     w: f32,
     h: f32,
     color: [f32; 4],
-    hover_color: [f32; 4],
-    hovering: bool,
-    action: Option<Message>,
     radius: f32,
     corners: (bool, bool, bool, bool),
 }
@@ -38,7 +136,150 @@ struct ContextMenu {
     hovered: Option<usize>,
 }
 
-#[allow(dead_code)]
+struct BrowseContainer {
+    pub base: cce_ui::widget::Widget,
+    pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
+    pub breadcrumb: *mut cce_ui::widget::Breadcrumb,
+    pub list_box: *mut cce_ui::widget::List,
+    pub save_name_box: *mut cce_ui::widget::TextBox,
+    pub select_mode: bool,
+}
+
+impl cce_ui::widget::Element for BrowseContainer {
+    cce_ui::impl_widget_base!(BrowseContainer);
+
+    fn color(&self) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
+    fn children(&self, _ctx: &cce_ui::widget::UiContext) -> Vec<*mut (dyn cce_ui::widget::Element + 'static)> {
+        let mut list = vec![self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static), self.list_box as *mut (dyn cce_ui::widget::Element + 'static)];
+        if self.select_mode {
+            list.push(self.save_name_box as *mut (dyn cce_ui::widget::Element + 'static));
+        }
+        list
+    }
+
+    fn parent(&self, _ctx: &cce_ui::widget::UiContext) -> Option<*mut (dyn cce_ui::widget::Element + 'static)> {
+        self.parent
+    }
+
+    fn set_parent(&mut self, parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>, ctx: &mut cce_ui::widget::UiContext) {
+        self.parent = parent;
+        if parent.is_some() {
+            let self_ptr = self as *mut Self;
+            let self_id = self.base.id();
+            unsafe {
+                let bc_id = (*self.breadcrumb).base().unwrap().id();
+                ctx.register_widget(bc_id, self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static));
+                ctx.link_ids(self_id, bc_id);
+                (*self.breadcrumb).set_parent(Some(self_ptr), ctx);
+
+                let lb_id = (*self.list_box).base().unwrap().id();
+                ctx.register_widget(lb_id, self.list_box as *mut (dyn cce_ui::widget::Element + 'static));
+                ctx.link_ids(self_id, lb_id);
+                (*self.list_box).set_parent(Some(self_ptr), ctx);
+
+                if self.select_mode {
+                    let sn_id = (*self.save_name_box).base().unwrap().id();
+                    ctx.register_widget(sn_id, self.save_name_box as *mut (dyn cce_ui::widget::Element + 'static));
+                    ctx.link_ids(self_id, sn_id);
+                    (*self.save_name_box).set_parent(Some(self_ptr), ctx);
+                }
+            }
+        }
+    }
+
+    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.base.x = x;
+        self.base.y = y;
+        self.base.w = w;
+        self.base.h = h;
+
+        let gap = 12.0;
+        let breadcrumb_h = cce_ui::layout::button_height();
+        let textbox_h = 24.0;
+
+        unsafe {
+            (*self.breadcrumb).set_rect(x, y, w, breadcrumb_h);
+            let list_h = if self.select_mode {
+                h - breadcrumb_h - textbox_h - 2.0 * gap
+            } else {
+                h - breadcrumb_h - gap
+            };
+            (*self.list_box).set_rect(x, y + breadcrumb_h + gap, w, list_h);
+
+            if self.select_mode {
+                (*self.save_name_box).set_rect(x, y + h - textbox_h, w, textbox_h);
+                (*self.save_name_box).set_row_rect(x, w);
+            }
+        }
+    }
+}
+
+unsafe impl Send for BrowseContainer {}
+unsafe impl Sync for BrowseContainer {}
+
+struct NetworkContainer {
+    pub base: cce_ui::widget::Widget,
+    pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
+    pub breadcrumb: *mut cce_ui::widget::Breadcrumb,
+    pub graph: *mut cce_ui::widget::Graph,
+}
+
+impl cce_ui::widget::Element for NetworkContainer {
+    cce_ui::impl_widget_base!(NetworkContainer);
+
+    fn color(&self) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
+    fn children(&self, _ctx: &cce_ui::widget::UiContext) -> Vec<*mut (dyn cce_ui::widget::Element + 'static)> {
+        vec![self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static), self.graph as *mut (dyn cce_ui::widget::Element + 'static)]
+    }
+
+    fn parent(&self, _ctx: &cce_ui::widget::UiContext) -> Option<*mut (dyn cce_ui::widget::Element + 'static)> {
+        self.parent
+    }
+
+    fn set_parent(&mut self, parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>, ctx: &mut cce_ui::widget::UiContext) {
+        self.parent = parent;
+        if parent.is_some() {
+            let self_ptr = self as *mut Self;
+            let self_id = self.base.id();
+            unsafe {
+                let bc_id = (*self.breadcrumb).base().unwrap().id();
+                ctx.register_widget(bc_id, self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static));
+                ctx.link_ids(self_id, bc_id);
+                (*self.breadcrumb).set_parent(Some(self_ptr), ctx);
+
+                let g_id = (*self.graph).base().unwrap().id();
+                ctx.register_widget(g_id, self.graph as *mut (dyn cce_ui::widget::Element + 'static));
+                ctx.link_ids(self_id, g_id);
+                (*self.graph).set_parent(Some(self_ptr), ctx);
+            }
+        }
+    }
+
+    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.base.x = x;
+        self.base.y = y;
+        self.base.w = w;
+        self.base.h = h;
+
+        let gap = 12.0;
+        let breadcrumb_h = cce_ui::layout::button_height();
+
+        unsafe {
+            (*self.breadcrumb).set_rect(x, y, w, breadcrumb_h);
+            (*self.graph).set_rect(x, y + breadcrumb_h + gap, w, h - breadcrumb_h - gap);
+        }
+    }
+}
+
+unsafe impl Send for NetworkContainer {}
+unsafe impl Sync for NetworkContainer {}
+
 struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
@@ -58,7 +299,6 @@ struct FilesystemApp {
     width: u32,
     height: u32,
     scale_factor: f64,
-    sender: calloop::channel::Sender<Message>,
     page_buttons: Vec<(cce_ui::widget::Button, Message)>,
     cursor_x: f32,
     cursor_y: f32,
@@ -71,6 +311,10 @@ struct FilesystemApp {
     context_menu: ContextMenu,
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::TextBox)>,
     root_window: cce_ui::widget::Backplate,
+    browse_splitter: cce_ui::widget::SplitBox,
+    network_splitter: cce_ui::widget::SplitBox,
+    browse_container: BrowseContainer,
+    network_container: NetworkContainer,
     last_click_time: std::time::Instant,
     last_clicked_idx: Option<usize>,
 }
@@ -146,6 +390,11 @@ impl FilesystemApp {
         self.view_dropdown.clear_children(&mut self.ui_context); self.view_dropdown.set_parent(None, &mut self.ui_context);
         self.preview.clear_children(&mut self.ui_context); self.preview.set_parent(None, &mut self.ui_context);
 
+        self.browse_splitter.set_parent(None, &mut self.ui_context);
+        self.network_splitter.set_parent(None, &mut self.ui_context);
+        self.browse_container.clear_children(&mut self.ui_context); self.browse_container.set_parent(None, &mut self.ui_context);
+        self.network_container.clear_children(&mut self.ui_context); self.network_container.set_parent(None, &mut self.ui_context);
+
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
         self.browse.list_box.clear_children(&mut self.ui_context); self.browse.list_box.set_parent(None, &mut self.ui_context);
         self.browse.breadcrumb.clear_children(&mut self.ui_context); self.browse.breadcrumb.set_parent(None, &mut self.ui_context);
@@ -161,9 +410,6 @@ impl FilesystemApp {
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
         let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
-        let browse_w = (usable_w - 12.0) * 0.5;
-        let preview_w = (usable_w - 12.0) * 0.5;
-        let preview_x = browse_x + browse_w + 12.0;
         let content_y = 16.0;
 
         let select_bar_h = 48.0;
@@ -177,19 +423,23 @@ impl FilesystemApp {
             link_parent_child(&mut self.root_window, &mut self.paginator, &mut self.ui_context);
         }
         link_parent_child(&mut self.root_window, &mut self.view_dropdown, &mut self.ui_context);
-        link_parent_child(&mut self.root_window, &mut self.preview, &mut self.ui_context);
 
         match self.current_page {
             Page::Browse => {
-                link_parent_child(&mut self.root_window, &mut self.browse.breadcrumb, &mut self.ui_context);
-                link_parent_child(&mut self.root_window, &mut self.browse.list_box, &mut self.ui_context);
-                if self.select_mode {
-                    link_parent_child(&mut self.root_window, &mut self.browse.save_name_box, &mut self.ui_context);
+                if self.browse_splitter.children.is_empty() {
+                    self.browse_splitter.add_child_with_proportion(&mut self.browse_container, 0.49, 100.0);
+                    self.browse_splitter.add_child_with_proportion(&mut self.preview, 0.51, 100.0);
                 }
+                link_parent_child(&mut self.root_window, &mut self.browse_splitter, &mut self.ui_context);
+                self.browse_splitter.set_rect(browse_x, content_y, usable_w, content_h);
             }
             Page::Network => {
-                link_parent_child(&mut self.root_window, &mut self.network.breadcrumb, &mut self.ui_context);
-                link_parent_child(&mut self.root_window, &mut self.network.graph, &mut self.ui_context);
+                if self.network_splitter.children.is_empty() {
+                    self.network_splitter.add_child_with_proportion(&mut self.network_container, 0.49, 100.0);
+                    self.network_splitter.add_child_with_proportion(&mut self.preview, 0.51, 100.0);
+                }
+                link_parent_child(&mut self.root_window, &mut self.network_splitter, &mut self.ui_context);
+                self.network_splitter.set_rect(browse_x, content_y, usable_w, content_h);
             }
         }
 
@@ -204,9 +454,6 @@ impl FilesystemApp {
             self.paginator.set_selected_page(page_idx);
             cce_ui::layout::render_widget(&mut dummy_pc, &mut self.paginator, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
-        if self.current_page == Page::Browse || self.current_page == Page::Network {
-            cce_ui::layout::render_widget(&mut dummy_pc, &mut self.preview, preview_x, content_y, preview_w, content_h, &mut self.ui_context);
-        }
 
         // Render root window recursively
         let mut window_pc = pages::PageContent::new();
@@ -216,15 +463,16 @@ impl FilesystemApp {
         let mut pc = pages::PageContent::new();
         match self.current_page {
             Page::Browse => {
-
-                let browse_pc = pages::browse::view(&mut self.browse, &mut self.view_dropdown, browse_x, content_y, browse_w, content_h, self.select_mode, &mut self.ui_context);
+                let (bx, by, bw, bh) = self.browse_container.rect();
+                let browse_pc = pages::browse::view(&mut self.browse, &mut self.view_dropdown, bx, by, bw, bh, self.select_mode, &mut self.ui_context);
 
                 pc.rects.extend(browse_pc.rects);
                 pc.texts.extend(browse_pc.texts);
                 pc.buttons.extend(browse_pc.buttons);
             }
             Page::Network => {
-                let network_pc = pages::network::view(&mut self.network, &self.browse, &mut self.view_dropdown, browse_x, content_y, browse_w, content_h, &mut self.ui_context);
+                let (nx, ny, nw, nh) = self.network_container.rect();
+                let network_pc = pages::network::view(&mut self.network, &self.browse, &mut self.view_dropdown, nx, ny, nw, nh, &mut self.ui_context);
 
                 pc.rects.extend(network_pc.rects);
                 pc.texts.extend(network_pc.texts);
@@ -292,12 +540,12 @@ impl FilesystemApp {
             context_menu_pc.rect(cce_ui::color::popover_bg_color(), cx + 1.0, cy + 1.0, cw - 2.0, ch - 2.0);
             // Hover highlight
             if let Some(h_idx) = self.context_menu.hovered {
-                let iy = cy + h_idx as f32 * 24.0;
+                let iy = cy + h_idx as f32 * ROW_H;
                 context_menu_pc.rect([0.20, 0.40, 0.65, 0.6], cx + 2.0, iy + 2.0, cw - 4.0, 20.0);
             }
             // Text options
             for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
-                let iy = cy + idx as f32 * 24.0 + (24.0 - 12.0) / 2.0;
+                let iy = cy + idx as f32 * ROW_H + (ROW_H - 12.0) / 2.0;
                 let text_color = if idx == 0 {
                     [0.44, 0.44, 0.47, 1.0]
                 } else if self.context_menu.hovered == Some(idx) {
@@ -312,10 +560,11 @@ impl FilesystemApp {
         // Gather open-with dialog backdrop & dialog panel if active (open_with_dialog uses textbox rendering manually but we can gather its other quads/texts)
         let mut dialog_pc = pages::PageContent::new();
         if let Some((_path, textbox)) = &mut self.open_with_dialog {
-            let dialog_w = 400.0;
-            let dialog_h = 160.0;
-            let dialog_x = (self.width as f32 - dialog_w) / 2.0;
-            let dialog_y = (self.height as f32 - dialog_h) / 2.0;
+            let r = open_with_rects(self.width as f32, self.height as f32);
+            let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
+            let (tb_x, tb_y, tb_w, tb_h) = r.tb;
+            let (btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h) = r.cancel;
+            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.open;
 
             // Semi-transparent backdrop overlay
             dialog_pc.rect([0.02, 0.02, 0.03, 0.6], 0.0, 0.0, self.width as f32, self.height as f32);
@@ -330,23 +579,7 @@ impl FilesystemApp {
             dialog_pc.text("Enter command:", dialog_x + 20.0, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
 
             // Set textbox position dynamically using configured textbox height
-            let tb_x = dialog_x + 20.0;
-            let tb_y = dialog_y + 60.0;
-            let tb_w = dialog_w - 40.0;
-            let tb_h = cce_ui::layout::textbox_height();
             textbox.set_rect(tb_x, tb_y, tb_w, tb_h);
-
-            // Render Buttons: Cancel & Open
-            let btn_h = cce_ui::layout::button_height();
-            let btn_cancel_x = dialog_x + dialog_w - 180.0;
-            let btn_cancel_y = dialog_y + dialog_h - btn_h - 16.0;
-            let btn_cancel_w = 70.0;
-            let btn_cancel_h = btn_h;
-
-            let btn_open_x = dialog_x + dialog_w - 100.0;
-            let btn_open_y = dialog_y + dialog_h - btn_h - 16.0;
-            let btn_open_w = 80.0;
-            let btn_open_h = btn_h;
 
             let cancel_hover = self.cursor_x >= btn_cancel_x && self.cursor_x <= btn_cancel_x + btn_cancel_w
                 && self.cursor_y >= btn_cancel_y && self.cursor_y <= btn_cancel_y + btn_cancel_h;
@@ -373,18 +606,9 @@ impl FilesystemApp {
                 let mut wh = *h;
 
                 if is_page_content {
-                    let viewport_top = content_y;
-                    let viewport_bottom = content_y + content_h;
-                    if wy >= viewport_bottom || wy + wh <= viewport_top {
-                        continue;
-                    }
-                    if wy < viewport_top {
-                        let diff = viewport_top - wy;
-                        wy = viewport_top;
-                        wh = (wh - diff).max(0.0);
-                    }
-                    if wy + wh > viewport_bottom {
-                        wh = (viewport_bottom - wy).max(0.0);
+                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
+                        Some((cy, ch)) => { wy = cy; wh = ch; }
+                        None => continue,
                     }
                 }
 
@@ -394,11 +618,8 @@ impl FilesystemApp {
                     w: ww,
                     h: wh,
                     color: *c,
-                    hover_color: *c,
-                    hovering: false,
                     radius: *r,
                     corners: *corners,
-                    action: None,
                 });
             }
             for (btn, action) in &pc_part.buttons {
@@ -415,18 +636,9 @@ impl FilesystemApp {
                 let mut wh = base.h;
 
                 if is_page_content {
-                    let viewport_top = content_y;
-                    let viewport_bottom = content_y + content_h;
-                    if wy >= viewport_bottom || wy + wh <= viewport_top {
-                        continue;
-                    }
-                    if wy < viewport_top {
-                        let diff = viewport_top - wy;
-                        wy = viewport_top;
-                        wh = (wh - diff).max(0.0);
-                    }
-                    if wy + wh > viewport_bottom {
-                        wh = (viewport_bottom - wy).max(0.0);
+                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
+                        Some((cy, ch)) => { wy = cy; wh = ch; }
+                        None => continue,
                     }
                 }
 
@@ -440,11 +652,8 @@ impl FilesystemApp {
                     w: ww,
                     h: wh,
                     color: col,
-                    hover_color: hover_bg,
-                    hovering,
                     radius: 4.0, // standard button radius
                     corners: (true, true, true, true),
-                    action: Some(action.clone()),
                 });
 
                 let text_x = if btn.justify == cce_ui::widget::Justification::Left {
@@ -455,63 +664,32 @@ impl FilesystemApp {
                 };
                 let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
 
-                let mut final_button_bounds = if is_page_content {
-                    Some([
-                        0.0,
-                        content_y,
-                        self.width as f32,
-                        content_y + content_h,
-                    ])
+                let start_bounds = if is_page_content {
+                    [0.0, content_y, self.width as f32, content_y + content_h]
                 } else {
-                    None
+                    [0.0, 0.0, self.width as f32, self.height as f32]
                 };
-
-                let mut current_bounds = final_button_bounds.unwrap_or([0.0, 0.0, self.width as f32, self.height as f32]);
-                let mut discard = false;
                 let text_w = label.chars().count() as f32 * label_size * 0.65;
                 let text_h = label_size * 1.4;
-                let t_min_x = text_x;
-                let t_max_x = text_x + text_w;
-                let t_min_y = text_y;
-                let t_max_y = text_y + text_h;
-
-                if part_idx < 2 {
-                    for overlay_pc in [&popover_pc, &context_menu_pc, &dialog_pc] {
-                        for (_, ox, oy, ow, oh, _, _) in &overlay_pc.rects {
-                            let o_min_x = *ox;
-                            let o_max_x = *ox + *ow;
-                            let o_min_y = *oy;
-                            let o_max_y = *oy + *oh;
-
-                            if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
-                                if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
-                                    discard = true;
-                                    break;
-                                }
-                                if o_min_x > t_min_x && o_min_x < t_max_x {
-                                    current_bounds[2] = current_bounds[2].min(o_min_x);
-                                }
-                                if o_max_x > t_min_x && o_max_x < t_max_x {
-                                    current_bounds[0] = current_bounds[0].max(o_max_x);
-                                }
-                                if o_min_y > t_min_y && o_min_y < t_max_y {
-                                    current_bounds[3] = current_bounds[3].min(o_min_y);
-                                }
-                                if o_max_y > t_min_y && o_max_y < t_max_y {
-                                    current_bounds[1] = current_bounds[1].max(o_max_y);
-                                }
-                            }
-                        }
-                        if discard {
-                            break;
-                        }
+                let occluded = if part_idx < 2 {
+                    occlude_against(
+                        start_bounds,
+                        text_x,
+                        text_x + text_w,
+                        text_y,
+                        text_y + text_h,
+                        &[&popover_pc, &context_menu_pc, &dialog_pc],
+                    )
+                } else {
+                    Some(start_bounds)
+                };
+                let final_button_bounds = match occluded {
+                    Some(b) => Some(b),
+                    None => {
+                        page_buttons.push((btn.clone(), action.clone()));
+                        continue;
                     }
-                }
-                if discard {
-                    page_buttons.push((btn.clone(), action.clone()));
-                    continue;
-                }
-                final_button_bounds = Some(current_bounds);
+                };
 
                 text_items.push(TextItem::new(
                     &mut self.font_system,
@@ -531,7 +709,7 @@ impl FilesystemApp {
                 page_buttons.push((btn.clone(), action.clone()));
             }
             for (text, size, x, y, col, font, bounds) in &pc_part.texts {
-                let mut final_bounds = if is_page_content {
+                let clamped_bounds = if is_page_content {
                     let viewport_top = content_y;
                     let viewport_bottom = content_y + content_h;
                     match bounds {
@@ -552,51 +730,25 @@ impl FilesystemApp {
                     *bounds
                 };
 
-                let mut current_bounds = final_bounds.unwrap_or([0.0, 0.0, self.width as f32, self.height as f32]);
-                let mut discard = false;
+                let start_bounds = clamped_bounds.unwrap_or([0.0, 0.0, self.width as f32, self.height as f32]);
                 let text_w = text.chars().count() as f32 * size * 0.65;
                 let text_h = *size * 1.4;
-                let t_min_x = *x;
-                let t_max_x = *x + text_w;
-                let t_min_y = *y;
-                let t_max_y = *y + text_h;
-
-                if part_idx < 2 {
-                    for overlay_pc in [&popover_pc, &context_menu_pc, &dialog_pc] {
-                        for (_, ox, oy, ow, oh, _, _) in &overlay_pc.rects {
-                            let o_min_x = *ox;
-                            let o_max_x = *ox + *ow;
-                            let o_min_y = *oy;
-                            let o_max_y = *oy + *oh;
-
-                            if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
-                                if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
-                                    discard = true;
-                                    break;
-                                }
-                                if o_min_x > t_min_x && o_min_x < t_max_x {
-                                    current_bounds[2] = current_bounds[2].min(o_min_x);
-                                }
-                                if o_max_x > t_min_x && o_max_x < t_max_x {
-                                    current_bounds[0] = current_bounds[0].max(o_max_x);
-                                }
-                                if o_min_y > t_min_y && o_min_y < t_max_y {
-                                    current_bounds[3] = current_bounds[3].min(o_min_y);
-                                }
-                                if o_max_y > t_min_y && o_max_y < t_max_y {
-                                    current_bounds[1] = current_bounds[1].max(o_max_y);
-                                }
-                            }
-                        }
-                        if discard {
-                            break;
-                        }
-                    }
-                }
-                if discard {
-                    continue;
-                }
-                final_bounds = Some(current_bounds);
+                let occluded = if part_idx < 2 {
+                    occlude_against(
+                        start_bounds,
+                        *x,
+                        *x + text_w,
+                        *y,
+                        *y + text_h,
+                        &[&popover_pc, &context_menu_pc, &dialog_pc],
+                    )
+                } else {
+                    Some(start_bounds)
+                };
+                let final_bounds = match occluded {
+                    Some(b) => Some(b),
+                    None => continue,
+                };
 
                 text_items.push(TextItem::new(
                     &mut self.font_system,
@@ -656,6 +808,15 @@ impl Application for FilesystemApp {
                 }
             }
         }
+        if self.current_page == Page::Browse {
+            if self.browse_splitter.dragging_idx.is_some() || self.browse_splitter.hovered_idx.is_some() {
+                return false;
+            }
+        } else if self.current_page == Page::Network {
+            if self.network_splitter.dragging_idx.is_some() || self.network_splitter.hovered_idx.is_some() {
+                return false;
+            }
+        }
         // 5. Fallback to ui_context's check for registered widgets
         self.ui_context.is_movable_backplate_at(px, py)
     }
@@ -701,7 +862,6 @@ impl Application for FilesystemApp {
             width: initial_w,
             height: initial_h,
             scale_factor: 1.0,
-            sender: sender.clone(),
             page_buttons: Vec::new(),
             cursor_x: 0.0,
             cursor_y: 0.0,
@@ -722,9 +882,33 @@ impl Application for FilesystemApp {
             },
             open_with_dialog: None,
             root_window,
+            browse_splitter: cce_ui::widget::SplitBox::new(cce_ui::widget::SplitDirection::Horizontal, 12.0),
+            network_splitter: cce_ui::widget::SplitBox::new(cce_ui::widget::SplitDirection::Horizontal, 12.0),
+            browse_container: BrowseContainer {
+                base: cce_ui::widget::Widget::new(),
+                parent: None,
+                breadcrumb: std::ptr::null_mut(),
+                list_box: std::ptr::null_mut(),
+                save_name_box: std::ptr::null_mut(),
+                select_mode,
+            },
+            network_container: NetworkContainer {
+                base: cce_ui::widget::Widget::new(),
+                parent: None,
+                breadcrumb: std::ptr::null_mut(),
+                graph: std::ptr::null_mut(),
+            },
             last_click_time: std::time::Instant::now(),
             last_clicked_idx: None,
         };
+
+        // Initialize container references
+        app.browse_container.breadcrumb = &mut app.browse.breadcrumb;
+        app.browse_container.list_box = &mut app.browse.list_box;
+        app.browse_container.save_name_box = &mut app.browse.save_name_box;
+
+        app.network_container.breadcrumb = &mut app.network.breadcrumb;
+        app.network_container.graph = &mut app.network.graph;
 
         // Start initial directory loading via FsService
         app.fs_service.send(services::fs::FsRequest::ReadLastDir);
@@ -801,11 +985,7 @@ impl Application for FilesystemApp {
                 }
 
                 // If NavigateTo or SelectEntry happened, update Preview path
-                let selected_path = if let Some(idx) = self.browse.selected {
-                    self.browse.entries.get(idx).map(|e| e.path.clone())
-                } else {
-                    None
-                };
+                let selected_path = self.browse.selected_path();
                 if let Some(path) = selected_path {
                     self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
                 } else {
@@ -842,14 +1022,9 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
-            Message::KeyboardEvent(_) => {}
             Message::SelectOpen => {
                 if self.select_directory {
-                    let selected_path = if let Some(idx) = self.browse.selected {
-                        self.browse.entries.get(idx).map(|e| e.path.clone())
-                    } else {
-                        None
-                    };
+                    let selected_path = self.browse.selected_path();
                     let path = selected_path.filter(|p| p.is_dir()).unwrap_or_else(|| self.browse.current_dir.clone());
                     println!("{}", path.display());
                     std::process::exit(0);
@@ -872,11 +1047,7 @@ impl Application for FilesystemApp {
                             }
                         }
                     } else {
-                        let selected_path = if let Some(idx) = self.browse.selected {
-                            self.browse.entries.get(idx).map(|e| e.path.clone())
-                        } else {
-                            None
-                        };
+                        let selected_path = self.browse.selected_path();
                         if let Some(path) = selected_path {
                             if path.is_dir() && !is_project_dir(&path) {
                                 self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
@@ -923,25 +1094,7 @@ impl Application for FilesystemApp {
                         textbox.text.trim().to_string()
                     };
                     if !cmd_str.is_empty() {
-                        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-                        if !parts.is_empty() {
-                            let program = parts[0];
-                            let mut program_path = std::path::PathBuf::from(program);
-                            if !program_path.is_absolute() && !program.contains('/') {
-                                if let Ok(home) = std::env::var("HOME") {
-                                    let local_bin = std::path::PathBuf::from(home).join(".local").join("bin").join(program);
-                                    if local_bin.exists() {
-                                        program_path = local_bin;
-                                    }
-                                }
-                            }
-                            let mut command = std::process::Command::new(program_path);
-                            for arg in &parts[1..] {
-                                command.arg(arg);
-                            }
-                            command.arg(&path);
-                            let _ = cce_ui::process::spawn_detached(command);
-                        }
+                        crate::services::fs::spawn_command_for_path(&cmd_str, &path);
                     }
                 }
                 *needs_rebuild = true;
@@ -1029,7 +1182,7 @@ impl Application for FilesystemApp {
             let was_hovered = self.context_menu.hovered;
             self.context_menu.hovered = None;
             if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + ch {
-                let idx = ((pos.y - cy) / 24.0) as usize;
+                let idx = ((pos.y - cy) / ROW_H) as usize;
                 if idx < self.context_menu.options.len() && idx > 0 {
                     self.context_menu.hovered = Some(idx);
                 }
@@ -1042,6 +1195,16 @@ impl Application for FilesystemApp {
                 self.needs_rebuild = true;
             }
             return;
+        }
+
+        if self.current_page == Page::Browse {
+            if self.browse_splitter.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+                changed = true;
+            }
+        } else if self.current_page == Page::Network {
+            if self.network_splitter.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+                changed = true;
+            }
         }
 
         if !self.select_mode && self.paginator.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
@@ -1099,26 +1262,11 @@ impl Application for FilesystemApp {
         }
 
         if let Some((_path, textbox)) = &mut self.open_with_dialog {
-            let dialog_w = 400.0;
-            let dialog_h = 160.0;
-            let dialog_x = (self.width as f32 - dialog_w) / 2.0;
-            let dialog_y = (self.height as f32 - dialog_h) / 2.0;
-
-            let tb_x = dialog_x + 20.0;
-            let tb_y = dialog_y + 60.0;
-            let tb_w = dialog_w - 40.0;
-            let tb_h = cce_ui::layout::textbox_height();
-
-            let btn_h = cce_ui::layout::button_height();
-            let btn_cancel_x = dialog_x + dialog_w - 180.0;
-            let btn_cancel_y = dialog_y + dialog_h - btn_h - 16.0;
-            let btn_cancel_w = 70.0;
-            let btn_cancel_h = btn_h;
-
-            let btn_open_x = dialog_x + dialog_w - 100.0;
-            let btn_open_y = dialog_y + dialog_h - btn_h - 16.0;
-            let btn_open_w = 80.0;
-            let btn_open_h = btn_h;
+            let r = open_with_rects(self.width as f32, self.height as f32);
+            let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
+            let (tb_x, tb_y, tb_w, tb_h) = r.tb;
+            let (btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h) = r.cancel;
+            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.open;
 
             if state == ElementState::Pressed {
                 let clicked_inside = pos.x >= dialog_x && pos.x <= dialog_x + dialog_w && pos.y >= dialog_y && pos.y <= dialog_y + dialog_h;
@@ -1170,7 +1318,7 @@ impl Application for FilesystemApp {
 
                 let mut clicked_option = None;
                 if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + ch {
-                    let idx = ((pos.y - cy) / 24.0) as usize;
+                    let idx = ((pos.y - cy) / ROW_H) as usize;
                     if idx < self.context_menu.options.len() && idx > 0 {
                         clicked_option = self.context_menu.options[idx].1.clone();
                     }
@@ -1208,9 +1356,7 @@ impl Application for FilesystemApp {
                         ("Copy Path".to_string(), Some(Message::CopyPath(path_str))),
                     ];
 
-                    let max_len = options.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
-                    let menu_w = ((max_len as f32 * 7.5) + 24.0).max(120.0);
-                    let menu_h = options.len() as f32 * 24.0;
+                    let (menu_w, menu_h) = context_menu_size(&options);
 
                     self.context_menu = ContextMenu {
                         visible: true,
@@ -1272,9 +1418,7 @@ impl Application for FilesystemApp {
                         options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
 
                         // Calculate width
-                        let max_len = options.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
-                        let menu_w = ((max_len as f32 * 7.5) + 24.0).max(120.0);
-                        let menu_h = options.len() as f32 * 24.0;
+                        let (menu_w, menu_h) = context_menu_size(&options);
 
                         self.context_menu = ContextMenu {
                             visible: true,
@@ -1320,6 +1464,20 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
+            if self.browse_splitter.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return None;
+            }
+        } else if self.current_page == Page::Network {
+            if self.network_splitter.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return None;
+            }
+        }
+
+        if self.current_page == Page::Browse {
             if self.select_mode {
                 if self.browse.save_name_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                     if state == ElementState::Pressed {
@@ -1343,21 +1501,7 @@ impl Application for FilesystemApp {
                 if self.browse.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
                     if self.browse.breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                         if let Some(seg) = self.browse.breadcrumb.path_click() {
-                            let mut target_path = std::path::PathBuf::new();
-                            let mut current_idx = 0;
-                            for component in self.browse.current_dir.components() {
-                                target_path.push(component);
-                                if component == std::path::Component::RootDir {
-                                    if seg == 0 {
-                                        break;
-                                    }
-                                } else {
-                                    current_idx += 1;
-                                    if current_idx == seg {
-                                        break;
-                                    }
-                                }
-                            }
+                            let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
                             self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
                             *needs_rebuild = true;
                             self.needs_rebuild = true;
@@ -1371,21 +1515,7 @@ impl Application for FilesystemApp {
                     if self.network.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
                         if self.network.breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
                             if let Some(seg) = self.network.breadcrumb.path_click() {
-                                let mut target_path = std::path::PathBuf::new();
-                                let mut current_idx = 0;
-                                for component in self.browse.current_dir.components() {
-                                    target_path.push(component);
-                                    if component == std::path::Component::RootDir {
-                                        if seg == 0 {
-                                            break;
-                                        }
-                                    } else {
-                                        current_idx += 1;
-                                        if current_idx == seg {
-                                            break;
-                                        }
-                                    }
-                                }
+                                let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
                                 self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
                                 changed = true;
                             }
@@ -1423,10 +1553,7 @@ impl Application for FilesystemApp {
                                     self.browse.save_name_box.edit_buffer = entry.name.clone();
                                 }
                             }
-                            let selected_path = Some(entry.path.clone());
-                            if let Some(path) = selected_path {
-                                self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
-                            }
+                            self.fs_service.send(services::fs::FsRequest::ReadPreview(entry.path.clone()));
                         }
                         changed = true;
                     }
@@ -1510,27 +1637,17 @@ impl Application for FilesystemApp {
 
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
         if self.current_page == Page::Browse || self.current_page == Page::Network {
-            let has_sidebar = false;
-            let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
-            let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
-            let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
-            let browse_w = (usable_w - 12.0) * 0.5;
-            let preview_w = (usable_w - 12.0) * 0.5;
-            let preview_x = browse_x + browse_w + 12.0;
-            let content_y = 16.0;
+            // Hit-test against the preview widget's actual laid-out rect. Recomputing a
+            // hardcoded 50/50 split here was wrong once the list/preview splitter had been
+            // dragged off-center, so wheel events over the preview were misrouted.
+            let (prev_x, prev_y, prev_w, prev_h) = self.preview.rect();
+            let content_h = prev_h;
 
-            let select_bar_h = 48.0;
-            let content_h = if self.select_mode {
-                self.height as f32 - 32.0 - select_bar_h
-            } else {
-                self.height as f32 - 32.0
-            };
-
-            let half_h = content_h * 0.5;
-            let px = preview_x + 12.0;
-            let py = content_y + 32.0;
-            let pw = preview_w - 24.0;
-            let ph = half_h - 40.0;
+            // Inner content-preview region (below the metadata header).
+            let px = prev_x + 12.0;
+            let py = prev_y + 32.0;
+            let pw = prev_w - 24.0;
+            let ph = prev_h * 0.5 - 40.0;
 
             if pos.x as f32 >= px && pos.x as f32 <= px + pw && pos.y as f32 >= py && pos.y as f32 <= py + ph {
                 if self.preview.handle_mouse_wheel(delta, content_h) {

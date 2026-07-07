@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 use crate::pages::browse::DirEntry;
+use crate::util::{format_size, format_permissions};
 use image::GenericImageView;
 use cce_ui::widget::ImagePreviewData;
 
@@ -287,33 +288,6 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
     }
 }
 
-fn format_size(size: u64) -> String {
-    if size < 1024 {
-        format!("{} B", size)
-    } else if size < 1024 * 1024 {
-        format!("{:.1} K", size as f64 / 1024.0)
-    } else if size < 1024 * 1024 * 1024 {
-        format!("{:.1} M", size as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1} G", size as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-fn format_permissions(mode: u32) -> String {
-    let mut s = String::with_capacity(10);
-    s.push(if mode & 0o40000 != 0 { 'd' } else { '-' });
-    s.push(if mode & 0o400 != 0 { 'r' } else { '-' });
-    s.push(if mode & 0o200 != 0 { 'w' } else { '-' });
-    s.push(if mode & 0o100 != 0 { 'x' } else { '-' });
-    s.push(if mode & 0o040 != 0 { 'r' } else { '-' });
-    s.push(if mode & 0o020 != 0 { 'w' } else { '-' });
-    s.push(if mode & 0o010 != 0 { 'x' } else { '-' });
-    s.push(if mode & 0o004 != 0 { 'r' } else { '-' });
-    s.push(if mode & 0o002 != 0 { 'w' } else { '-' });
-    s.push(if mode & 0o001 != 0 { 'x' } else { '-' });
-    s
-}
-
 fn infer_file_type(name: &str, is_dir: bool) -> String {
     if is_dir {
         return "Directory".to_string();
@@ -348,19 +322,18 @@ fn infer_file_type(name: &str, is_dir: bool) -> String {
     }
 }
 
-fn get_last_dir_file_path() -> Option<PathBuf> {
-    let dir = if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg_config.is_empty() {
-            PathBuf::from(xdg_config)
-        } else {
-            let home = std::env::var("HOME").ok()?;
-            PathBuf::from(home).join(".config")
-        }
-    } else {
-        let home = std::env::var("HOME").ok()?;
-        PathBuf::from(home).join(".config")
+/// Base config directory for cce: `$XDG_CONFIG_HOME/cce`, else `$HOME/.config/cce`.
+/// Returns `None` only when neither variable is usable.
+pub fn cce_config_dir() -> Option<PathBuf> {
+    let base = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(xdg) if !xdg.is_empty() => PathBuf::from(xdg),
+        _ => PathBuf::from(std::env::var("HOME").ok()?).join(".config"),
     };
-    let dir = dir.join("cce").join("cce-files");
+    Some(base.join("cce"))
+}
+
+fn get_last_dir_file_path() -> Option<PathBuf> {
+    let dir = cce_config_dir()?.join("cce-files");
     let _ = fs::create_dir_all(&dir);
     Some(dir.join("cce-files-last-dir.txt"))
 }
@@ -410,8 +383,7 @@ pub fn get_mime_type(path: &Path) -> Option<String> {
 }
 
 pub fn load_kdl_associations() -> Option<std::collections::HashMap<String, String>> {
-    let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(home).join(".config").join("cce").join("mime.kdl");
+    let path = cce_config_dir()?.join("mime.kdl");
     if !path.exists() {
         return None;
     }
@@ -469,13 +441,15 @@ pub fn get_default_application(mime: &str) -> Option<(String, String)> {
         return None;
     }
 
-    // Search for .desktop file in common directories
-    let home = std::env::var("HOME").ok().unwrap_or_default();
-    let search_paths = vec![
-        PathBuf::from(&home).join(".local/share/applications"),
+    // Search for .desktop file in common directories. Skip the user-local path
+    // entirely when HOME is unset rather than emitting a bogus relative path.
+    let mut search_paths = vec![
         PathBuf::from("/usr/share/applications"),
         PathBuf::from("/usr/local/share/applications"),
     ];
+    if let Ok(home) = std::env::var("HOME") {
+        search_paths.insert(0, PathBuf::from(home).join(".local/share/applications"));
+    }
 
     let mut desktop_path = None;
     for dir in search_paths {
@@ -517,35 +491,38 @@ pub fn get_default_application(mime: &str) -> Option<(String, String)> {
     }
 }
 
-pub fn open_file(path: &Path) {
-    let mut opened = false;
-    if let Some(mime) = get_mime_type(path) {
-        if let Some((_, cmd)) = get_default_application(&mime) {
-            if !cmd.is_empty() {
-                let parts: Vec<&str> = cmd.split_whitespace().collect();
-                if !parts.is_empty() {
-                    let program = parts[0];
-                    let mut program_path = PathBuf::from(program);
-                    if !program_path.is_absolute() && !program.contains('/') {
-                        if let Ok(home) = std::env::var("HOME") {
-                            let local_bin = PathBuf::from(home).join(".local").join("bin").join(program);
-                            if local_bin.exists() {
-                                program_path = local_bin;
-                            }
-                        }
-                    }
-                    let mut command = std::process::Command::new(program_path);
-                    for arg in &parts[1..] {
-                        command.arg(arg);
-                    }
-                    command.arg(path);
-                    if cce_ui::process::spawn_detached(command).is_ok() {
-                        opened = true;
-                    }
-                }
+/// Parse a command string, resolve a bare program name against `~/.local/bin`,
+/// append `path` as the final argument, and spawn it detached.
+/// Returns `true` if a process was spawned.
+pub fn spawn_command_for_path(cmd: &str, path: &Path) -> bool {
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if parts.is_empty() {
+        return false;
+    }
+    let program = parts[0];
+    let mut program_path = PathBuf::from(program);
+    if !program_path.is_absolute() && !program.contains('/') {
+        if let Ok(home) = std::env::var("HOME") {
+            let local_bin = PathBuf::from(home).join(".local").join("bin").join(program);
+            if local_bin.exists() {
+                program_path = local_bin;
             }
         }
     }
+    let mut command = std::process::Command::new(program_path);
+    for arg in &parts[1..] {
+        command.arg(arg);
+    }
+    command.arg(path);
+    cce_ui::process::spawn_detached(command).is_ok()
+}
+
+pub fn open_file(path: &Path) {
+    let opened = get_mime_type(path)
+        .and_then(|mime| get_default_application(&mime))
+        .map(|(_, cmd)| !cmd.is_empty() && spawn_command_for_path(&cmd, path))
+        .unwrap_or(false);
+
     if !opened {
         let mut command = std::process::Command::new("xdg-open");
         command.arg(path);
@@ -558,6 +535,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_kdl() {
         let unique_dir_name = format!("cce_test_kdl_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
         let temp_path = std::env::temp_dir().join(unique_dir_name);
@@ -567,18 +545,27 @@ mod tests {
         std::fs::write(&mime_file, "associations { association \"text/plain\" \"cce-text-editor\" }").unwrap();
         
         let old_home = std::env::var("HOME").ok();
-        unsafe { std::env::set_var("HOME", &temp_path); }
-        
+        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", &temp_path);
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
         let assoc = load_kdl_associations();
-        
+
         unsafe {
             if let Some(ref h) = old_home {
                 std::env::set_var("HOME", h);
             } else {
                 std::env::remove_var("HOME");
             }
+            if let Some(ref x) = old_xdg {
+                std::env::set_var("XDG_CONFIG_HOME", x);
+            } else {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            }
         }
-        
+
         let _ = std::fs::remove_dir_all(&temp_path);
         
         println!("Parsed associations: {:?}", assoc);

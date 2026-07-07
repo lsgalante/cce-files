@@ -76,6 +76,11 @@ impl Default for BrowseState {
 }
 
 impl BrowseState {
+    /// Path of the currently selected entry, if any.
+    pub fn selected_path(&self) -> Option<PathBuf> {
+        self.selected.and_then(|idx| self.entries.get(idx).map(|e| e.path.clone()))
+    }
+
     pub fn update_breadcrumb(&mut self) {
         let mut segments = Vec::new();
         for component in self.current_dir.components() {
@@ -112,38 +117,34 @@ pub fn is_project_dir(path: &Path) -> bool {
     path.is_dir() && (path.join("state.json").exists() || path.join("state.kdl").exists())
 }
 
+/// Reconstruct the ancestor path for a clicked breadcrumb segment index.
+/// `seg == 0` is the root `/`; each subsequent index adds one path component.
+pub fn path_to_segment(current_dir: &Path, seg: usize) -> PathBuf {
+    let mut target_path = PathBuf::new();
+    let mut current_idx = 0;
+    for component in current_dir.components() {
+        target_path.push(component);
+        if component == std::path::Component::RootDir {
+            if seg == 0 {
+                break;
+            }
+        } else {
+            current_idx += 1;
+            if current_idx == seg {
+                break;
+            }
+        }
+    }
+    target_path
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 pub fn read_directory(path: &Path) -> Vec<DirEntry> {
     crate::services::fs::read_directory_internal(path)
 }
 
-fn format_size(size: u64) -> String {
-    if size < 1024 {
-        format!("{} B", size)
-    } else if size < 1024 * 1024 {
-        format!("{:.1} K", size as f64 / 1024.0)
-    } else if size < 1024 * 1024 * 1024 {
-        format!("{:.1} M", size as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1} G", size as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-fn format_permissions(mode: u32) -> String {
-    let mut s = String::with_capacity(10);
-    s.push(if mode & 0o40000 != 0 { 'd' } else { '-' });
-    s.push(if mode & 0o400 != 0 { 'r' } else { '-' });
-    s.push(if mode & 0o200 != 0 { 'w' } else { '-' });
-    s.push(if mode & 0o100 != 0 { 'x' } else { '-' });
-    s.push(if mode & 0o040 != 0 { 'r' } else { '-' });
-    s.push(if mode & 0o020 != 0 { 'w' } else { '-' });
-    s.push(if mode & 0o010 != 0 { 'x' } else { '-' });
-    s.push(if mode & 0o004 != 0 { 'r' } else { '-' });
-    s.push(if mode & 0o002 != 0 { 'w' } else { '-' });
-    s.push(if mode & 0o001 != 0 { 'x' } else { '-' });
-    s
-}
+use crate::util::{format_size, format_permissions};
 
 fn entry_icon(is_dir: bool, name: &str) -> &'static str {
     if is_dir {
@@ -459,22 +460,6 @@ mod tests {
     }
 
     #[test]
-    fn format_size_units() {
-        assert_eq!(format_size(0), "0 B");
-        assert_eq!(format_size(512), "512 B");
-        assert_eq!(format_size(1024), "1.0 K");
-        assert_eq!(format_size(1048576), "1.0 M");
-        assert_eq!(format_size(1073741824), "1.0 G");
-    }
-
-    #[test]
-    fn format_permissions_string() {
-        assert_eq!(format_permissions(0o40755), "drwxr-xr-x");
-        assert_eq!(format_permissions(0o100644), "-rw-r--r--");
-        assert_eq!(format_permissions(0o644), "-rw-r--r--");
-    }
-
-    #[test]
     fn apply_filters_hides_dotfiles() {
         let mut state = BrowseState::default();
         state.all_entries = vec![
@@ -497,6 +482,130 @@ mod tests {
         state.show_hidden = true;
         apply_filters(&mut state);
         assert_eq!(state.entries.len(), 2);
+    }
+
+    fn entry(name: &str, path: &str, is_dir: bool) -> DirEntry {
+        DirEntry {
+            name: name.to_string(),
+            path: PathBuf::from(path),
+            is_dir,
+            size: 0,
+            permissions: 0o644,
+            modified: String::new(),
+        }
+    }
+
+    #[test]
+    fn search_changed_filters_entries() {
+        let mut state = BrowseState::default();
+        state.all_entries = vec![entry("apple", "/a/apple", false), entry("banana", "/a/banana", false)];
+        let req = update(&mut state, BrowseMessage::SearchChanged("ban".to_string()));
+        assert!(req.is_none());
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(state.entries[0].name, "banana");
+        assert_eq!(state.selected, Some(0));
+    }
+
+    #[test]
+    fn navigate_to_path_reads_directory() {
+        let mut state = BrowseState::default();
+        let req = update(&mut state, BrowseMessage::NavigateToPath(PathBuf::from("/tmp")));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn navigate_to_plain_directory_reads_it() {
+        let dir = std::env::temp_dir().join(format!("cce_nav_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut state = BrowseState::default();
+        state.entries = vec![entry("sub", dir.to_str().unwrap(), true)];
+        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn navigate_to_project_directory_does_not_enter() {
+        let dir = std::env::temp_dir().join(format!("cce_proj_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("state.json"), "{}").unwrap();
+        let mut state = BrowseState::default();
+        state.entries = vec![entry("proj", dir.to_str().unwrap(), true)];
+        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        assert!(req.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn navigate_to_file_does_nothing() {
+        let mut state = BrowseState::default();
+        state.entries = vec![entry("f.txt", "/a/f.txt", false)];
+        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        assert!(req.is_none());
+    }
+
+    #[test]
+    fn directory_loaded_populates_and_saves() {
+        let mut state = BrowseState::default();
+        let entries = vec![entry("x", "/d/x", false), entry("y", "/d/y", true)];
+        let req = update(&mut state, BrowseMessage::DirectoryLoaded(PathBuf::from("/d"), entries));
+        assert_eq!(state.current_dir, PathBuf::from("/d"));
+        assert_eq!(state.entries.len(), 2);
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::SaveLastDir(p)) if p == PathBuf::from("/d")));
+    }
+
+    #[test]
+    fn directory_refreshed_preserves_selection_by_path() {
+        let mut state = BrowseState::default();
+        state.current_dir = PathBuf::from("/d");
+        state.all_entries = vec![entry("a", "/d/a", false), entry("b", "/d/b", false)];
+        apply_filters(&mut state);
+        state.selected = Some(1); // "b"
+        let new_entries = vec![entry("b", "/d/b", false), entry("a", "/d/a", false), entry("c", "/d/c", false)];
+        let req = update(&mut state, BrowseMessage::DirectoryRefreshed(PathBuf::from("/d"), new_entries));
+        assert!(req.is_none());
+        assert_eq!(
+            state.selected.and_then(|i| state.entries.get(i)).map(|e| e.name.as_str()),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn directory_refreshed_ignores_other_dir() {
+        let mut state = BrowseState::default();
+        state.current_dir = PathBuf::from("/d");
+        state.all_entries = vec![entry("a", "/d/a", false)];
+        apply_filters(&mut state);
+        let req = update(&mut state, BrowseMessage::DirectoryRefreshed(PathBuf::from("/other"), vec![entry("z", "/other/z", false)]));
+        assert!(req.is_none());
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(state.entries[0].name, "a");
+    }
+
+    #[test]
+    fn toggle_hidden_shows_dotfiles() {
+        let mut state = BrowseState::default();
+        state.all_entries = vec![entry(".hidden", "/a/.hidden", false), entry("visible", "/a/visible", false)];
+        apply_filters(&mut state);
+        assert_eq!(state.entries.len(), 1);
+        let req = update(&mut state, BrowseMessage::ToggleHidden);
+        assert!(req.is_none());
+        assert!(state.show_hidden);
+        assert_eq!(state.entries.len(), 2);
+    }
+
+    #[test]
+    fn last_dir_loaded_some_reads_that_dir() {
+        let mut state = BrowseState::default();
+        let req = update(&mut state, BrowseMessage::LastDirLoaded(Some(PathBuf::from("/some/dir"))));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == PathBuf::from("/some/dir")));
+    }
+
+    #[test]
+    fn last_dir_loaded_none_falls_back() {
+        let mut state = BrowseState::default();
+        let req = update(&mut state, BrowseMessage::LastDirLoaded(None));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(_))));
     }
 
     #[test]
@@ -534,6 +643,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_directory_persistence() {
         let temp_dir = std::env::temp_dir();
         let original_home = std::env::var("HOME");
@@ -638,44 +748,12 @@ mod tests {
 
     #[test]
     fn test_component_reconstruction() {
-        let current_dir = PathBuf::from("/home/lsgalante/documents");
-        
-        // Let's say seg is 1 (meaning "home/")
-        let seg = 1;
-        let mut target_path = std::path::PathBuf::new();
-        let mut current_idx = 0;
-        for component in current_dir.components() {
-            target_path.push(component);
-            if component == std::path::Component::RootDir {
-                if seg == 0 {
-                    break;
-                }
-            } else {
-                current_idx += 1;
-                if current_idx == seg {
-                    break;
-                }
-            }
-        }
-        assert_eq!(target_path, PathBuf::from("/home"));
-        
-        // Let's say seg is 0 (meaning "/")
-        let seg = 0;
-        let mut target_path = std::path::PathBuf::new();
-        let mut current_idx = 0;
-        for component in current_dir.components() {
-            target_path.push(component);
-            if component == std::path::Component::RootDir {
-                if seg == 0 {
-                    break;
-                }
-            } else {
-                current_idx += 1;
-                if current_idx == seg {
-                    break;
-                }
-            }
-        }
-        assert_eq!(target_path, PathBuf::from("/"));
+        let current_dir = PathBuf::from("/home/user/documents");
+
+        // seg 0 is the root, then each index adds a component.
+        assert_eq!(path_to_segment(&current_dir, 0), PathBuf::from("/"));
+        assert_eq!(path_to_segment(&current_dir, 1), PathBuf::from("/home"));
+        assert_eq!(path_to_segment(&current_dir, 2), PathBuf::from("/home/user"));
+        assert_eq!(path_to_segment(&current_dir, 3), PathBuf::from("/home/user/documents"));
     }
 }

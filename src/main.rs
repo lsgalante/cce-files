@@ -457,7 +457,7 @@ impl FilesystemApp {
                 };
                 let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
 
-                let final_button_bounds = if is_page_content {
+                let mut final_button_bounds = if is_page_content {
                     Some([
                         0.0,
                         content_y,
@@ -467,6 +467,53 @@ impl FilesystemApp {
                 } else {
                     None
                 };
+
+                let mut current_bounds = final_button_bounds.unwrap_or([0.0, 0.0, self.width as f32, self.height as f32]);
+                let mut discard = false;
+                let text_w = label.chars().count() as f32 * label_size * 0.65;
+                let text_h = label_size * 1.4;
+                let t_min_x = text_x;
+                let t_max_x = text_x + text_w;
+                let t_min_y = text_y;
+                let t_max_y = text_y + text_h;
+
+                if part_idx < 2 {
+                    for overlay_pc in [&popover_pc, &context_menu_pc, &dialog_pc] {
+                        for (_, ox, oy, ow, oh, _, _) in &overlay_pc.rects {
+                            let o_min_x = *ox;
+                            let o_max_x = *ox + *ow;
+                            let o_min_y = *oy;
+                            let o_max_y = *oy + *oh;
+
+                            if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
+                                if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
+                                    discard = true;
+                                    break;
+                                }
+                                if o_min_x > t_min_x && o_min_x < t_max_x {
+                                    current_bounds[2] = current_bounds[2].min(o_min_x);
+                                }
+                                if o_max_x > t_min_x && o_max_x < t_max_x {
+                                    current_bounds[0] = current_bounds[0].max(o_max_x);
+                                }
+                                if o_min_y > t_min_y && o_min_y < t_max_y {
+                                    current_bounds[3] = current_bounds[3].min(o_min_y);
+                                }
+                                if o_max_y > t_min_y && o_max_y < t_max_y {
+                                    current_bounds[1] = current_bounds[1].max(o_max_y);
+                                }
+                            }
+                        }
+                        if discard {
+                            break;
+                        }
+                    }
+                }
+                if discard {
+                    page_buttons.push((btn.clone(), action.clone()));
+                    continue;
+                }
+                final_button_bounds = Some(current_bounds);
 
                 text_items.push(TextItem::new(
                     &mut self.font_system,
@@ -486,7 +533,7 @@ impl FilesystemApp {
                 page_buttons.push((btn.clone(), action.clone()));
             }
             for (text, size, x, y, col, font, bounds) in &pc_part.texts {
-                let final_bounds = if is_page_content {
+                let mut final_bounds = if is_page_content {
                     let viewport_top = content_y;
                     let viewport_bottom = content_y + content_h;
                     match bounds {
@@ -506,6 +553,52 @@ impl FilesystemApp {
                 } else {
                     *bounds
                 };
+
+                let mut current_bounds = final_bounds.unwrap_or([0.0, 0.0, self.width as f32, self.height as f32]);
+                let mut discard = false;
+                let text_w = text.chars().count() as f32 * size * 0.65;
+                let text_h = *size * 1.4;
+                let t_min_x = *x;
+                let t_max_x = *x + text_w;
+                let t_min_y = *y;
+                let t_max_y = *y + text_h;
+
+                if part_idx < 2 {
+                    for overlay_pc in [&popover_pc, &context_menu_pc, &dialog_pc] {
+                        for (_, ox, oy, ow, oh, _, _) in &overlay_pc.rects {
+                            let o_min_x = *ox;
+                            let o_max_x = *ox + *ow;
+                            let o_min_y = *oy;
+                            let o_max_y = *oy + *oh;
+
+                            if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
+                                if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
+                                    discard = true;
+                                    break;
+                                }
+                                if o_min_x > t_min_x && o_min_x < t_max_x {
+                                    current_bounds[2] = current_bounds[2].min(o_min_x);
+                                }
+                                if o_max_x > t_min_x && o_max_x < t_max_x {
+                                    current_bounds[0] = current_bounds[0].max(o_max_x);
+                                }
+                                if o_min_y > t_min_y && o_min_y < t_max_y {
+                                    current_bounds[3] = current_bounds[3].min(o_min_y);
+                                }
+                                if o_max_y > t_min_y && o_max_y < t_max_y {
+                                    current_bounds[1] = current_bounds[1].max(o_max_y);
+                                }
+                            }
+                        }
+                        if discard {
+                            break;
+                        }
+                    }
+                }
+                if discard {
+                    continue;
+                }
+                final_bounds = Some(current_bounds);
 
                 text_items.push(TextItem::new(
                     &mut self.font_system,

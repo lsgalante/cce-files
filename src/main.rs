@@ -236,7 +236,7 @@ struct NetworkContainer {
     pub base: cce_ui::widget::Widget,
     pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
     pub breadcrumb: *mut cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
-    pub graph: *mut cce_ui::widget::Graph,
+    pub graph: *mut cce_ui::widget::Adapted<cce_ui::widget::Graph>,
 }
 
 impl cce_ui::widget::Element for NetworkContainer {

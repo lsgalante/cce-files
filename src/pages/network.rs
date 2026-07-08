@@ -4,7 +4,7 @@ use crate::pages::browse::{BrowseState, DirEntry};
 use cce_ui::widget::{Adapted, Graph, GraphNode, Element, Breadcrumb, GraphController, PathController};
 
 pub struct NetworkState {
-    pub graph: Graph,
+    pub graph: Adapted<Graph>,
     pub breadcrumb: Adapted<Breadcrumb>,
     pub last_dir: PathBuf,
 }

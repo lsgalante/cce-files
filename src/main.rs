@@ -139,7 +139,7 @@ struct ContextMenu {
 struct BrowseContainer {
     pub base: cce_ui::widget::Widget,
     pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
-    pub breadcrumb: *mut cce_ui::widget::Breadcrumb,
+    pub breadcrumb: *mut cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
     pub list_box: *mut cce_ui::widget::List,
     pub save_name_box: *mut cce_ui::widget::TextBox,
     pub select_mode: bool,
@@ -235,7 +235,7 @@ unsafe impl Sync for BrowseContainer {}
 struct NetworkContainer {
     pub base: cce_ui::widget::Widget,
     pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
-    pub breadcrumb: *mut cce_ui::widget::Breadcrumb,
+    pub breadcrumb: *mut cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
     pub graph: *mut cce_ui::widget::Graph,
 }
 

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
-use cce_ui::widget::{Element, Breadcrumb, PathController};
+use cce_ui::widget::{Adapted, Element, Breadcrumb, PathController};
 use cce_ui::layout::{ColumnLayout, LayoutStrategy};
 
 // ── Data ────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ pub struct BrowseState {
     pub show_hidden: bool,
     pub list_box: cce_ui::widget::List,
     pub selected: Option<usize>,
-    pub breadcrumb: Breadcrumb,
+    pub breadcrumb: Adapted<Breadcrumb>,
     pub save_name_box: cce_ui::widget::TextBox,
 }
 

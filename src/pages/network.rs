@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use crate::pages::PageContent;
 use crate::pages::browse::{BrowseState, DirEntry};
-use cce_ui::widget::{Graph, GraphNode, Element, Breadcrumb, GraphController, PathController};
+use cce_ui::widget::{Adapted, Graph, GraphNode, Element, Breadcrumb, GraphController, PathController};
 
 pub struct NetworkState {
     pub graph: Graph,
-    pub breadcrumb: Breadcrumb,
+    pub breadcrumb: Adapted<Breadcrumb>,
     pub last_dir: PathBuf,
 }
 

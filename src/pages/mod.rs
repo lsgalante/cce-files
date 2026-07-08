@@ -34,7 +34,7 @@ impl Page {
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
     pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
-    pub buttons: Vec<(cce_ui::widget::Button, crate::Message)>,
+    pub buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, crate::Message)>,
 }
 
 impl PageContent {

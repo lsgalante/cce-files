@@ -311,7 +311,7 @@ struct FilesystemApp {
     width: u32,
     height: u32,
     scale_factor: f64,
-    page_buttons: Vec<(cce_ui::widget::Button, Message)>,
+    page_buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, Message)>,
     cursor_x: f32,
     cursor_y: f32,
     paginator: Paginator,

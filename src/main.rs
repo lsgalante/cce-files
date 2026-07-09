@@ -314,7 +314,7 @@ struct FilesystemApp {
     page_buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, Message)>,
     cursor_x: f32,
     cursor_y: f32,
-    paginator: Paginator,
+    paginator: cce_ui::widget::Adapted<Paginator>,
     view_dropdown: cce_ui::widget::Adapted<cce_ui::widget::Dropdown>,
     just_initialized: bool,
     ui_context: cce_ui::context::UiContext,

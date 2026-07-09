@@ -324,7 +324,6 @@ struct FilesystemApp {
     fs_service: services::fs::FsService,
     context_menu: ContextMenu,
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::Adapted<cce_ui::widget::TextBox>)>,
-    root_window: cce_ui::widget::Backplate,
     browse_splitter: cce_ui::widget::SplitBox,
     network_splitter: cce_ui::widget::SplitBox,
     browse_container: BrowseContainer,
@@ -403,11 +402,9 @@ impl FilesystemApp {
         cce_ui::widget::hover_animation::reset_frame_registration();
         cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
 
-        // Update root window size, background color, opacity
-        self.root_window.set_rect(0.0, 0.0, self.width as f32, self.height as f32);
-
-        // Rebuild Element Focus Hierarchy
-        self.root_window.clear_children(&mut self.ui_context);
+        // Root Backplate DISSOLVED: top-level widgets register parentless below; the
+        // window plate tuple is emitted in the legacy aggregate order (after the plain
+        // child quads).
 
         // Clear all widgets' hierarchy links
         self.paginator.clear_children(&mut self.ui_context); self.paginator.set_parent(None, &mut self.ui_context);
@@ -443,10 +440,17 @@ impl FilesystemApp {
             self.height as f32 - 32.0
         };
 
-        if has_sidebar {
-            link_parent_child(&mut self.root_window, &mut self.paginator, &mut self.ui_context);
+        {
+            let self_ptr = self as *mut Self;
+            unsafe {
+                if has_sidebar {
+                    self.ui_context.register_widget((*self_ptr).paginator.base().unwrap().id(), (*self_ptr).paginator.as_ptr_mut());
+                    (*self_ptr).paginator.set_parent(None, &mut self.ui_context);
+                }
+                self.ui_context.register_widget((*self_ptr).view_dropdown.base().unwrap().id(), (*self_ptr).view_dropdown.as_ptr_mut());
+                (*self_ptr).view_dropdown.set_parent(None, &mut self.ui_context);
+            }
         }
-        link_parent_child(&mut self.root_window, &mut self.view_dropdown, &mut self.ui_context);
 
         match self.current_page {
             Page::Browse => {
@@ -454,7 +458,13 @@ impl FilesystemApp {
                     self.browse_splitter.add_child_with_proportion(&mut self.browse_container, 0.49, 100.0);
                     self.browse_splitter.add_child_with_proportion(&mut self.preview, 0.51, 100.0);
                 }
-                link_parent_child(&mut self.root_window, &mut self.browse_splitter, &mut self.ui_context);
+                {
+                    let self_ptr = self as *mut Self;
+                    unsafe {
+                        self.ui_context.register_widget((*self_ptr).browse_splitter.base().unwrap().id(), (*self_ptr).browse_splitter.as_ptr_mut());
+                        (*self_ptr).browse_splitter.set_parent(None, &mut self.ui_context);
+                    }
+                }
                 self.browse_splitter.set_rect(browse_x, content_y, usable_w, content_h);
             }
             Page::Network => {
@@ -462,13 +472,20 @@ impl FilesystemApp {
                     self.network_splitter.add_child_with_proportion(&mut self.network_container, 0.49, 100.0);
                     self.network_splitter.add_child_with_proportion(&mut self.preview, 0.51, 100.0);
                 }
-                link_parent_child(&mut self.root_window, &mut self.network_splitter, &mut self.ui_context);
+                {
+                    let self_ptr = self as *mut Self;
+                    unsafe {
+                        self.ui_context.register_widget((*self_ptr).network_splitter.base().unwrap().id(), (*self_ptr).network_splitter.as_ptr_mut());
+                        (*self_ptr).network_splitter.set_parent(None, &mut self.ui_context);
+                    }
+                }
                 self.network_splitter.set_rect(browse_x, content_y, usable_w, content_h);
             }
         }
 
         if let Some((_, textbox)) = &mut self.open_with_dialog {
-            link_parent_child(&mut self.root_window, textbox, &mut self.ui_context);
+            self.ui_context.register_widget(textbox.base().unwrap().id(), textbox.as_ptr_mut());
+            textbox.set_parent(None, &mut self.ui_context);
         }
 
         // Layout widgets recursively inside the parent space
@@ -479,9 +496,48 @@ impl FilesystemApp {
             cce_ui::layout::render_widget(&mut dummy_pc, &mut self.paginator, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
 
-        // Render root window recursively
+        // Each top-level widget rendered through the same immediate-mode path the root
+        // recursion used, replicating the legacy TUPLE ORDER: plain child quads first,
+        // then the dissolved root Backplate's plate, then the rounded children (the
+        // aggregate emitted all plain quads before the rounded root bg).
         let mut window_pc = pages::PageContent::new();
-        cce_ui::layout::render_widget(&mut window_pc, &mut self.root_window, 0.0, 0.0, self.width as f32, self.height as f32, &mut self.ui_context);
+        {
+            let self_ptr = self as *mut Self;
+            unsafe {
+                let mut plain_pc = pages::PageContent::new();
+                let (x, y, w, h) = (*self_ptr).view_dropdown.rect();
+                cce_ui::layout::render_widget(&mut plain_pc, &mut (*self_ptr).view_dropdown, x, y, w, h, &mut self.ui_context);
+                match self.current_page {
+                    Page::Browse => {
+                        let (x, y, w, h) = (*self_ptr).browse_splitter.rect();
+                        cce_ui::layout::render_widget(&mut plain_pc, &mut (*self_ptr).browse_splitter, x, y, w, h, &mut self.ui_context);
+                    }
+                    Page::Network => {
+                        let (x, y, w, h) = (*self_ptr).network_splitter.rect();
+                        cce_ui::layout::render_widget(&mut plain_pc, &mut (*self_ptr).network_splitter, x, y, w, h, &mut self.ui_context);
+                    }
+                }
+                if let Some((_, textbox)) = &mut (*self_ptr).open_with_dialog {
+                    let (x, y, w, h) = textbox.rect();
+                    cce_ui::layout::render_widget(&mut plain_pc, textbox, x, y, w, h, &mut self.ui_context);
+                }
+
+                // Replicate the legacy aggregate's GLOBAL order: every plain child quad,
+                // then the dissolved root plate (its translucent wash sat over the plain
+                // content), then every rounded child quad.
+                let (plain, rounded): (Vec<_>, Vec<_>) = plain_pc.rects.into_iter().partition(|r| r.5 <= 0.1);
+                window_pc.rects.extend(plain);
+                let mut c = cce_ui::color::page_low_color();
+                if c[3] > 0.001 {
+                    c[3] = cce_ui::color::active_backplate_opacity();
+                }
+                let radius = cce_ui::color::backplate_corner_radius();
+                window_pc.rects.push((c, 0.0, 0.0, self.width as f32, self.height as f32, radius.max(0.0), (radius > 0.1, radius > 0.1, radius > 0.1, radius > 0.1)));
+                window_pc.rects.extend(rounded);
+                window_pc.texts.extend(plain_pc.texts);
+                window_pc.buttons.extend(plain_pc.buttons);
+            }
+        }
 
         // 3. Draw Page custom/static content (drawn to pc)
         let mut pc = pages::PageContent::new();
@@ -815,8 +871,9 @@ impl Application for FilesystemApp {
                 return false;
             }
         }
-        // 5. Fallback to ui_context's check for registered widgets
-        self.ui_context.is_movable_backplate_at(px, py)
+        // 5. Root Backplate dissolved: the surface itself is the movable plate; drag
+        // anywhere a drag-blocking widget isn't.
+        self.ui_context.drag_allowed_at(px, py)
     }
 
     fn new(_qh: &QueueHandle<cce_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
@@ -841,10 +898,6 @@ impl Application for FilesystemApp {
         let fs_service = services::fs::FsService::new(sender.clone());
         let initial_w = if select_mode { 900 } else { 1200 };
         let initial_h = if select_mode { 500 } else { 720 };
-        let root_window = cce_ui::widget::Backplate::new(0.0, 0.0, initial_w as f32, initial_h as f32)
-            .with_background(cce_ui::color::page_low_color())
-            .with_radius(cce_ui::color::backplate_corner_radius());
-
         let mut app = Self {
             current_page: Page::Browse,
             browse,
@@ -879,7 +932,6 @@ impl Application for FilesystemApp {
                 hovered: None,
             },
             open_with_dialog: None,
-            root_window,
             browse_splitter: cce_ui::widget::SplitBox::new(cce_ui::widget::SplitDirection::Horizontal, 12.0),
             network_splitter: cce_ui::widget::SplitBox::new(cce_ui::widget::SplitDirection::Horizontal, 12.0),
             browse_container: BrowseContainer {

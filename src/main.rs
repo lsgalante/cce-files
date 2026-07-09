@@ -2,7 +2,7 @@ use wayland_client::QueueHandle;
 use glyphon::FontSystem;
 
 use cce_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
-use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, TextItem, Element, PageSelector, Paginator, MenuController};
+use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, Element, PageSelector, Paginator, MenuController};
 use cce_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
@@ -305,7 +305,9 @@ struct FilesystemApp {
 
     // Rendering resources
     widgets: Vec<AppWidget>,
-    text_items: Vec<TextItem>,
+    // (content, font_size, x, y, color, font, bounds) — occlusion-adjusted text tuples,
+    // emitted as display-list Text prims.
+    texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
     font_system: FontSystem,
     needs_rebuild: bool,
     width: u32,
@@ -396,7 +398,7 @@ impl FilesystemApp {
         self.browse.list_box.prepare_text(&mut self.font_system);
 
         let mut widgets = Vec::new();
-        let mut text_items = Vec::new();
+        let mut texts = Vec::new();
 
         cce_ui::widget::hover_animation::reset_frame_registration();
         cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
@@ -713,20 +715,7 @@ impl FilesystemApp {
                     }
                 };
 
-                text_items.push(TextItem::new(
-                    &mut self.font_system,
-                    label,
-                    label_size,
-                    text_x,
-                    text_y,
-                    glyphon::Color::rgb(
-                        (label_color[0] * 255.0) as u8,
-                        (label_color[1] * 255.0) as u8,
-                        (label_color[2] * 255.0) as u8,
-                    ),
-                    None,
-                    final_button_bounds,
-                ));
+                texts.push((label.to_string(), label_size, text_x, text_y, label_color, None, final_button_bounds));
 
                 page_buttons.push((btn.clone(), action.clone()));
             }
@@ -772,25 +761,12 @@ impl FilesystemApp {
                     None => continue,
                 };
 
-                text_items.push(TextItem::new(
-                    &mut self.font_system,
-                    text,
-                    *size,
-                    *x,
-                    *y,
-                    glyphon::Color::rgb(
-                        (col[0] * 255.0) as u8,
-                        (col[1] * 255.0) as u8,
-                        (col[2] * 255.0) as u8,
-                    ),
-                    font.as_deref(),
-                    final_bounds,
-                ));
+                texts.push((text.clone(), *size, *x, *y, *col, font.clone(), final_bounds));
             }
         }
 
         self.widgets = widgets;
-        self.text_items = text_items;
+        self.texts = texts;
         self.page_buttons = page_buttons;
         self.ui_context.clear_dirty();
         self.needs_rebuild = false;
@@ -878,7 +854,7 @@ impl Application for FilesystemApp {
             select_directory,
             save_mode,
             widgets: Vec::new(),
-            text_items: Vec::new(),
+            texts: Vec::new(),
             font_system: cce_ui::create_font_system(),
             needs_rebuild: true,
             width: initial_w,
@@ -1153,36 +1129,17 @@ impl Application for FilesystemApp {
         }
     }
 
-    fn view(&mut self, _quads: &mut Vec<(f32, f32, f32, f32, [f32; 4])>, size: LogicalSize, scale: f64) {
+    fn display_list(&mut self, size: LogicalSize, scale: f64) -> Option<cce_ui::scene::paint::DisplayList> {
+        // Phase 6 single paint path: the whole frame — geometry and text — is this one list.
+        // rebuild_layout flattens every source (browse/network page, popovers, context menu,
+        // dialogs) into self.widgets/self.texts, with popover/dialog occlusion already folded
+        // into each text's bounds.
         if self.needs_rebuild || self.width != size.width as u32 || self.height != size.height as u32 || self.scale_factor != scale {
             self.width = size.width as u32;
             self.height = size.height as u32;
             self.scale_factor = scale;
             cce_ui::scale::set_scale_factor(scale as f32);
             self.rebuild_layout();
-        }
-    }
-
-    fn view_rounded_quads(&mut self, quads: &mut Vec<(f32, f32, f32, f32, f32, [f32; 4], (bool, bool, bool, bool))>, size: LogicalSize, scale: f64) {
-        if self.needs_rebuild || self.width != size.width as u32 || self.height != size.height as u32 || self.scale_factor != scale {
-            self.width = size.width as u32;
-            self.height = size.height as u32;
-            self.scale_factor = scale;
-            cce_ui::scale::set_scale_factor(scale as f32);
-            self.rebuild_layout();
-        }
-        for w in &self.widgets {
-            quads.push((w.x, w.y, w.w, w.h, w.radius, w.color, w.corners));
-        }
-    }
-
-    fn display_list(&mut self, _size: cce_ui::engine::LogicalSize, _scale: f64) -> Option<cce_ui::scene::paint::DisplayList> {
-        // Phase 3 single paint path (flat-list bridge). rebuild_layout flattens every source
-        // (browse/network page, popovers, context menu, dialogs) into self.widgets, which
-        // view_rounded_quads runs above — so build the DisplayList straight from that list.
-        // CCE_LEGACY_PAINT falls back.
-        if std::env::var("CCE_LEGACY_PAINT").is_ok() {
-            return None;
         }
         use cce_ui::scene::layout::Rect;
         let mut pc = cce_ui::scene::paint::PaintCtx::new();
@@ -1194,11 +1151,26 @@ impl Application for FilesystemApp {
                 pc.quad(rect, w.color);
             }
         }
+        for (text, font_size, x, y, col, font, bounds) in &self.texts {
+            pc.text_with(
+                text.clone(),
+                *x,
+                *y,
+                *font_size,
+                [
+                    (col[0] * 255.0) as u8,
+                    (col[1] * 255.0) as u8,
+                    (col[2] * 255.0) as u8,
+                ],
+                font.clone(),
+                *bounds,
+            );
+        }
         Some(pc.finish())
     }
 
-    fn text_items(&self) -> &[TextItem] {
-        &self.text_items
+    fn display_list_text(&self) -> bool {
+        true
     }
 
     fn clear_color(&self) -> [f32; 4] {

@@ -25,7 +25,7 @@ pub struct BrowseState {
     pub list_box: cce_ui::widget::List,
     pub selected: Option<usize>,
     pub breadcrumb: Adapted<Breadcrumb>,
-    pub save_name_box: cce_ui::widget::TextBox,
+    pub save_name_box: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
 }
 
 impl Default for BrowseState {

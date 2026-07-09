@@ -141,7 +141,7 @@ struct BrowseContainer {
     pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
     pub breadcrumb: *mut cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
     pub list_box: *mut cce_ui::widget::List,
-    pub save_name_box: *mut cce_ui::widget::TextBox,
+    pub save_name_box: *mut cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
     pub select_mode: bool,
 }
 
@@ -321,7 +321,7 @@ struct FilesystemApp {
     watcher: Option<notify::RecommendedWatcher>,
     fs_service: services::fs::FsService,
     context_menu: ContextMenu,
-    open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::TextBox)>,
+    open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::Adapted<cce_ui::widget::TextBox>)>,
     root_window: cce_ui::widget::Backplate,
     browse_splitter: cce_ui::widget::SplitBox,
     network_splitter: cce_ui::widget::SplitBox,

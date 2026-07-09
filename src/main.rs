@@ -1176,7 +1176,7 @@ impl Application for FilesystemApp {
         }
     }
 
-    fn display_list(&mut self) -> Option<cce_ui::scene::paint::DisplayList> {
+    fn display_list(&mut self, _size: cce_ui::engine::LogicalSize, _scale: f64) -> Option<cce_ui::scene::paint::DisplayList> {
         // Phase 3 single paint path (flat-list bridge). rebuild_layout flattens every source
         // (browse/network page, popovers, context menu, dialogs) into self.widgets, which
         // view_rounded_quads runs above — so build the DisplayList straight from that list.

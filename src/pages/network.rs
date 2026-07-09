@@ -108,7 +108,7 @@ impl NetworkState {
     }
 }
 
-pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut cce_ui::widget::Dropdown, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
+pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut cce_ui::widget::Adapted<cce_ui::widget::Dropdown>, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
 
     // Render the Breadcrumb and Dropdown next to it

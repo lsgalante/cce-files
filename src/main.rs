@@ -315,7 +315,7 @@ struct FilesystemApp {
     cursor_x: f32,
     cursor_y: f32,
     paginator: Paginator,
-    view_dropdown: cce_ui::widget::Dropdown,
+    view_dropdown: cce_ui::widget::Adapted<cce_ui::widget::Dropdown>,
     just_initialized: bool,
     ui_context: cce_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,

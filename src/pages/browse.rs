@@ -176,7 +176,7 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Dropdown, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
+pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted<cce_ui::widget::Dropdown>, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
     let text_dim = cce_ui::color::TEXT_DIM;
 

@@ -296,7 +296,7 @@ struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
     network: pages::network::NetworkState,
-    preview: pages::preview::PreviewState,
+    preview: cce_ui::widget::Adapted<pages::preview::PreviewState>,
 
     // Command-line chooser options
     select_mode: bool,
@@ -873,7 +873,7 @@ impl Application for FilesystemApp {
             current_page: Page::Browse,
             browse,
             network: pages::network::NetworkState::default(),
-            preview: pages::preview::PreviewState::default(),
+            preview: Default::default(),
             select_mode,
             select_directory,
             save_mode,

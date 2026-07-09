@@ -22,22 +22,18 @@ pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
             // Deprecated direct SetPath, as we now load previews via the FsService.
         }
         PreviewMessage::PreviewLoaded { path, data } => {
-            let path_display = path.to_string_lossy().to_string();
-            *state = PreviewState {
-                path: Some(path),
-                path_display,
-                name: data.name,
-                is_dir: data.is_dir,
-                size: data.size,
-                permissions: data.permissions,
-                modified: data.modified,
-                file_type: data.file_type,
-                target: data.target,
-                content_preview: data.content_preview,
-                image_preview: data.image_preview,
-                scroll_line: 0,
-                ..PreviewState::default()
-            };
+            state.path_display = path.to_string_lossy().to_string();
+            state.path = Some(path);
+            state.name = data.name;
+            state.is_dir = data.is_dir;
+            state.size = data.size;
+            state.permissions = data.permissions;
+            state.modified = data.modified;
+            state.file_type = data.file_type;
+            state.target = data.target;
+            state.content_preview = data.content_preview;
+            state.image_preview = data.image_preview;
+            state.scroll_line = 0;
         }
     }
 }

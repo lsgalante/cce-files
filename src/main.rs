@@ -136,161 +136,111 @@ struct ContextMenu {
     hovered: Option<usize>,
 }
 
-struct BrowseContainer {
-    pub base: cce_ui::widget::Widget,
-    pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
-    pub breadcrumb: *mut cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
-    pub list_box: *mut cce_ui::widget::List,
-    pub save_name_box: *mut cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
-    pub select_mode: bool,
+/// App-owned two-pane horizontal split, replacing the dissolved `SplitBox` +
+/// `BrowseContainer`/`NetworkContainer` shims (Phase 6y). Those existed to (a) position
+/// pane content — but the pages already lay out and render everything from the pane rect,
+/// the container copies just coincided (the Phase 0 double-paint) — and (b) own the
+/// divider: its quad, hover tint, and proportion drag. This is (b), app-side, with the
+/// `SplitBox` two-child horizontal math verbatim.
+struct SplitPane {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    /// Left pane's share of the space (proportions summed to 1.0 in the legacy SplitBox).
+    frac: f32,
+    min_left: f32,
+    min_right: f32,
+    gap: f32,
+    dragging: bool,
+    hovered: bool,
 }
 
-impl cce_ui::widget::Element for BrowseContainer {
-    cce_ui::impl_widget_base!(BrowseContainer);
-
-    fn color(&self) -> [f32; 4] {
-        [0.0, 0.0, 0.0, 0.0]
+impl SplitPane {
+    fn new(frac: f32, min_left: f32, min_right: f32, gap: f32) -> Self {
+        Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0, frac, min_left, min_right, gap, dragging: false, hovered: false }
     }
 
-    fn children(&self, _ctx: &cce_ui::widget::UiContext) -> Vec<*mut (dyn cce_ui::widget::Element + 'static)> {
-        let mut list = vec![self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static), self.list_box as *mut (dyn cce_ui::widget::Element + 'static)];
-        if self.select_mode {
-            list.push(self.save_name_box as *mut (dyn cce_ui::widget::Element + 'static));
-        }
-        list
+    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.x = x;
+        self.y = y;
+        self.w = w;
+        self.h = h;
     }
 
-    fn parent(&self, _ctx: &cce_ui::widget::UiContext) -> Option<*mut (dyn cce_ui::widget::Element + 'static)> {
-        self.parent
+    fn left_w(&self) -> f32 {
+        self.frac * (self.w - self.gap).max(0.0)
     }
 
-    fn set_parent(&mut self, parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>, ctx: &mut cce_ui::widget::UiContext) {
-        self.parent = parent;
-        if parent.is_some() {
-            let self_ptr = self as *mut Self;
-            let self_id = self.base.id();
-            unsafe {
-                let bc_id = (*self.breadcrumb).base().unwrap().id();
-                ctx.register_widget(bc_id, self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static));
-                ctx.link_ids(self_id, bc_id);
-                (*self.breadcrumb).set_parent(Some(self_ptr), ctx);
+    fn left_rect(&self) -> (f32, f32, f32, f32) {
+        (self.x, self.y, self.left_w(), self.h)
+    }
 
-                let lb_id = (*self.list_box).base().unwrap().id();
-                ctx.register_widget(lb_id, self.list_box as *mut (dyn cce_ui::widget::Element + 'static));
-                ctx.link_ids(self_id, lb_id);
-                (*self.list_box).set_parent(Some(self_ptr), ctx);
+    fn right_rect(&self) -> (f32, f32, f32, f32) {
+        let lx = self.x + self.left_w() + self.gap;
+        (lx, self.y, (self.x + self.w - lx).max(0.0), self.h)
+    }
 
-                if self.select_mode {
-                    let sn_id = (*self.save_name_box).base().unwrap().id();
-                    ctx.register_widget(sn_id, self.save_name_box as *mut (dyn cce_ui::widget::Element + 'static));
-                    ctx.link_ids(self_id, sn_id);
-                    (*self.save_name_box).set_parent(Some(self_ptr), ctx);
+    fn divider_rect(&self) -> (f32, f32, f32, f32) {
+        (self.x + self.left_w(), self.y, self.gap, self.h)
+    }
+
+    fn hit_divider(&self, px: f32, py: f32) -> bool {
+        let (sx, sy, sw, sh) = self.divider_rect();
+        px >= sx && px <= sx + sw && py >= sy && py <= sy + sh
+    }
+
+    /// Divider drag + hover (`SplitBox::on_cursor_moved`, two-child horizontal case).
+    fn cursor_moved(&mut self, px: f32, py: f32) -> bool {
+        let mut handled = false;
+        if self.dragging {
+            let combined = (self.w - self.gap).max(0.0);
+            if combined > 0.1 {
+                let new_left = (px - self.x - self.gap / 2.0)
+                    .clamp(self.min_left, (combined - self.min_right).max(self.min_left));
+                let new_frac = new_left / combined;
+                if (new_frac - self.frac).abs() > 0.0001 {
+                    self.frac = new_frac;
+                    handled = true;
                 }
             }
         }
+        let new_hovered = !self.dragging && self.hit_divider(px, py);
+        if new_hovered != self.hovered {
+            self.hovered = new_hovered;
+            handled = true;
+        }
+        handled
     }
 
-    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.base.x = x;
-        self.base.y = y;
-        self.base.w = w;
-        self.base.h = h;
+    /// Left press on the divider grabs it (`SplitBox::mouse_input`).
+    fn press(&mut self, px: f32, py: f32) -> bool {
+        if self.hit_divider(px, py) {
+            self.dragging = true;
+            return true;
+        }
+        false
+    }
 
-        let gap = 12.0;
-        let breadcrumb_h = cce_ui::layout::button_height();
-        let textbox_h = 24.0;
+    /// Returns whether a drag was in progress (the legacy release consumed the event).
+    fn release(&mut self) -> bool {
+        std::mem::take(&mut self.dragging)
+    }
 
-        unsafe {
-            // pages/browse::view re-renders the breadcrumb and the view dropdown on top of this
-            // container's paint. Position the breadcrumb here to EXACTLY match that layout
-            // (inset by the page margin, reserving the dropdown's width beside it) so this
-            // container's copy sits fully behind the page copy instead of leaking a dark strip
-            // behind the dropdown and margins. Keep these constants in sync with pages/browse.rs.
-            let page_margin = 12.0;
-            let dropdown_w = 120.0;
-            let page_breadcrumb_h = 24.0;
-            let inner_x = x + page_margin;
-            let inner_y = y + page_margin;
-            let inner_w = w - 2.0 * page_margin;
-            let bc_w = inner_w - dropdown_w - gap;
-            (*self.breadcrumb).set_rect(inner_x, inner_y, bc_w, page_breadcrumb_h);
-            let list_h = if self.select_mode {
-                h - breadcrumb_h - textbox_h - 2.0 * gap
-            } else {
-                h - breadcrumb_h - gap
-            };
-            (*self.list_box).set_rect(x, y + breadcrumb_h + gap, w, list_h);
-
-            if self.select_mode {
-                (*self.save_name_box).set_rect(x, y + h - textbox_h, w, textbox_h);
-                (*self.save_name_box).set_row_rect(x, w);
-            }
+    /// The divider quad (`SplitBox::extra_quads`): accent while dragging, tint on hover,
+    /// hairline otherwise.
+    fn divider_quad(&self) -> (f32, f32, f32, f32, [f32; 4]) {
+        let (sx, sy, sw, sh) = self.divider_rect();
+        if self.dragging {
+            (sx + sw / 2.0 - 1.0, sy, 2.0, sh, [0.36, 0.56, 0.38, 0.8])
+        } else if self.hovered {
+            (sx + sw / 2.0 - 1.0, sy, 2.0, sh, [0.25, 0.25, 0.32, 0.6])
+        } else {
+            (sx + sw / 2.0 - 0.5, sy, 1.0, sh, [0.15, 0.15, 0.18, 0.4])
         }
     }
 }
 
-unsafe impl Send for BrowseContainer {}
-unsafe impl Sync for BrowseContainer {}
-
-struct NetworkContainer {
-    pub base: cce_ui::widget::Widget,
-    pub parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>,
-    pub breadcrumb: *mut cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
-    pub graph: *mut cce_ui::widget::Adapted<cce_ui::widget::Graph>,
-}
-
-impl cce_ui::widget::Element for NetworkContainer {
-    cce_ui::impl_widget_base!(NetworkContainer);
-
-    fn color(&self) -> [f32; 4] {
-        [0.0, 0.0, 0.0, 0.0]
-    }
-
-    fn children(&self, _ctx: &cce_ui::widget::UiContext) -> Vec<*mut (dyn cce_ui::widget::Element + 'static)> {
-        vec![self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static), self.graph as *mut (dyn cce_ui::widget::Element + 'static)]
-    }
-
-    fn parent(&self, _ctx: &cce_ui::widget::UiContext) -> Option<*mut (dyn cce_ui::widget::Element + 'static)> {
-        self.parent
-    }
-
-    fn set_parent(&mut self, parent: Option<*mut (dyn cce_ui::widget::Element + 'static)>, ctx: &mut cce_ui::widget::UiContext) {
-        self.parent = parent;
-        if parent.is_some() {
-            let self_ptr = self as *mut Self;
-            let self_id = self.base.id();
-            unsafe {
-                let bc_id = (*self.breadcrumb).base().unwrap().id();
-                ctx.register_widget(bc_id, self.breadcrumb as *mut (dyn cce_ui::widget::Element + 'static));
-                ctx.link_ids(self_id, bc_id);
-                (*self.breadcrumb).set_parent(Some(self_ptr), ctx);
-
-                let g_id = (*self.graph).base().unwrap().id();
-                ctx.register_widget(g_id, self.graph as *mut (dyn cce_ui::widget::Element + 'static));
-                ctx.link_ids(self_id, g_id);
-                (*self.graph).set_parent(Some(self_ptr), ctx);
-            }
-        }
-    }
-
-    fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.base.x = x;
-        self.base.y = y;
-        self.base.w = w;
-        self.base.h = h;
-
-        let gap = 12.0;
-        let breadcrumb_h = cce_ui::layout::button_height();
-
-        unsafe {
-            (*self.breadcrumb).set_rect(x, y, w, breadcrumb_h);
-            (*self.graph).set_rect(x, y + breadcrumb_h + gap, w, h - breadcrumb_h - gap);
-        }
-    }
-}
-
-unsafe impl Send for NetworkContainer {}
-unsafe impl Sync for NetworkContainer {}
 
 struct FilesystemApp {
     current_page: Page,
@@ -324,10 +274,8 @@ struct FilesystemApp {
     fs_service: services::fs::FsService,
     context_menu: ContextMenu,
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::Adapted<cce_ui::widget::TextBox>)>,
-    browse_splitter: cce_ui::widget::SplitBox,
-    network_splitter: cce_ui::widget::SplitBox,
-    browse_container: BrowseContainer,
-    network_container: NetworkContainer,
+    browse_split: SplitPane,
+    network_split: SplitPane,
     last_click_time: std::time::Instant,
     last_clicked_idx: Option<usize>,
 }
@@ -382,15 +330,6 @@ impl FilesystemApp {
     }
 
     fn rebuild_layout(&mut self) {
-        // Refresh the container child pointers on every rebuild. They point into
-        // self.browse / self.network, whose addresses change when the app value is
-        // first moved out of new(); re-taking them here (where self is at its final
-        // address) keeps them valid regardless of return-value optimization.
-        self.browse_container.breadcrumb = &mut self.browse.breadcrumb;
-        self.browse_container.list_box = &mut self.browse.list_box;
-        self.browse_container.save_name_box = &mut self.browse.save_name_box;
-        self.network_container.breadcrumb = &mut self.network.breadcrumb;
-        self.network_container.graph = &mut self.network.graph;
 
         self.ui_context.clear_hierarchy();
         self.browse.save_name_box.prepare_text(&mut self.font_system);
@@ -411,10 +350,6 @@ impl FilesystemApp {
         self.view_dropdown.clear_children(&mut self.ui_context); self.view_dropdown.set_parent(None, &mut self.ui_context);
         self.preview.clear_children(&mut self.ui_context); self.preview.set_parent(None, &mut self.ui_context);
 
-        self.browse_splitter.set_parent(None, &mut self.ui_context);
-        self.network_splitter.set_parent(None, &mut self.ui_context);
-        self.browse_container.clear_children(&mut self.ui_context); self.browse_container.set_parent(None, &mut self.ui_context);
-        self.network_container.clear_children(&mut self.ui_context); self.network_container.set_parent(None, &mut self.ui_context);
 
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
         self.browse.list_box.clear_children(&mut self.ui_context); self.browse.list_box.set_parent(None, &mut self.ui_context);
@@ -426,7 +361,6 @@ impl FilesystemApp {
             textbox.set_parent(None, &mut self.ui_context);
         }
 
-        use cce_ui::widget::focus::link_parent_child;
         let has_sidebar = false;
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
         let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
@@ -452,35 +386,13 @@ impl FilesystemApp {
             }
         }
 
+        // SplitBox + pane containers DISSOLVED (Phase 6y): the split is app state; the
+        // pages lay out and render the left pane's content from the pane rect (they
+        // always did — the container copies just coincided), the preview renders into
+        // the right pane below.
         match self.current_page {
-            Page::Browse => {
-                if self.browse_splitter.children.is_empty() {
-                    self.browse_splitter.add_child_with_proportion(&mut self.browse_container, 0.49, 100.0);
-                    self.browse_splitter.add_child_with_proportion(&mut self.preview, 0.51, 100.0);
-                }
-                {
-                    let self_ptr = self as *mut Self;
-                    unsafe {
-                        self.ui_context.register_widget((*self_ptr).browse_splitter.base().unwrap().id(), (*self_ptr).browse_splitter.as_ptr_mut());
-                        (*self_ptr).browse_splitter.set_parent(None, &mut self.ui_context);
-                    }
-                }
-                self.browse_splitter.set_rect(browse_x, content_y, usable_w, content_h);
-            }
-            Page::Network => {
-                if self.network_splitter.children.is_empty() {
-                    self.network_splitter.add_child_with_proportion(&mut self.network_container, 0.49, 100.0);
-                    self.network_splitter.add_child_with_proportion(&mut self.preview, 0.51, 100.0);
-                }
-                {
-                    let self_ptr = self as *mut Self;
-                    unsafe {
-                        self.ui_context.register_widget((*self_ptr).network_splitter.base().unwrap().id(), (*self_ptr).network_splitter.as_ptr_mut());
-                        (*self_ptr).network_splitter.set_parent(None, &mut self.ui_context);
-                    }
-                }
-                self.network_splitter.set_rect(browse_x, content_y, usable_w, content_h);
-            }
+            Page::Browse => self.browse_split.set_rect(browse_x, content_y, usable_w, content_h),
+            Page::Network => self.network_split.set_rect(browse_x, content_y, usable_w, content_h),
         }
 
         if let Some((_, textbox)) = &mut self.open_with_dialog {
@@ -507,14 +419,36 @@ impl FilesystemApp {
                 let mut plain_pc = pages::PageContent::new();
                 let (x, y, w, h) = (*self_ptr).view_dropdown.rect();
                 cce_ui::layout::render_widget(&mut plain_pc, &mut (*self_ptr).view_dropdown, x, y, w, h, &mut self.ui_context);
-                match self.current_page {
-                    Page::Browse => {
-                        let (x, y, w, h) = (*self_ptr).browse_splitter.rect();
-                        cce_ui::layout::render_widget(&mut plain_pc, &mut (*self_ptr).browse_splitter, x, y, w, h, &mut self.ui_context);
-                    }
-                    Page::Network => {
-                        let (x, y, w, h) = (*self_ptr).network_splitter.rect();
-                        cce_ui::layout::render_widget(&mut plain_pc, &mut (*self_ptr).network_splitter, x, y, w, h, &mut self.ui_context);
+                // The dissolved splitter's paint: its divider quad, then the preview
+                // pane (the only pane content the pages don't render themselves). The
+                // left pane's container copy is gone — the legacy aggregate painted it
+                // UNDER the page's own copy, double-compositing every translucent quad.
+                {
+                    let split = match self.current_page {
+                        Page::Browse => &self.browse_split,
+                        Page::Network => &self.network_split,
+                    };
+                    let (dx, dy, dw, dh, dc) = split.divider_quad();
+                    plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
+                    let (px_r, py_r, pw_r, ph_r) = split.right_rect();
+                    let mut preview_pc = pages::PageContent::new();
+                    cce_ui::layout::render_widget(&mut preview_pc, &mut (*self_ptr).preview, px_r, py_r, pw_r, ph_r, &mut self.ui_context);
+                    plain_pc.rects.extend(preview_pc.rects);
+                    // The legacy SplitBox clamped pane text to its bounds (None -> the
+                    // splitter rect); keep the preview's text inside its pane.
+                    for (t, size, tx, ty, col, font, bounds) in preview_pc.texts {
+                        let cb = match bounds {
+                            Some(b) => {
+                                let x0 = b[0].max(px_r);
+                                let y0 = b[1].max(py_r);
+                                let x1 = b[2].min(px_r + pw_r);
+                                let y1 = b[3].min(py_r + ph_r);
+                                if x1 <= x0 || y1 <= y0 { continue; }
+                                Some([x0, y0, x1, y1])
+                            }
+                            None => Some([px_r, py_r, px_r + pw_r, py_r + ph_r]),
+                        };
+                        plain_pc.texts.push((t, size, tx, ty, col, font, cb));
                     }
                 }
                 if let Some((_, textbox)) = &mut (*self_ptr).open_with_dialog {
@@ -543,7 +477,7 @@ impl FilesystemApp {
         let mut pc = pages::PageContent::new();
         match self.current_page {
             Page::Browse => {
-                let (bx, by, bw, bh) = self.browse_container.rect();
+                let (bx, by, bw, bh) = self.browse_split.left_rect();
                 let browse_pc = pages::browse::view(&mut self.browse, &mut self.view_dropdown, bx, by, bw, bh, self.select_mode, &mut self.ui_context);
 
                 pc.rects.extend(browse_pc.rects);
@@ -551,7 +485,7 @@ impl FilesystemApp {
                 pc.buttons.extend(browse_pc.buttons);
             }
             Page::Network => {
-                let (nx, ny, nw, nh) = self.network_container.rect();
+                let (nx, ny, nw, nh) = self.network_split.left_rect();
                 let network_pc = pages::network::view(&mut self.network, &self.browse, &mut self.view_dropdown, nx, ny, nw, nh, &mut self.ui_context);
 
                 pc.rects.extend(network_pc.rects);
@@ -863,11 +797,11 @@ impl Application for FilesystemApp {
             }
         }
         if self.current_page == Page::Browse {
-            if self.browse_splitter.dragging_idx.is_some() || self.browse_splitter.hovered_idx.is_some() {
+            if self.browse_split.dragging || self.browse_split.hovered {
                 return false;
             }
         } else if self.current_page == Page::Network {
-            if self.network_splitter.dragging_idx.is_some() || self.network_splitter.hovered_idx.is_some() {
+            if self.network_split.dragging || self.network_split.hovered {
                 return false;
             }
         }
@@ -898,7 +832,7 @@ impl Application for FilesystemApp {
         let fs_service = services::fs::FsService::new(sender.clone());
         let initial_w = if select_mode { 900 } else { 1200 };
         let initial_h = if select_mode { 500 } else { 720 };
-        let mut app = Self {
+        let app = Self {
             current_page: Page::Browse,
             browse,
             network: pages::network::NetworkState::default(),
@@ -932,34 +866,13 @@ impl Application for FilesystemApp {
                 hovered: None,
             },
             open_with_dialog: None,
-            browse_splitter: cce_ui::widget::SplitBox::new(cce_ui::widget::SplitDirection::Horizontal, 12.0),
-            network_splitter: cce_ui::widget::SplitBox::new(cce_ui::widget::SplitDirection::Horizontal, 12.0),
-            browse_container: BrowseContainer {
-                base: cce_ui::widget::Widget::new(),
-                parent: None,
-                breadcrumb: std::ptr::null_mut(),
-                list_box: std::ptr::null_mut(),
-                save_name_box: std::ptr::null_mut(),
-                select_mode,
-            },
-            network_container: NetworkContainer {
-                base: cce_ui::widget::Widget::new(),
-                parent: None,
-                breadcrumb: std::ptr::null_mut(),
-                graph: std::ptr::null_mut(),
-            },
+            browse_split: SplitPane::new(0.49, 100.0, 100.0, 12.0),
+            network_split: SplitPane::new(0.49, 100.0, 100.0, 12.0),
             last_click_time: std::time::Instant::now(),
             last_clicked_idx: None,
         };
 
-        // Initialize container references
-        app.browse_container.breadcrumb = &mut app.browse.breadcrumb;
-        app.browse_container.list_box = &mut app.browse.list_box;
-        app.browse_container.save_name_box = &mut app.browse.save_name_box;
-
-        app.network_container.breadcrumb = &mut app.network.breadcrumb;
-        app.network_container.graph = &mut app.network.graph;
-
+        
         // Start initial directory loading via FsService
         app.fs_service.send(services::fs::FsRequest::ReadLastDir);
 
@@ -1268,11 +1181,11 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
-            if self.browse_splitter.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+            if self.browse_split.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
         } else if self.current_page == Page::Network {
-            if self.network_splitter.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+            if self.network_split.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
         }
@@ -1533,14 +1446,22 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if self.current_page == Page::Browse {
-            if self.browse_splitter.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                return None;
-            }
-        } else if self.current_page == Page::Network {
-            if self.network_splitter.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+        // The dissolved splitter's divider: a left press grabs it (stealing keyboard
+        // focus like the legacy ctx.set_focused_ptr / release's clear_focus pair did),
+        // a release ends the drag.
+        if button == MouseButton::Left {
+            let split = match self.current_page {
+                Page::Browse => &mut self.browse_split,
+                Page::Network => &mut self.network_split,
+            };
+            if state == ElementState::Pressed {
+                if split.press(pos.x, pos.y) {
+                    self.ui_context.clear_focus();
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            } else if split.release() {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 return None;

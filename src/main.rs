@@ -333,7 +333,7 @@ impl FilesystemApp {
 
         self.ui_context.clear_hierarchy();
         self.browse.save_name_box.prepare_text(&mut self.font_system);
-        self.browse.list_box.prepare_text(&mut self.font_system);
+        self.browse.search_box.prepare_text(&mut self.font_system);
 
         let mut widgets = Vec::new();
         let mut texts = Vec::new();
@@ -352,7 +352,6 @@ impl FilesystemApp {
 
 
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
-        self.browse.list_box.clear_children(&mut self.ui_context); self.browse.list_box.set_parent(None, &mut self.ui_context);
         self.browse.breadcrumb.clear_children(&mut self.ui_context); self.browse.breadcrumb.set_parent(None, &mut self.ui_context);
         self.network.breadcrumb.clear_children(&mut self.ui_context); self.network.breadcrumb.set_parent(None, &mut self.ui_context);
         self.network.graph.clear_children(&mut self.ui_context); self.network.graph.set_parent(None, &mut self.ui_context);
@@ -800,6 +799,13 @@ impl Application for FilesystemApp {
             if self.browse_split.dragging || self.browse_split.hovered {
                 return false;
             }
+            // The dissolved List blocked window drags via its registered ScrollBox
+            // (blocks_backplate_drag); veto app-side now or every row press starts a
+            // compositor window move and the app never sees it.
+            let l = &self.browse.list;
+            if px >= l.x && px <= l.x + l.w && py >= l.y && py <= l.y + l.h {
+                return false;
+            }
         } else if self.current_page == Page::Network {
             if self.network_split.dragging || self.network_split.hovered {
                 return false;
@@ -1204,7 +1210,10 @@ impl Application for FilesystemApp {
                     changed = true;
                 }
             }
-            if self.browse.list_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+            if self.browse.list.cursor_moved(pos.x, pos.y) {
+                changed = true;
+            }
+            if self.browse.search_visible && self.browse.search_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
                 changed = true;
             }
             if self.browse.breadcrumb.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
@@ -1478,13 +1487,23 @@ impl Application for FilesystemApp {
                     self.needs_rebuild = true;
                 }
             }
-            if self.browse.list_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+            if self.browse.search_visible
+                && button == MouseButton::Left
+                && self.browse.search_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context)
+            {
+                self.ui_context.set_focused(&mut self.browse.search_box);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
-                if let Some(idx) = self.browse.list_box.take_double_click() {
+            }
+            if button == MouseButton::Left
+                && self.browse.list.mouse_input(state == ElementState::Pressed, pos.x, pos.y)
+            {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                if let Some(idx) = self.browse.list.take_double_click() {
                     return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
                 }
-                if let Some(idx) = self.browse.list_box.take_click() {
+                if let Some(idx) = self.browse.list.take_click() {
                     return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)));
                 }
             }
@@ -1597,10 +1616,10 @@ impl Application for FilesystemApp {
         }
 
         if state == ElementState::Pressed {
-            let clicked_search = self.current_page == Page::Browse && self.browse.list_box.search_enabled && self.browse.list_box.search_visible && self.browse.list_box.search_box.hit_test(pos.x, pos.y, &self.ui_context);
+            let clicked_search = self.current_page == Page::Browse && self.browse.search_visible && self.browse.search_box.hit_test(pos.x, pos.y, &self.ui_context);
             let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.browse.save_name_box.hit_test(pos.x, pos.y, &self.ui_context);
-            if !clicked_search && self.browse.list_box.search_enabled {
-                self.browse.list_box.search_box.unfocus();
+            if !clicked_search {
+                self.browse.search_box.unfocus();
             }
             if !clicked_save_name {
                 self.browse.save_name_box.unfocus();
@@ -1650,7 +1669,7 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
-            if self.browse.list_box.mouse_wheel(delta, pos.x, pos.y, &mut self.ui_context) {
+            if self.browse.list.wheel(delta, pos.x, pos.y) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1702,20 +1721,37 @@ impl Application for FilesystemApp {
             }
         }
 
-        // If the search textbox is focused, forward key inputs to it
+        // The dissolved List's search keys, app-side: the open shortcut shows the strip
+        // and focuses the box; the close shortcut hides it and clears the filter (the
+        // legacy List set just_changed after clearing, which surfaced as an empty
+        // SearchChanged); anything else goes to the box while it is open.
         if self.current_page == Page::Browse {
-            let is_open_search = !self.browse.list_box.search_visible && {
+            if !self.browse.search_visible {
                 let open_key = cce_ui::color::list_open_search_key();
-                event.state == ElementState::Pressed && cce_ui::widget::match_key_shortcut(event, &open_key)
-            };
-            
-            if self.browse.list_box.search_visible || is_open_search {
-                if self.browse.list_box.keyboard_input(event, &mut self.ui_context) {
+                if cce_ui::widget::match_key_shortcut(event, &open_key) {
+                    self.browse.search_visible = true;
+                    self.browse.search_box.focus();
+                    self.ui_context.set_focused(&mut self.browse.search_box);
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
-                    if self.browse.list_box.search_box.take_change() {
+                    return None;
+                }
+            } else {
+                let close_key = cce_ui::color::list_close_search_key();
+                if cce_ui::widget::match_key_shortcut(event, &close_key) {
+                    self.browse.search_visible = false;
+                    self.browse.search_box.unfocus();
+                    self.ui_context.clear_focus();
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(String::new())));
+                }
+                if self.browse.search_box.keyboard_input(event, &mut self.ui_context) {
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    if self.browse.search_box.take_change() {
                         return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(
-                            self.browse.list_box.search_box.text.clone()
+                            self.browse.search_box.text.clone()
                         )));
                     }
                     return None;

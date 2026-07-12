@@ -9,7 +9,23 @@
 //! row overlays) BEFORE the rounded background, washing them under the translucent bg —
 //! the same sandwich the settings lists had (Phase 6v). `push_prims` draws bg first.
 
-use cce_ui::widget::{ColumnWidth, ListColumn, MouseScrollDelta};
+use cce_ui::widget::{Justification, MouseScrollDelta};
+
+/// Column sizing (moved here with the cce-ui `List` deletion — RowList is the only
+/// remaining consumer of the column model).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColumnWidth {
+    Flex,
+    Absolute(f32),
+    RightOffset(f32),
+}
+
+#[derive(Debug, Clone)]
+pub struct ListColumn {
+    pub name: String,
+    pub width: ColumnWidth,
+    pub justification: Justification,
+}
 
 #[derive(Debug, Clone)]
 pub struct Row {

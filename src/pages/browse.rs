@@ -195,30 +195,30 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     let show_modified = list_w > 280.0;
 
     let mut cols = vec![
-        cce_ui::widget::ListColumn {
+        crate::row_list::ListColumn {
             name: "Name".to_string(),
-            width: cce_ui::widget::ColumnWidth::Flex,
+            width: crate::row_list::ColumnWidth::Flex,
             justification: cce_ui::widget::Justification::Left,
         }
     ];
     if show_size {
-        cols.push(cce_ui::widget::ListColumn {
+        cols.push(crate::row_list::ListColumn {
             name: "Size".to_string(),
-            width: cce_ui::widget::ColumnWidth::RightOffset(290.0),
+            width: crate::row_list::ColumnWidth::RightOffset(290.0),
             justification: cce_ui::widget::Justification::Left,
         });
     }
     if show_perm {
-        cols.push(cce_ui::widget::ListColumn {
+        cols.push(crate::row_list::ListColumn {
             name: "Permissions".to_string(),
-            width: cce_ui::widget::ColumnWidth::RightOffset(210.0),
+            width: crate::row_list::ColumnWidth::RightOffset(210.0),
             justification: cce_ui::widget::Justification::Left,
         });
     }
     if show_modified {
-        cols.push(cce_ui::widget::ListColumn {
+        cols.push(crate::row_list::ListColumn {
             name: "Modified".to_string(),
-            width: cce_ui::widget::ColumnWidth::RightOffset(120.0),
+            width: crate::row_list::ColumnWidth::RightOffset(120.0),
             justification: cce_ui::widget::Justification::Left,
         });
     }

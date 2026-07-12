@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
-use cce_ui::widget::{Adapted, Element, Breadcrumb, PathController};
+use cce_ui::widget::{Adapted, WidgetHost, Breadcrumb, PathController};
 use cce_ui::layout::{ColumnLayout, LayoutStrategy};
 
 // ── Data ────────────────────────────────────────────────────────────

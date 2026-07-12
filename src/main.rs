@@ -2,7 +2,7 @@ use wayland_client::QueueHandle;
 use glyphon::FontSystem;
 
 use cce_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
-use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, Element, PageSelector, Paginator, MenuController};
+use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, WidgetHost, PageSelector, Paginator, MenuController};
 use cce_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};

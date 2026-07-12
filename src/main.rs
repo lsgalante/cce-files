@@ -377,10 +377,10 @@ impl FilesystemApp {
             let self_ptr = self as *mut Self;
             unsafe {
                 if has_sidebar {
-                    self.ui_context.register_widget((*self_ptr).paginator.base().unwrap().id(), (*self_ptr).paginator.as_ptr_mut());
+                    self.ui_context.register_widget((*self_ptr).paginator.base().id(), (*self_ptr).paginator.as_ptr_mut());
                     (*self_ptr).paginator.set_parent(None, &mut self.ui_context);
                 }
-                self.ui_context.register_widget((*self_ptr).view_dropdown.base().unwrap().id(), (*self_ptr).view_dropdown.as_ptr_mut());
+                self.ui_context.register_widget((*self_ptr).view_dropdown.base().id(), (*self_ptr).view_dropdown.as_ptr_mut());
                 (*self_ptr).view_dropdown.set_parent(None, &mut self.ui_context);
             }
         }
@@ -395,7 +395,7 @@ impl FilesystemApp {
         }
 
         if let Some((_, textbox)) = &mut self.open_with_dialog {
-            self.ui_context.register_widget(textbox.base().unwrap().id(), textbox.as_ptr_mut());
+            self.ui_context.register_widget(textbox.base().id(), textbox.as_ptr_mut());
             textbox.set_parent(None, &mut self.ui_context);
         }
 
@@ -636,7 +636,7 @@ impl FilesystemApp {
                 });
             }
             for (btn, action) in &pc_part.buttons {
-                let base = btn.base().unwrap();
+                let base = btn.base();
                 let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
                 let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
                 let label = base.label.as_deref().unwrap_or("");
@@ -789,10 +789,9 @@ impl Application for FilesystemApp {
         }
         // 4. If over any page button, do not drag
         for (btn, _) in &self.page_buttons {
-            if let Some(base) = btn.base() {
-                if px >= base.x && px <= base.x + base.w && py >= base.y && py <= base.y + base.h {
-                    return false;
-                }
+            let base = btn.base();
+            if px >= base.x && px <= base.x + base.w && py >= base.y && py <= base.y + base.h {
+                return false;
             }
         }
         if self.current_page == Page::Browse {
@@ -1236,7 +1235,7 @@ impl Application for FilesystemApp {
 
         // Always check if buttons hover state changed
         for (btn, _action) in &self.page_buttons {
-            let base = btn.base().unwrap();
+            let base = btn.base();
             let _hovering = self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
                 && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h;
             // Trigger redraw on pointer moves so hover transitions are smooth
@@ -1368,7 +1367,7 @@ impl Application for FilesystemApp {
             // Check if right-clicked on a list button
             let mut right_clicked_action = None;
             for (btn, action) in &self.page_buttons {
-                let base = btn.base().unwrap();
+                let base = btn.base();
                 if pos.x >= base.x && pos.x <= base.x + base.w && pos.y >= base.y && pos.y <= base.y + base.h {
                     right_clicked_action = Some(action.clone());
                     break;
@@ -1633,7 +1632,7 @@ impl Application for FilesystemApp {
 
         if button == MouseButton::Left && state == ElementState::Released {
             for (btn, action) in &self.page_buttons {
-                let base = btn.base().unwrap();
+                let base = btn.base();
                 if pos.x >= base.x && pos.x <= base.x + base.w && pos.y >= base.y && pos.y <= base.y + base.h {
                     *needs_rebuild = true;
                     self.needs_rebuild = true;

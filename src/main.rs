@@ -1153,9 +1153,12 @@ impl Application for FilesystemApp {
 
         let mut changed = false;
 
+        // Routed dispatch (6bd shrink): one Event through the router per targeted root.
+        let mv = cce_ui::widget::Event::PointerMove { x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
         if self.open_with_dialog.is_some() {
             if let Some((_path, textbox)) = &mut self.open_with_dialog {
-                let _ = textbox.cursor_moved(pos.x, pos.y, &mut self.ui_context);
+                let ptr = textbox.as_ptr_mut();
+                let _ = self.ui_context.propagate_event(&mv, ptr);
             }
             *needs_rebuild = true;
             self.needs_rebuild = true;
@@ -1195,39 +1198,58 @@ impl Application for FilesystemApp {
             }
         }
 
-        if !self.select_mode && self.paginator.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
-            changed = true;
+        if !self.select_mode {
+            let ptr = self.paginator.as_ptr_mut();
+            if self.ui_context.propagate_event(&mv, ptr) {
+                changed = true;
+            }
         }
 
-        if self.view_dropdown.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
-            changed = true;
+        {
+            let ptr = self.view_dropdown.as_ptr_mut();
+            if self.ui_context.propagate_event(&mv, ptr) {
+                changed = true;
+            }
         }
 
         if self.current_page == Page::Browse {
             if self.select_mode {
-                if self.browse.save_name_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+                let ptr = self.browse.save_name_box.as_ptr_mut();
+                if self.ui_context.propagate_event(&mv, ptr) {
                     changed = true;
                 }
             }
             if self.browse.list.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
-            if self.browse.search_visible && self.browse.search_box.cursor_moved(pos.x, pos.y, &mut self.ui_context) {
-                changed = true;
-            }
-            if self.browse.breadcrumb.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
-                changed = true;
-            }
-        } else if self.current_page == Page::Network {
-            if self.network.breadcrumb.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
-                changed = true;
-            }
-            if self.network.graph.is_dragging() {
-                if self.network.graph.drag_update(pos.x, pos.y) {
+            if self.browse.search_visible {
+                let ptr = self.browse.search_box.as_ptr_mut();
+                if self.ui_context.propagate_event(&mv, ptr) {
                     changed = true;
                 }
-            } else {
-                if self.network.graph.on_cursor_moved(pos.x, pos.y, &mut self.ui_context) {
+            }
+            {
+                let ptr = self.browse.breadcrumb.as_ptr_mut();
+                if self.ui_context.propagate_event(&mv, ptr) {
+                    changed = true;
+                }
+            }
+        } else if self.current_page == Page::Network {
+            {
+                let ptr = self.network.breadcrumb.as_ptr_mut();
+                if self.ui_context.propagate_event(&mv, ptr) {
+                    changed = true;
+                }
+            }
+            // The router forwards DragUpdate to a mid-drag node grab; a plain move runs
+            // the hover recompute. Rebuild every move while a drag is live (the router
+            // drops drag_update's changed flag).
+            {
+                let ptr = self.network.graph.as_ptr_mut();
+                if self.ui_context.propagate_event(&mv, ptr) {
+                    changed = true;
+                }
+                if self.ui_context.is_dragging {
                     changed = true;
                 }
             }
@@ -1269,7 +1291,9 @@ impl Application for FilesystemApp {
 
                 if button == MouseButton::Left {
                     if pos.x >= tb_x && pos.x <= tb_x + tb_w && pos.y >= tb_y && pos.y <= tb_y + tb_h {
-                        if textbox.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                        let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+                        let ptr = textbox.as_ptr_mut();
+                        if self.ui_context.propagate_event(&ev, ptr) {
                             self.ui_context.set_focused(textbox);
                             *needs_rebuild = true;
                             self.needs_rebuild = true;
@@ -1291,7 +1315,9 @@ impl Application for FilesystemApp {
                 }
             } else {
                 if button == MouseButton::Left && textbox.editing {
-                    if textbox.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                    let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+                    let ptr = textbox.as_ptr_mut();
+                    if self.ui_context.propagate_event(&ev, ptr) {
                         *needs_rebuild = true;
                         self.needs_rebuild = true;
                     }
@@ -1337,7 +1363,9 @@ impl Application for FilesystemApp {
             let is_browse = self.current_page == Page::Browse;
             let breadcrumb = if is_browse { &mut self.browse.breadcrumb } else { &mut self.network.breadcrumb };
             if breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
-                if breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+                let ptr = breadcrumb.as_ptr_mut();
+                if self.ui_context.propagate_event(&ev, ptr) {
                     let idx = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
                     let path_str = breadcrumb.path_to_seg(idx);
                     
@@ -1431,7 +1459,11 @@ impl Application for FilesystemApp {
         let mut changed = false;
 
         log::debug!("MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
-        let menu_match = !self.select_mode && self.paginator.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context);
+        let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+        let menu_match = !self.select_mode && {
+            let ptr = self.paginator.as_ptr_mut();
+            self.ui_context.propagate_event(&ev, ptr)
+        };
         if menu_match {
             if let Some((idx, _)) = self.paginator.menu_click() {
                 if idx < Page::ALL.len() {
@@ -1444,7 +1476,7 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if self.view_dropdown.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+        if { let ptr = self.view_dropdown.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
             *needs_rebuild = true;
             self.needs_rebuild = true;
             if self.view_dropdown.take_change() {
@@ -1478,7 +1510,7 @@ impl Application for FilesystemApp {
 
         if self.current_page == Page::Browse {
             if self.select_mode {
-                if self.browse.save_name_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                if { let ptr = self.browse.save_name_box.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
                     if state == ElementState::Pressed {
                         self.ui_context.set_focused(&mut self.browse.save_name_box);
                     }
@@ -1488,7 +1520,7 @@ impl Application for FilesystemApp {
             }
             if self.browse.search_visible
                 && button == MouseButton::Left
-                && self.browse.search_box.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context)
+                && { let ptr = self.browse.search_box.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) }
             {
                 self.ui_context.set_focused(&mut self.browse.search_box);
                 *needs_rebuild = true;
@@ -1508,7 +1540,7 @@ impl Application for FilesystemApp {
             }
             if button == MouseButton::Left && state == ElementState::Pressed {
                 if self.browse.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
-                    if self.browse.breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                    if { let ptr = self.browse.breadcrumb.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
                         if let Some(seg) = self.browse.breadcrumb.path_click() {
                             let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
                             self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
@@ -1522,27 +1554,28 @@ impl Application for FilesystemApp {
             if button == MouseButton::Left {
                 if state == ElementState::Pressed {
                     if self.network.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
-                        if self.network.breadcrumb.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
+                        if { let ptr = self.network.breadcrumb.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
                             if let Some(seg) = self.network.breadcrumb.path_click() {
                                 let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
                                 self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
                                 changed = true;
                             }
                         }
-                    } else if self.network.graph.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
-                        if self.network.graph.is_dragging() {
-                            self.network.graph.drag_begin(pos.x, pos.y);
-                        }
+                    } else if {
+                        // Routed press: a node grab records the drag target; the router's
+                        // DragStart replaces the immediate drag_begin (3px threshold).
+                        let ptr = self.network.graph.as_ptr_mut();
+                        self.ui_context.propagate_event(&ev, ptr)
+                    } {
                         changed = true;
                     }
                 } else if state == ElementState::Released {
-                    if self.network.graph.is_dragging() {
-                        self.network.graph.drag_end();
+                    // The router delivers DragEnd (commit) before the release reaches
+                    // Graph; a committed drag leaves the release arm inert.
+                    let was_dragging = self.ui_context.is_dragging;
+                    let ptr = self.network.graph.as_ptr_mut();
+                    if self.ui_context.propagate_event(&ev, ptr) || was_dragging {
                         changed = true;
-                    } else {
-                        if self.network.graph.mouse_input(button, state, pos.x, pos.y, &mut self.ui_context) {
-                            changed = true;
-                        }
                     }
                 }
             }
@@ -1673,7 +1706,9 @@ impl Application for FilesystemApp {
                 self.needs_rebuild = true;
             }
         } else if self.current_page == Page::Network {
-            if self.network.graph.mouse_wheel(delta, pos.x as f32, pos.y as f32, &mut self.ui_context) {
+            let ev = cce_ui::widget::Event::MouseWheel { delta: *delta, x: pos.x as f32, y: pos.y as f32, local_x: pos.x as f32, local_y: pos.y as f32 };
+            let ptr = self.network.graph.as_ptr_mut();
+            if self.ui_context.propagate_event(&ev, ptr) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1696,7 +1731,9 @@ impl Application for FilesystemApp {
                 self.ui_context.clear_focus();
                 return Some(Message::OpenWithCancel);
             }
-            if textbox.keyboard_input(event, &mut self.ui_context) {
+            let kev = cce_ui::widget::Event::KeyInput(event.clone());
+            let ptr = textbox.as_ptr_mut();
+            if self.ui_context.propagate_event(&kev, ptr) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1704,7 +1741,9 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Network {
-            if self.network.graph.keyboard_input(event, &mut self.ui_context) {
+            let kev = cce_ui::widget::Event::KeyInput(event.clone());
+            let ptr = self.network.graph.as_ptr_mut();
+            if self.ui_context.propagate_event(&kev, ptr) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 return None;
@@ -1745,7 +1784,7 @@ impl Application for FilesystemApp {
                     self.needs_rebuild = true;
                     return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(String::new())));
                 }
-                if self.browse.search_box.keyboard_input(event, &mut self.ui_context) {
+                if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let ptr = self.browse.search_box.as_ptr_mut(); self.ui_context.propagate_event(&kev, ptr) } {
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                     if self.browse.search_box.take_change() {
@@ -1760,7 +1799,7 @@ impl Application for FilesystemApp {
 
         // If the save_name_box is focused, forward key inputs to it
         if self.select_mode && self.browse.save_name_box.editing {
-            if self.browse.save_name_box.keyboard_input(event, &mut self.ui_context) {
+            if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let ptr = self.browse.save_name_box.as_ptr_mut(); self.ui_context.propagate_event(&kev, ptr) } {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {

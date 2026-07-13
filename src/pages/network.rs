@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use crate::pages::PageContent;
 use crate::pages::browse::{BrowseState, DirEntry};
-use cce_ui::widget::{Adapted, Graph, GraphNode, WidgetHost, Breadcrumb, GraphController, PathController};
+use cce_ui::widget::{Adapted, Graph, GraphNode, Breadcrumb, GraphController, PathController};
 
 pub struct NetworkState {
     pub graph: Adapted<Graph>,

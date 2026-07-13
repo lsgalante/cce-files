@@ -1199,8 +1199,9 @@ impl Application for FilesystemApp {
         }
 
         if !self.select_mode {
-            let ptr = self.paginator.as_ptr_mut();
-            if self.ui_context.propagate_event(&mv, ptr) {
+            // Self-routing composite: handle_event, not propagate — the router's
+            // children-first descent would let the embedded strip consume this.
+            if self.paginator.handle_event(&mv, &mut self.ui_context) {
                 changed = true;
             }
         }
@@ -1461,8 +1462,8 @@ impl Application for FilesystemApp {
         log::debug!("MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
         let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
         let menu_match = !self.select_mode && {
-            let ptr = self.paginator.as_ptr_mut();
-            self.ui_context.propagate_event(&ev, ptr)
+            // Self-routing composite: handle_event, not propagate (see pointer move).
+            self.paginator.handle_event(&ev, &mut self.ui_context)
         };
         if menu_match {
             if let Some((idx, _)) = self.paginator.menu_click() {

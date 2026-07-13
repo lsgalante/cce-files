@@ -1157,8 +1157,8 @@ impl Application for FilesystemApp {
         let mv = cce_ui::widget::Event::PointerMove { x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
         if self.open_with_dialog.is_some() {
             if let Some((_path, textbox)) = &mut self.open_with_dialog {
-                let ptr = textbox.as_ptr_mut();
-                let _ = self.ui_context.propagate_event(&mv, ptr);
+                let root = textbox.id();
+                let _ = self.ui_context.propagate_event(&mv, root);
             }
             *needs_rebuild = true;
             self.needs_rebuild = true;
@@ -1207,16 +1207,16 @@ impl Application for FilesystemApp {
         }
 
         {
-            let ptr = self.view_dropdown.as_ptr_mut();
-            if self.ui_context.propagate_event(&mv, ptr) {
+            let root = self.view_dropdown.id();
+            if self.ui_context.propagate_event(&mv, root) {
                 changed = true;
             }
         }
 
         if self.current_page == Page::Browse {
             if self.select_mode {
-                let ptr = self.browse.save_name_box.as_ptr_mut();
-                if self.ui_context.propagate_event(&mv, ptr) {
+                let root = self.browse.save_name_box.id();
+                if self.ui_context.propagate_event(&mv, root) {
                     changed = true;
                 }
             }
@@ -1224,21 +1224,21 @@ impl Application for FilesystemApp {
                 changed = true;
             }
             if self.browse.search_visible {
-                let ptr = self.browse.search_box.as_ptr_mut();
-                if self.ui_context.propagate_event(&mv, ptr) {
+                let root = self.browse.search_box.id();
+                if self.ui_context.propagate_event(&mv, root) {
                     changed = true;
                 }
             }
             {
-                let ptr = self.browse.breadcrumb.as_ptr_mut();
-                if self.ui_context.propagate_event(&mv, ptr) {
+                let root = self.browse.breadcrumb.id();
+                if self.ui_context.propagate_event(&mv, root) {
                     changed = true;
                 }
             }
         } else if self.current_page == Page::Network {
             {
-                let ptr = self.network.breadcrumb.as_ptr_mut();
-                if self.ui_context.propagate_event(&mv, ptr) {
+                let root = self.network.breadcrumb.id();
+                if self.ui_context.propagate_event(&mv, root) {
                     changed = true;
                 }
             }
@@ -1246,8 +1246,8 @@ impl Application for FilesystemApp {
             // the hover recompute. Rebuild every move while a drag is live (the router
             // drops drag_update's changed flag).
             {
-                let ptr = self.network.graph.as_ptr_mut();
-                if self.ui_context.propagate_event(&mv, ptr) {
+                let root = self.network.graph.id();
+                if self.ui_context.propagate_event(&mv, root) {
                     changed = true;
                 }
                 if self.ui_context.is_dragging {
@@ -1293,8 +1293,8 @@ impl Application for FilesystemApp {
                 if button == MouseButton::Left {
                     if pos.x >= tb_x && pos.x <= tb_x + tb_w && pos.y >= tb_y && pos.y <= tb_y + tb_h {
                         let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-                        let ptr = textbox.as_ptr_mut();
-                        if self.ui_context.propagate_event(&ev, ptr) {
+                        let root = textbox.id();
+                        if self.ui_context.propagate_event(&ev, root) {
                             self.ui_context.set_focused(textbox);
                             *needs_rebuild = true;
                             self.needs_rebuild = true;
@@ -1317,8 +1317,8 @@ impl Application for FilesystemApp {
             } else {
                 if button == MouseButton::Left && textbox.editing {
                     let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-                    let ptr = textbox.as_ptr_mut();
-                    if self.ui_context.propagate_event(&ev, ptr) {
+                    let root = textbox.id();
+                    if self.ui_context.propagate_event(&ev, root) {
                         *needs_rebuild = true;
                         self.needs_rebuild = true;
                     }
@@ -1365,8 +1365,8 @@ impl Application for FilesystemApp {
             let breadcrumb = if is_browse { &mut self.browse.breadcrumb } else { &mut self.network.breadcrumb };
             if breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
                 let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-                let ptr = breadcrumb.as_ptr_mut();
-                if self.ui_context.propagate_event(&ev, ptr) {
+                let root = breadcrumb.id();
+                if self.ui_context.propagate_event(&ev, root) {
                     let idx = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
                     let path_str = breadcrumb.path_to_seg(idx);
                     
@@ -1477,7 +1477,7 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if { let ptr = self.view_dropdown.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
+        if { let root = self.view_dropdown.id(); self.ui_context.propagate_event(&ev, root) } {
             *needs_rebuild = true;
             self.needs_rebuild = true;
             if self.view_dropdown.take_change() {
@@ -1511,7 +1511,7 @@ impl Application for FilesystemApp {
 
         if self.current_page == Page::Browse {
             if self.select_mode {
-                if { let ptr = self.browse.save_name_box.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
+                if { let root = self.browse.save_name_box.id(); self.ui_context.propagate_event(&ev, root) } {
                     if state == ElementState::Pressed {
                         self.ui_context.set_focused(&mut self.browse.save_name_box);
                     }
@@ -1521,7 +1521,7 @@ impl Application for FilesystemApp {
             }
             if self.browse.search_visible
                 && button == MouseButton::Left
-                && { let ptr = self.browse.search_box.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) }
+                && { let root = self.browse.search_box.id(); self.ui_context.propagate_event(&ev, root) }
             {
                 self.ui_context.set_focused(&mut self.browse.search_box);
                 *needs_rebuild = true;
@@ -1541,7 +1541,7 @@ impl Application for FilesystemApp {
             }
             if button == MouseButton::Left && state == ElementState::Pressed {
                 if self.browse.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
-                    if { let ptr = self.browse.breadcrumb.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
+                    if { let root = self.browse.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
                         if let Some(seg) = self.browse.breadcrumb.path_click() {
                             let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
                             self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
@@ -1555,7 +1555,7 @@ impl Application for FilesystemApp {
             if button == MouseButton::Left {
                 if state == ElementState::Pressed {
                     if self.network.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
-                        if { let ptr = self.network.breadcrumb.as_ptr_mut(); self.ui_context.propagate_event(&ev, ptr) } {
+                        if { let root = self.network.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
                             if let Some(seg) = self.network.breadcrumb.path_click() {
                                 let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
                                 self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
@@ -1565,8 +1565,8 @@ impl Application for FilesystemApp {
                     } else if {
                         // Routed press: a node grab records the drag target; the router's
                         // DragStart replaces the immediate drag_begin (3px threshold).
-                        let ptr = self.network.graph.as_ptr_mut();
-                        self.ui_context.propagate_event(&ev, ptr)
+                        let root = self.network.graph.id();
+                        self.ui_context.propagate_event(&ev, root)
                     } {
                         changed = true;
                     }
@@ -1574,8 +1574,8 @@ impl Application for FilesystemApp {
                     // The router delivers DragEnd (commit) before the release reaches
                     // Graph; a committed drag leaves the release arm inert.
                     let was_dragging = self.ui_context.is_dragging;
-                    let ptr = self.network.graph.as_ptr_mut();
-                    if self.ui_context.propagate_event(&ev, ptr) || was_dragging {
+                    let root = self.network.graph.id();
+                    if self.ui_context.propagate_event(&ev, root) || was_dragging {
                         changed = true;
                     }
                 }
@@ -1708,8 +1708,8 @@ impl Application for FilesystemApp {
             }
         } else if self.current_page == Page::Network {
             let ev = cce_ui::widget::Event::MouseWheel { delta: *delta, x: pos.x as f32, y: pos.y as f32, local_x: pos.x as f32, local_y: pos.y as f32 };
-            let ptr = self.network.graph.as_ptr_mut();
-            if self.ui_context.propagate_event(&ev, ptr) {
+            let root = self.network.graph.id();
+            if self.ui_context.propagate_event(&ev, root) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1733,8 +1733,8 @@ impl Application for FilesystemApp {
                 return Some(Message::OpenWithCancel);
             }
             let kev = cce_ui::widget::Event::KeyInput(event.clone());
-            let ptr = textbox.as_ptr_mut();
-            if self.ui_context.propagate_event(&kev, ptr) {
+            let root = textbox.id();
+            if self.ui_context.propagate_event(&kev, root) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1743,8 +1743,8 @@ impl Application for FilesystemApp {
 
         if self.current_page == Page::Network {
             let kev = cce_ui::widget::Event::KeyInput(event.clone());
-            let ptr = self.network.graph.as_ptr_mut();
-            if self.ui_context.propagate_event(&kev, ptr) {
+            let root = self.network.graph.id();
+            if self.ui_context.propagate_event(&kev, root) {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 return None;
@@ -1785,7 +1785,7 @@ impl Application for FilesystemApp {
                     self.needs_rebuild = true;
                     return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(String::new())));
                 }
-                if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let ptr = self.browse.search_box.as_ptr_mut(); self.ui_context.propagate_event(&kev, ptr) } {
+                if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let root = self.browse.search_box.id(); self.ui_context.propagate_event(&kev, root) } {
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                     if self.browse.search_box.take_change() {
@@ -1800,7 +1800,7 @@ impl Application for FilesystemApp {
 
         // If the save_name_box is focused, forward key inputs to it
         if self.select_mode && self.browse.save_name_box.editing {
-            if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let ptr = self.browse.save_name_box.as_ptr_mut(); self.ui_context.propagate_event(&kev, ptr) } {
+            if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let root = self.browse.save_name_box.id(); self.ui_context.propagate_event(&kev, root) } {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {

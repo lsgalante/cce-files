@@ -184,6 +184,58 @@ fn load_image_preview(path: &Path) -> Option<ImagePreviewData> {
     })
 }
 
+/// Path-traced thumbnail for a cce-designer project directory, cached as a
+/// PNG under `~/.cache/cce/thumbnails/` keyed on the project path and its
+/// `state.json` mtime — the GPU renders only on cache misses. Rendering is
+/// delegated to `cce-designer --thumbnail` (the geometry, OpenCL nodes
+/// included, lives there); returns None if the binary is missing or fails,
+/// and the caller falls back to the plain directory listing.
+fn load_project_thumbnail(path: &Path) -> Option<ImagePreviewData> {
+    use std::hash::{Hash, Hasher};
+
+    let state_file = path.join("state.json");
+    let mtime = fs::metadata(&state_file)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    mtime.hash(&mut hasher);
+
+    let cache_dir = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?
+        .join("cce")
+        .join("thumbnails");
+    fs::create_dir_all(&cache_dir).ok()?;
+    let cached = cache_dir.join(format!("{:016x}.png", hasher.finish()));
+
+    if !cached.exists() {
+        // Same ~/.local/bin-first resolution as spawn_command_for_path.
+        let mut program = PathBuf::from("cce-designer");
+        if let Ok(home) = std::env::var("HOME") {
+            let local_bin = PathBuf::from(home).join(".local").join("bin").join("cce-designer");
+            if local_bin.exists() {
+                program = local_bin;
+            }
+        }
+        let output = std::process::Command::new(program)
+            .arg("--thumbnail")
+            .arg(path)
+            .arg(&cached)
+            .args(["--size", "256"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+    }
+    load_image_preview(&cached)
+}
+
 fn load_preview_data_internal(path: &Path) -> PreviewData {
     let meta = fs::symlink_metadata(path).ok();
     let name = path
@@ -232,18 +284,24 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
     let mut image_preview = None;
 
     if is_dir {
-        if let Ok(entries) = fs::read_dir(path) {
-            let mut names = Vec::new();
-            for entry in entries.flatten().take(100) {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let is_sub_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                let icon = if is_sub_dir { "📁" } else { "📄" };
-                names.push(format!("{} {}", icon, name));
-            }
-            if names.is_empty() {
-                content_preview = Some("[Empty directory]".to_string())
-            } else {
-                content_preview = Some(names.join("\n"))
+        // cce-designer project: show a path-traced thumbnail of its geometry.
+        if path.join("state.json").exists() {
+            image_preview = load_project_thumbnail(path);
+        }
+        if image_preview.is_none() {
+            if let Ok(entries) = fs::read_dir(path) {
+                let mut names = Vec::new();
+                for entry in entries.flatten().take(100) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let is_sub_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                    let icon = if is_sub_dir { "📁" } else { "📄" };
+                    names.push(format!("{} {}", icon, name));
+                }
+                if names.is_empty() {
+                    content_preview = Some("[Empty directory]".to_string())
+                } else {
+                    content_preview = Some(names.join("\n"))
+                }
             }
         }
     } else {

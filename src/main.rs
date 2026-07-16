@@ -242,6 +242,35 @@ impl SplitPane {
 }
 
 
+/// Browse-page shortcuts, resolved once at startup from input.kdl
+/// (`cce-files` domain → `cce-ui` domain), defaulting to the historical
+/// vim-ish keys. Arrow keys, Enter-in-save-mode, and Escape stay fixed.
+struct BrowseKeys {
+    open_file: String,
+    enter_dir: String,
+    parent_dir: String,
+    select_next: String,
+    select_prev: String,
+    delete_entry: String,
+    toggle_hidden: String,
+}
+
+impl BrowseKeys {
+    fn load() -> Self {
+        let input = cce_ui::input::cached();
+        let get = |name: &str, default: &str| input.resolve_chord("cce-files", name, default);
+        Self {
+            open_file: get("open_file", "enter"),
+            enter_dir: get("enter_dir", "l"),
+            parent_dir: get("parent_dir", "h"),
+            select_next: get("select_next", "j"),
+            select_prev: get("select_prev", "k"),
+            delete_entry: get("delete_entry", "delete"),
+            toggle_hidden: get("toggle_hidden", "."),
+        }
+    }
+}
+
 struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
@@ -278,6 +307,7 @@ struct FilesystemApp {
     network_split: SplitPane,
     last_click_time: std::time::Instant,
     last_clicked_idx: Option<usize>,
+    keys: BrowseKeys,
 }
 
 
@@ -875,6 +905,7 @@ impl Application for FilesystemApp {
             network_split: SplitPane::new(0.49, 100.0, 100.0, 12.0),
             last_click_time: std::time::Instant::now(),
             last_clicked_idx: None,
+            keys: BrowseKeys::load(),
         };
 
         
@@ -1812,13 +1843,9 @@ impl Application for FilesystemApp {
             }
         }
 
-        // Global key navigation
+        // Global key navigation. Arrow keys, Backspace, and Escape are fixed;
+        // the rest resolve through input.kdl (see BrowseKeys).
         if self.current_page == Page::Browse {
-            let key_char = match &event.logical_key {
-                cce_ui::widget::Key::Character(c) => Some(c.as_str()),
-                _ => None,
-            };
-
             match &event.logical_key {
                 cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowUp) => {
                     if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
@@ -1828,24 +1855,6 @@ impl Application for FilesystemApp {
                 cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowDown) => {
                     if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
                         return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
-                    }
-                }
-                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) => {
-                    if let Some(idx) = self.browse.selected {
-                        if let Some(entry) = self.browse.entries.get(idx) {
-                            if entry.is_dir && !is_project_dir(&entry.path) {
-                                return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
-                            } else {
-                                return Some(Message::SelectOpen);
-                            }
-                        }
-                    } else if self.save_mode {
-                        return Some(Message::SelectOpen);
-                    }
-                }
-                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Delete) => {
-                    if let Some(idx) = self.browse.selected {
-                        return Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)));
                     }
                 }
                 cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) => {
@@ -1858,36 +1867,48 @@ impl Application for FilesystemApp {
                         return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
                     }
                 }
-                _ => match key_char {
-                    Some("j") => {
-                        if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
-                            return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
+                _ => {}
+            }
+
+            let m = |chord: &str| cce_ui::widget::match_key_shortcut(event, chord);
+            if m(&self.keys.open_file) {
+                if let Some(idx) = self.browse.selected {
+                    if let Some(entry) = self.browse.entries.get(idx) {
+                        if entry.is_dir && !is_project_dir(&entry.path) {
+                            return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
+                        } else {
+                            return Some(Message::SelectOpen);
                         }
                     }
-                    Some("k") => {
-                        if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
-                            return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
-                        }
-                    }
-                    Some("l") => {
-                        if let Some(idx) = self.browse.selected {
-                            if let Some(entry) = self.browse.entries.get(idx) {
-                                if entry.is_dir && !is_project_dir(&entry.path) {
-                                    return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
-                                }
-                            }
-                        }
-                    }
-                    Some("h") => {
-                        if let Some(parent) = self.browse.current_dir.parent() {
-                            return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
-                        }
-                    }
-                    Some(".") => {
-                        return Some(Message::Browse(pages::browse::BrowseMessage::ToggleHidden));
-                    }
-                    _ => {}
+                } else if self.save_mode {
+                    return Some(Message::SelectOpen);
                 }
+            } else if m(&self.keys.select_next) {
+                if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
+                }
+            } else if m(&self.keys.select_prev) {
+                if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
+                }
+            } else if m(&self.keys.enter_dir) {
+                if let Some(idx) = self.browse.selected {
+                    if let Some(entry) = self.browse.entries.get(idx) {
+                        if entry.is_dir && !is_project_dir(&entry.path) {
+                            return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
+                        }
+                    }
+                }
+            } else if m(&self.keys.parent_dir) {
+                if let Some(parent) = self.browse.current_dir.parent() {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
+                }
+            } else if m(&self.keys.delete_entry) {
+                if let Some(idx) = self.browse.selected {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)));
+                }
+            } else if m(&self.keys.toggle_hidden) {
+                return Some(Message::Browse(pages::browse::BrowseMessage::ToggleHidden));
             }
         }
 

@@ -257,8 +257,7 @@ struct BrowseKeys {
 
 impl BrowseKeys {
     fn load() -> Self {
-        let input = cce_ui::input::cached();
-        let get = |name: &str, default: &str| input.resolve_chord("cce-files", name, default);
+        let get = cce_ui::input::app_chord;
         Self {
             open_file: get("open_file", "enter"),
             enter_dir: get("enter_dir", "l"),

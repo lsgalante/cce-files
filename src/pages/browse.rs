@@ -93,8 +93,15 @@ pub enum BrowseNavigation {
     Down,
 }
 
+/// Whether `path` is a cce-designer project — a directory holding a `state.json`, which is
+/// the only shape the designer writes (and the only one it loads).
+///
+/// A project dir is deliberately NOT navigable: it opens in the designer instead. So this
+/// must not match ordinary directories — it used to accept a `state.kdl` too, which made
+/// `~/.config/cce/cce-designer/` (the designer's own settings live there, in a state.kdl)
+/// impossible to enter. No project format ever wrote that file.
 pub fn is_project_dir(path: &Path) -> bool {
-    path.is_dir() && (path.join("state.json").exists() || path.join("state.kdl").exists())
+    path.is_dir() && path.join("state.json").exists()
 }
 
 /// Reconstruct the ancestor path for a clicked breadcrumb segment index.
@@ -583,6 +590,36 @@ mod tests {
     }
 
     #[test]
+    fn navigate_enters_a_dir_holding_a_settings_state_kdl() {
+        // The shape of ~/.config/cce/cce-designer: a plain directory whose only content is
+        // the designer's own state.kdl. Treating that as a project made it un-enterable.
+        let dir = std::env::temp_dir().join(format!(
+            "clear_test_navdir_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("state.kdl"), "graph {\n    grid_size_x (f64)71.0\n}").unwrap();
+
+        let mut state = BrowseState::default();
+        state.all_entries = vec![entry("cce-designer", dir.to_str().unwrap(), true)];
+        apply_filters(&mut state);
+        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        assert!(
+            matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(ref p)) if *p == dir),
+            "navigating into it should read the directory, got {req:?}",
+        );
+
+        // A real project (state.json) still opens instead of being entered.
+        std::fs::write(dir.join("state.json"), "{}").unwrap();
+        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        assert!(req.is_none(), "a project dir is not navigable");
+
+        let _ = std::fs::remove_file(dir.join("state.kdl"));
+        let _ = std::fs::remove_file(dir.join("state.json"));
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
     fn last_dir_loaded_some_reads_that_dir() {
         let mut state = BrowseState::default();
         let req = update(&mut state, BrowseMessage::LastDirLoaded(Some(PathBuf::from("/some/dir"))));
@@ -601,29 +638,29 @@ mod tests {
         let unique_dir = std::env::temp_dir().join(format!("clear_test_dir_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
         std::fs::create_dir_all(&unique_dir).unwrap();
         
-        // Initially, path is a directory but doesn't have state.json or state.kdl
+        // Initially, path is a directory but doesn't have state.json
         assert!(!is_project_dir(&unique_dir));
-        
+
         // Create state.json
         let file_path_json = unique_dir.join("state.json");
         std::fs::write(&file_path_json, "{}").unwrap();
-        
+
         // Now it should be recognized as a project dir
         assert!(is_project_dir(&unique_dir));
-        
+
+        // If it's a file rather than a directory, even if named state.json, it shouldn't be
+        // a project dir itself
+        assert!(!is_project_dir(&file_path_json));
+
         // Remove state.json and verify it's not a project dir
         std::fs::remove_file(&file_path_json).unwrap();
         assert!(!is_project_dir(&unique_dir));
 
-        // Create state.kdl
+        // A state.kdl does NOT make a project: that is what the designer names its settings
+        // file, so matching it made ~/.config/cce/cce-designer/ un-enterable in the browser.
         let file_path_kdl = unique_dir.join("state.kdl");
-        std::fs::write(&file_path_kdl, "name \"test\"").unwrap();
-
-        // Now it should be recognized as a project dir
-        assert!(is_project_dir(&unique_dir));
-
-        // If it's a file rather than a directory, even if named state.kdl, it shouldn't be a project dir itself
-        assert!(!is_project_dir(&file_path_kdl));
+        std::fs::write(&file_path_kdl, "graph {\n    grid_size_x (f64)71.0\n}").unwrap();
+        assert!(!is_project_dir(&unique_dir), "a settings state.kdl is not a project");
 
         // Clean up
         let _ = std::fs::remove_file(&file_path_kdl);

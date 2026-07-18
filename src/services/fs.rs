@@ -414,7 +414,8 @@ pub fn save_last_dir_internal(dir: &Path) {
 }
 
 pub fn get_mime_type(path: &Path) -> Option<String> {
-    if path.is_dir() && (path.join("state.json").exists() || path.join("state.kdl").exists()) {
+    // Matches `browse::is_project_dir`: a designer project is a dir holding a state.json.
+    if path.is_dir() && path.join("state.json").exists() {
         return Some("application/x-cce-project".to_string());
     }
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {

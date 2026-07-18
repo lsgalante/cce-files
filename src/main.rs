@@ -292,6 +292,7 @@ struct FilesystemApp {
     height: u32,
     scale_factor: f64,
     page_buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, Message)>,
+    hovered_button: Option<usize>,
     cursor_x: f32,
     cursor_y: f32,
     paginator: cce_ui::widget::Adapted<Paginator>,
@@ -882,6 +883,7 @@ impl Application for FilesystemApp {
             height: initial_h,
             scale_factor: 1.0,
             page_buttons: Vec::new(),
+            hovered_button: None,
             cursor_x: 0.0,
             cursor_y: 0.0,
             paginator,
@@ -1286,12 +1288,17 @@ impl Application for FilesystemApp {
             }
         }
 
-        // Always check if buttons hover state changed
-        for (btn, _action) in &self.page_buttons {
+        // Repaint only when the hovered page button actually changes. Page-button hover is
+        // a binary color decided at rebuild time (see rebuild_layout), so idle pointer moves
+        // don't need a redraw. Rebuilding unconditionally re-commits the translucent surface
+        // every move, which makes the compositor re-blur the backdrop continuously.
+        let hovered_button = self.page_buttons.iter().position(|(btn, _)| {
             let base = btn.base();
-            let _hovering = self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
-                && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h;
-            // Trigger redraw on pointer moves so hover transitions are smooth
+            self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
+                && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h
+        });
+        if hovered_button != self.hovered_button {
+            self.hovered_button = hovered_button;
             changed = true;
         }
 

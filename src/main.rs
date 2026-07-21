@@ -523,11 +523,13 @@ impl FilesystemApp {
             }
         }
 
-        // Draw bottom selection bar if select_mode is enabled
+        // Draw bottom selection bar if select_mode is enabled. It lives below the
+        // content region, so it goes into window_pc: page content (pc) is clipped
+        // to the viewport and would swallow the bar entirely.
         if self.select_mode {
             let bar_y = self.height as f32 - select_bar_h - 16.0;
             // Divider line
-            pc.rect([0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
+            window_pc.rect([0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
 
             let accent = [0.36, 0.56, 0.38, 1.0];
             let text_fg = [0.83, 0.83, 0.83, 1.0];
@@ -537,7 +539,7 @@ impl FilesystemApp {
 
             // Cancel button
             let cancel_x = self.width as f32 - 180.0;
-            pc.button(
+            window_pc.button(
                 "Cancel",
                 cancel_x,
                 btn_y,
@@ -552,7 +554,7 @@ impl FilesystemApp {
             // Open/Select/Save button
             let open_x = self.width as f32 - 100.0;
             let button_label = if self.save_mode { "Save" } else { "Select" };
-            pc.button(
+            window_pc.button(
                 button_label,
                 open_x,
                 btn_y,

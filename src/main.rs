@@ -116,10 +116,6 @@ fn occlude_against(
 /// Height of the chooser-mode bottom action bar (the band carved into the plate).
 const SELECT_BAR_H: f32 = 48.0;
 
-/// Bottom edge of the header strip (window pad + breadcrumb row + a breath) —
-/// the band carved one step down into the plate, recessed-MenuBar style.
-const HEADER_BAND_H: f32 = 46.0;
-
 // ── State ───────────────────────────────────────────────────────────
 
 /// How a flat quad renders under the SDF-lit plate system. `Flat` is the plain
@@ -1228,17 +1224,11 @@ impl Application for FilesystemApp {
         );
 
         // Band carves, emitted right after the plate so they CSG-group into its
-        // draw: the header strip (breadcrumb row) one step down, flush to the top
-        // and sides so its only wall is the bottom one; in chooser mode the action
-        // bar is the mirror band carved into the bottom.
+        // draw: in chooser mode the action bar is a band carved into the bottom.
+        // (The header strip's menubar-style band was removed — the top of the
+        // plate is flush; the breadcrumb row sits directly on the surface.)
         if cce_ui::layout::control_relief() {
             let wall = cce_ui::layout::bar_wall_width();
-            pc.recess_edges(
-                Rect { x: 0.0, y: 0.0, width: fw, height: HEADER_BAND_H },
-                (0.0, 0.0, 0.0, 0.0),
-                wall,
-                (false, false, true, false),
-            );
             if self.select_mode {
                 let band_h = SELECT_BAR_H + 16.0;
                 pc.recess_edges(

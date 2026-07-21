@@ -130,6 +130,9 @@ enum WidgetFx {
     Boss(f32),
     /// Edges-only carve into whatever is painted below (recessed wells).
     Recess(f32),
+    /// A flush inset control (buttons): groove ring carved down around the
+    /// rect, beveled lip back up inside, face level with the surface.
+    Inset(f32),
     /// A GPU-textured quad; the id comes from `cce_ui::vk::upload_rgba`
     /// (the preview pane's image). `color` is unused.
     Image { id: u32, alpha: f32 },
@@ -504,10 +507,14 @@ impl FilesystemApp {
                 window_pc.reliefs.extend(plain_pc.reliefs);
                 window_pc.images.extend(plain_pc.images);
 
-                // The view dropdown's raised plate (control_relief) lives in its
-                // modern paint(); the flat view loses it — restore it edges-only.
+                // The view dropdown's flush inset plate (control_relief) lives
+                // in its modern paint(); the flat view loses it — restore it as
+                // the groove ring + edges-only lip pair.
                 let (dx, dy, dw, dh) = (*self_ptr).view_dropdown.rect();
-                window_pc.relief_raised(dx, dy, dw, dh, cce_ui::layout::dropdown_corner_radius());
+                let dr = cce_ui::layout::dropdown_corner_radius();
+                let g = cce_ui::layout::bevel_width().min(dh * 0.2);
+                window_pc.relief_recessed(dx - g, dy - g, dw + 2.0 * g, dh + 2.0 * g, dr + g);
+                window_pc.relief_raised(dx, dy, dw, dh, dr);
             }
         }
 
@@ -751,12 +758,11 @@ impl FilesystemApp {
                     && self.cursor_y >= wy && self.cursor_y <= wy + wh;
                 let col = if hovering { hover_bg } else { bg };
 
-                // Raised button plate (control_relief): the fill becomes a lit
-                // Bevel — rolled lip owns the edge — mirroring Button::paint's
-                // raised branch. Transparent fills degrade to edges-only Boss.
+                // Flush inset button (control_relief): groove ring down,
+                // beveled lip back up, face level with the surface —
+                // mirroring Button::paint's relief branch.
                 let fx = if cce_ui::layout::control_relief() {
-                    let depth = cce_ui::layout::bevel_width().min(wh * 0.2);
-                    if col[3] > 0.001 { WidgetFx::Bevel(depth) } else { WidgetFx::Boss(depth) }
+                    WidgetFx::Inset(cce_ui::layout::bevel_width().min(wh * 0.2))
                 } else {
                     WidgetFx::Flat
                 };
@@ -1258,6 +1264,7 @@ impl Application for FilesystemApp {
                 WidgetFx::Bevel(depth) => pc.bevel(rect, radii, w.color, depth),
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
+                WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, w.color, depth),
                 WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
                 WidgetFx::Flat => {
                     if w.radius > 0.1 {

@@ -292,7 +292,7 @@ struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
     network: pages::network::NetworkState,
-    preview: cce_ui::widget::Adapted<pages::preview::PreviewState>,
+    preview: cce_files::preview_pane::PreviewPane,
 
     // Command-line chooser options
     select_mode: bool,
@@ -396,7 +396,6 @@ impl FilesystemApp {
         // Clear all widgets' hierarchy links
         self.paginator.clear_children(&mut self.ui_context); self.paginator.set_parent(None, &mut self.ui_context);
         self.view_dropdown.clear_children(&mut self.ui_context); self.view_dropdown.set_parent(None, &mut self.ui_context);
-        self.preview.clear_children(&mut self.ui_context); self.preview.set_parent(None, &mut self.ui_context);
 
 
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
@@ -478,25 +477,10 @@ impl FilesystemApp {
                     let (dx, dy, dw, dh, dc) = split.divider_quad();
                     plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
                     let (px_r, py_r, pw_r, ph_r) = split.right_rect();
-                    let mut preview_pc = pages::PageContent::new();
-                    cce_ui::layout::render_widget(&mut preview_pc, &mut (*self_ptr).preview, px_r, py_r, pw_r, ph_r, &mut self.ui_context);
-                    plain_pc.rects.extend(preview_pc.rects);
-                    // The legacy SplitBox clamped pane text to its bounds (None -> the
-                    // splitter rect); keep the preview's text inside its pane.
-                    for (t, size, tx, ty, col, font, bounds) in preview_pc.texts {
-                        let cb = match bounds {
-                            Some(b) => {
-                                let x0 = b[0].max(px_r);
-                                let y0 = b[1].max(py_r);
-                                let x1 = b[2].min(px_r + pw_r);
-                                let y1 = b[3].min(py_r + ph_r);
-                                if x1 <= x0 || y1 <= y0 { continue; }
-                                Some([x0, y0, x1, y1])
-                            }
-                            None => Some([px_r, py_r, px_r + pw_r, py_r + ph_r]),
-                        };
-                        plain_pc.texts.push((t, size, tx, ty, col, font, cb));
-                    }
+                    // The pane clamps its own text bounds to its rect inside
+                    // push_prims (the old SplitBox clamp, absorbed).
+                    (*self_ptr).preview.set_rect(px_r, py_r, pw_r, ph_r);
+                    (*self_ptr).preview.push_prims(&mut plain_pc);
                 }
                 if let Some((_, textbox)) = &mut (*self_ptr).open_with_dialog {
                     let (x, y, w, h) = textbox.rect();
@@ -1820,20 +1804,10 @@ impl Application for FilesystemApp {
 
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
         if self.current_page == Page::Browse || self.current_page == Page::Network {
-            // Hit-test against the preview widget's actual laid-out rect. Recomputing a
-            // hardcoded 50/50 split here was wrong once the list/preview splitter had been
-            // dragged off-center, so wheel events over the preview were misrouted.
-            let (prev_x, prev_y, prev_w, prev_h) = self.preview.rect();
-            let content_h = prev_h;
-
-            // Inner content-preview region (below the metadata header).
-            let px = prev_x + 12.0;
-            let py = prev_y + 32.0;
-            let pw = prev_w - 24.0;
-            let ph = prev_h * 0.5 - 40.0;
-
-            if pos.x as f32 >= px && pos.x as f32 <= px + pw && pos.y as f32 >= py && pos.y as f32 <= py + ph {
-                if self.preview.handle_mouse_wheel(delta, content_h) {
+            // The pane hit-tests its own laid-out rect and consumes any wheel
+            // over its content region, scrolled or not.
+            if let Some(changed) = self.preview.wheel(delta, pos.x as f32, pos.y as f32) {
+                if changed {
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                 }

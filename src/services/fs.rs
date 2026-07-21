@@ -5,7 +5,14 @@ use tokio::sync::mpsc;
 use crate::pages::browse::DirEntry;
 use crate::util::{format_size, format_permissions};
 use image::GenericImageView;
-use cce_ui::widget::ImagePreviewData;
+
+/// A downscaled RGBA thumbnail of an image file, drawn by the preview pane.
+#[derive(Debug, Clone, Default)]
+pub struct ImagePreviewData {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<[u8; 4]>,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct PreviewData {

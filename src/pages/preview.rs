@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-pub use cce_ui::widget::PreviewState;
+use crate::preview_pane::PreviewPane;
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -13,10 +13,10 @@ pub enum PreviewMessage {
 
 // ── Update ──────────────────────────────────────────────────────────
 
-pub fn update(state: &mut PreviewState, msg: PreviewMessage) {
+pub fn update(state: &mut PreviewPane, msg: PreviewMessage) {
     match msg {
         PreviewMessage::Clear => {
-            *state = PreviewState::default();
+            *state = PreviewPane::default();
         }
         PreviewMessage::SetPath { path: _ } => {
             // Deprecated direct SetPath, as we now load previews via the FsService.

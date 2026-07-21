@@ -116,10 +116,11 @@ impl PreviewPane {
     /// never reaches the widgets beneath it.
     pub fn wheel(&mut self, delta: &MouseScrollDelta, mx: f32, my: f32) -> Option<bool> {
         let (prev_x, prev_y, prev_w, prev_h) = self.rect;
-        // Inner content-preview region (below the metadata header).
-        let px = prev_x + 12.0;
+        // Inner content-preview region (below the metadata header); the fill
+        // spans the full pane width, so the hit region does too.
+        let px = prev_x;
         let py = prev_y + 32.0;
-        let pw = prev_w - 24.0;
+        let pw = prev_w;
         let ph = prev_h * 0.5 - 40.0;
         if mx < px || mx > px + pw || my < py || my > py + ph {
             return None;
@@ -208,9 +209,12 @@ impl PreviewPane {
         let relief = cce_ui::layout::control_relief();
         let radius = cce_ui::layout::list_corner_radius();
 
-        // 1. Top pane: File Preview Section
+        // 1. Top pane: File Preview Section. The section frame spans the FULL
+        // pane rect (left = cx - pad cancels SectionContext's inner pad), so
+        // the well edge sits at the pane edge like the list across the split —
+        // the visible split gap is exactly backplate_gap on both sides.
         {
-            let mut preview_sec = SectionContext::new(pc, cx + 4.0, cy + 12.0, cw - 8.0, "Preview", false, false);
+            let mut preview_sec = SectionContext::new(pc, cx - pad, cy + 12.0, cw + 2.0 * pad, "Preview", false, false);
             preview_sec.content_y = cy + half_h - pad - 12.0;
             if !relief {
                 preview_sec.finish();
@@ -218,19 +222,22 @@ impl PreviewPane {
         }
         if relief {
             let fy = cy + 12.0 + 7.0;
-            pc.relief_recessed(cx + 4.0 + pad, fy, cw - 8.0 - 2.0 * pad, (cy + half_h) - fy, radius);
+            pc.relief_recessed(cx, fy, cw, (cy + half_h) - fy, radius);
         }
         let rect_y = cy + pad + 31.0;
         let rect_h = half_h - 2.0 * pad - 43.0;
 
+        // Content fill spans the FULL well width (like the list's fill spans
+        // its rect) — the recess carves over it, so the well reads as one dark
+        // surface flush with the pane edge across the split.
         let bg_color = cce_ui::color::list_bg_color();
-        pc.rect(bg_color, cx + 12.0, rect_y, cw - 24.0, rect_h);
+        pc.rect(bg_color, cx, rect_y, cw, rect_h);
 
         if let Some((id, img_w, img_h)) = self.image_tex {
             let fitted = fit_rect(
                 img_w,
                 img_h,
-                Rect { x: cx + 12.0, y: rect_y, width: cw - 24.0, height: rect_h },
+                Rect { x: cx, y: rect_y, width: cw, height: rect_h },
                 FitMode::Contain { max_upscale: 4.0 },
             );
             pc.image(id, fitted.x, fitted.y, fitted.width, fitted.height, 1.0);
@@ -243,13 +250,13 @@ impl PreviewPane {
                 // Chars-per-width from one measured glyph (cached) instead of
                 // the old magic 6.8 px/char guess.
                 let char_w = measure_text_width("M", "monospace", 11.0).max(1.0);
-                let limit = (((cw - 40.0) / char_w).floor() as usize).max(20);
+                let limit = (((cw - 24.0) / char_w).floor() as usize).max(20);
                 let line_truncated = truncate_tail(line, limit);
-                pc.text_with_font(&line_truncated, cx + 20.0, text_y, 11.0, text_fg, "monospace");
+                pc.text_with_font(&line_truncated, cx + 12.0, text_y, 11.0, text_fg, "monospace");
                 text_y += 15.0;
             }
         } else {
-            pc.text("No preview available", cx + 20.0, rect_y + 12.0, 11.0, text_dim);
+            pc.text("No preview available", cx + 12.0, rect_y + 12.0, 11.0, text_dim);
         }
 
         // 2. Bottom pane: Details Section
@@ -271,7 +278,7 @@ impl PreviewPane {
         }
 
         {
-            let mut details_sec = SectionContext::new(pc, cx + 4.0, bottom_y, cw - 8.0, "Details", false, false);
+            let mut details_sec = SectionContext::new(pc, cx - pad, bottom_y, cw + 2.0 * pad, "Details", false, false);
             details_sec.content_y = details_content_end_y;
             if !relief {
                 details_sec.finish();
@@ -279,13 +286,7 @@ impl PreviewPane {
         }
         if relief {
             let fy = bottom_y + 7.0;
-            pc.relief_recessed(
-                cx + 4.0 + pad,
-                fy,
-                cw - 8.0 - 2.0 * pad,
-                (details_content_end_y + pad + 12.0) - fy,
-                radius,
-            );
+            pc.relief_recessed(cx, fy, cw, (details_content_end_y + pad + 12.0) - fy, radius);
         }
 
         let header_y = details_content_start_y + 6.0;

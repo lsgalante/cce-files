@@ -200,13 +200,28 @@ impl PreviewPane {
 
         let half_h = ch * 0.5;
         let pad = cce_ui::layout::section_padding();
+        // Under control_relief the section frames are recessed wells carved
+        // into the plate (the list's treatment); the SectionContext 1px line
+        // frame is the flat fallback. Titles come from SectionContext::new
+        // either way. Frame geometry mirrors SectionContext::finish: the well
+        // spans top+7 down to content_y + pad + 12.
+        let relief = cce_ui::layout::control_relief();
+        let radius = cce_ui::layout::list_corner_radius();
 
         // 1. Top pane: File Preview Section
-        let mut preview_sec = SectionContext::new(pc, cx + 4.0, cy + 12.0, cw - 8.0, "Preview", false, false);
+        {
+            let mut preview_sec = SectionContext::new(pc, cx + 4.0, cy + 12.0, cw - 8.0, "Preview", false, false);
+            preview_sec.content_y = cy + half_h - pad - 12.0;
+            if !relief {
+                preview_sec.finish();
+            }
+        }
+        if relief {
+            let fy = cy + 12.0 + 7.0;
+            pc.relief_recessed(cx + 4.0 + pad, fy, cw - 8.0 - 2.0 * pad, (cy + half_h) - fy, radius);
+        }
         let rect_y = cy + pad + 31.0;
         let rect_h = half_h - 2.0 * pad - 43.0;
-        preview_sec.content_y = cy + half_h - pad - 12.0;
-        preview_sec.finish();
 
         let bg_color = cce_ui::color::list_bg_color();
         pc.rect(bg_color, cx + 12.0, rect_y, cw - 24.0, rect_h);
@@ -255,9 +270,23 @@ impl PreviewPane {
             details_content_end_y += 24.0;
         }
 
-        let mut details_sec = SectionContext::new(pc, cx + 4.0, bottom_y, cw - 8.0, "Details", false, false);
-        details_sec.content_y = details_content_end_y;
-        details_sec.finish();
+        {
+            let mut details_sec = SectionContext::new(pc, cx + 4.0, bottom_y, cw - 8.0, "Details", false, false);
+            details_sec.content_y = details_content_end_y;
+            if !relief {
+                details_sec.finish();
+            }
+        }
+        if relief {
+            let fy = bottom_y + 7.0;
+            pc.relief_recessed(
+                cx + 4.0 + pad,
+                fy,
+                cw - 8.0 - 2.0 * pad,
+                (details_content_end_y + pad + 12.0) - fy,
+                radius,
+            );
+        }
 
         let header_y = details_content_start_y + 6.0;
         pc.text(icon, cx + 12.0, header_y, 20.0, text_fg);

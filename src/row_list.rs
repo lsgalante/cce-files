@@ -341,6 +341,9 @@ impl RowList {
             cce_ui::layout::list_corner_radius(),
             (true, true, true, true),
         );
+        // Recessed well like a text box: the list floor sits below the pane
+        // surface, its wall carved over the bg and row overlays.
+        pc.relief_recessed(x, y, w, h, cce_ui::layout::list_corner_radius());
 
         if self.content_h > self.viewport_h {
             let (sb_x, track_y, sb_w, track_h, thumb_y, thumb_h) = self.scrollbar_geom();

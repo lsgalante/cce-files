@@ -535,6 +535,7 @@ impl FilesystemApp {
                 pc.rects.extend(browse_pc.rects);
                 pc.texts.extend(browse_pc.texts);
                 pc.buttons.extend(browse_pc.buttons);
+                pc.reliefs.extend(browse_pc.reliefs);
             }
             Page::Network => {
                 let (nx, ny, nw, nh) = self.network_split.left_rect();
@@ -543,6 +544,7 @@ impl FilesystemApp {
                 pc.rects.extend(network_pc.rects);
                 pc.texts.extend(network_pc.texts);
                 pc.buttons.extend(network_pc.buttons);
+                pc.reliefs.extend(network_pc.reliefs);
             }
         }
 

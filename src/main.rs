@@ -412,15 +412,17 @@ impl FilesystemApp {
 
         let has_sidebar = false;
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
-        let browse_x = if has_sidebar { sidebar_w + 17.0 } else { 16.0 };
-        let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
-        let content_y = 16.0;
+        // DE-wide plate rim padding (style.surface.backplate.padding).
+        let pad = cce_ui::layout::backplate_padding();
+        let browse_x = if has_sidebar { sidebar_w + pad + 1.0 } else { pad };
+        let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 2.0 * pad;
+        let content_y = pad;
 
         let select_bar_h = SELECT_BAR_H;
         let content_h = if self.select_mode {
-            self.height as f32 - 32.0 - select_bar_h
+            self.height as f32 - 2.0 * pad - select_bar_h
         } else {
-            self.height as f32 - 32.0
+            self.height as f32 - 2.0 * pad
         };
 
         {
@@ -538,7 +540,7 @@ impl FilesystemApp {
         // content region, so it goes into window_pc: page content (pc) is clipped
         // to the viewport and would swallow the bar entirely.
         if self.select_mode {
-            let bar_y = self.height as f32 - select_bar_h - 16.0;
+            let bar_y = self.height as f32 - select_bar_h - cce_ui::layout::backplate_padding();
             // Divider line — under control_relief the bar is a band carved into the
             // plate (see display_list), so the flat line is the fallback only.
             if !cce_ui::layout::control_relief() {
@@ -972,8 +974,8 @@ impl Application for FilesystemApp {
                 hovered: None,
             },
             open_with_dialog: None,
-            browse_split: SplitPane::new(0.49, 100.0, 100.0, 12.0),
-            network_split: SplitPane::new(0.49, 100.0, 100.0, 12.0),
+            browse_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
+            network_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
             last_click_time: std::time::Instant::now(),
             last_clicked_idx: None,
             keys: BrowseKeys::load(),
@@ -1239,7 +1241,7 @@ impl Application for FilesystemApp {
         if cce_ui::layout::control_relief() {
             let wall = cce_ui::layout::bar_wall_width();
             if self.select_mode {
-                let band_h = SELECT_BAR_H + 16.0;
+                let band_h = SELECT_BAR_H + cce_ui::layout::backplate_padding();
                 pc.recess_edges(
                     Rect { x: 0.0, y: fh - band_h, width: fw, height: band_h },
                     (0.0, 0.0, 0.0, 0.0),

@@ -188,6 +188,9 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     let breadcrumb_w = client_w - dropdown_w - gap;
     let (bx, by, bw, bh) = layout.allocate(breadcrumb_w, breadcrumb_h);
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
+    // The breadcrumb's recessed well lives in its modern paint(); the flat view
+    // this host renders through loses it, so carve it here.
+    pc.relief_recessed(bx, by, bw, bh, cce_ui::layout::breadcrumb_corner_radius());
     cce_ui::layout::render_widget(&mut pc, view_dropdown, bx + bw + gap, by, dropdown_w, breadcrumb_h, ctx);
 
     // 2. Allocate and render List (ScrollBox)

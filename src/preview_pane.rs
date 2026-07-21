@@ -12,11 +12,11 @@
 use std::path::PathBuf;
 
 use cce_ui::layout::SectionContext;
+use cce_ui::scene::layout::{fit_rect, FitMode, Rect};
 use cce_ui::widget::display::{truncate_head, truncate_tail};
 use cce_ui::widget::MouseScrollDelta;
 
 use crate::pages::PageContent;
-use crate::services::fs::ImagePreviewData;
 
 #[derive(Debug, Clone)]
 pub struct PreviewPane {
@@ -31,7 +31,10 @@ pub struct PreviewPane {
     pub file_type: String,
     pub target: String, // for symlinks
     pub content_preview: Option<String>,
-    pub image_preview: Option<ImagePreviewData>,
+    /// The uploaded preview texture as (image id, native w, native h). Owned
+    /// exclusively through [`PreviewPane::set_image`] — the sole upload/free
+    /// site, so a stale id can never leak against the renderer's image budget.
+    image_tex: Option<(u32, u32, u32)>,
     pub scroll_line: usize,
 }
 
@@ -49,13 +52,26 @@ impl Default for PreviewPane {
             file_type: String::new(),
             target: String::new(),
             content_preview: None,
-            image_preview: None,
+            image_tex: None,
             scroll_line: 0,
         }
     }
 }
 
 impl PreviewPane {
+    /// Replace (or clear) the preview texture. Always frees the previous id
+    /// first; upload happens here — at update() level, never during paint.
+    /// `img` is flat RGBA8 pixels + native dimensions.
+    pub fn set_image(&mut self, img: Option<(Vec<u8>, u32, u32)>) {
+        if let Some((id, _, _)) = self.image_tex.take() {
+            cce_ui::vk::free_image(id);
+        }
+        if let Some((pixels, w, h)) = img {
+            let id = cce_ui::vk::upload_rgba(pixels, w, h);
+            self.image_tex = Some((id, w, h));
+        }
+    }
+
     pub fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.rect = (x, y, w, h);
     }
@@ -165,63 +181,14 @@ impl PreviewPane {
         let bg_color = cce_ui::color::list_bg_color();
         pc.rect(bg_color, cx + 12.0, rect_y, cw - 24.0, rect_h);
 
-        if let Some(image_data) = &self.image_preview {
-            let box_w = cw - 24.0;
-            let box_h = rect_h;
-            let img_w = image_data.width as f32;
-            let img_h = image_data.height as f32;
-
-            let scale_x = box_w / img_w;
-            let scale_y = box_h / img_h;
-            let scale = scale_x.min(scale_y).min(4.0).max(1.0);
-
-            let draw_w = img_w * scale;
-            let draw_h = img_h * scale;
-
-            let start_x = cx + 12.0 + (box_w - draw_w) * 0.5;
-            let start_y = rect_y + (box_h - draw_h) * 0.5;
-
-            for row in 0..image_data.height {
-                let mut col = 0;
-                while col < image_data.width {
-                    let idx = (row * image_data.width + col) as usize;
-                    if idx >= image_data.pixels.len() {
-                        break;
-                    }
-                    let pixel = image_data.pixels[idx];
-
-                    let mut run_len = 1;
-                    while col + run_len < image_data.width {
-                        let next_idx = (row * image_data.width + col + run_len) as usize;
-                        if next_idx >= image_data.pixels.len() {
-                            break;
-                        }
-                        if image_data.pixels[next_idx] == pixel {
-                            run_len += 1;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let alpha = pixel[3] as f32 / 255.0;
-                    if alpha > 0.0 {
-                        pc.rect(
-                            [
-                                pixel[0] as f32 / 255.0,
-                                pixel[1] as f32 / 255.0,
-                                pixel[2] as f32 / 255.0,
-                                alpha,
-                            ],
-                            start_x + col as f32 * scale,
-                            start_y + row as f32 * scale,
-                            run_len as f32 * scale,
-                            scale,
-                        );
-                    }
-
-                    col += run_len;
-                }
-            }
+        if let Some((id, img_w, img_h)) = self.image_tex {
+            let fitted = fit_rect(
+                img_w,
+                img_h,
+                Rect { x: cx + 12.0, y: rect_y, width: cw - 24.0, height: rect_h },
+                FitMode::Contain { max_upscale: 4.0 },
+            );
+            pc.image(id, fitted.x, fitted.y, fitted.width, fitted.height, 1.0);
         } else if let Some(content) = &self.content_preview {
             let mut text_y = rect_y + 12.0;
             for line in content.lines().skip(self.scroll_line) {

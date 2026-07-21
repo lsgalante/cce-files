@@ -6,12 +6,13 @@ use crate::pages::browse::DirEntry;
 use crate::util::{format_size, format_permissions};
 use image::GenericImageView;
 
-/// A downscaled RGBA thumbnail of an image file, drawn by the preview pane.
+/// A downscaled RGBA thumbnail of an image file. `pixels` is flat RGBA8
+/// (width * height * 4 bytes) — exactly what `cce_ui::vk::upload_rgba` takes.
 #[derive(Debug, Clone, Default)]
 pub struct ImagePreviewData {
     pub width: u32,
     pub height: u32,
-    pub pixels: Vec<[u8; 4]>,
+    pub pixels: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -167,7 +168,9 @@ fn load_image_preview(path: &Path) -> Option<ImagePreviewData> {
     if orig_w == 0 || orig_h == 0 {
         return None;
     }
-    let max_dim = 96.0;
+    // GPU-textured previews: 512px is crisp at pane size for one live image
+    // (1 MB RGBA) while keeping the Triangle resize quick per selection.
+    let max_dim = 512.0;
     let ratio = (max_dim / orig_w as f32).min(max_dim / orig_h as f32).min(1.0);
     let target_w = (orig_w as f32 * ratio).round() as u32;
     let target_h = (orig_h as f32 * ratio).round() as u32;
@@ -181,9 +184,8 @@ fn load_image_preview(path: &Path) -> Option<ImagePreviewData> {
         img.resize(target_w, target_h, image::imageops::FilterType::Triangle)
     };
     
-    let rgba = resized.to_rgba8();
-    let pixels = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect();
-    
+    let pixels = resized.to_rgba8().into_raw();
+
     Some(ImagePreviewData {
         width: target_w,
         height: target_h,

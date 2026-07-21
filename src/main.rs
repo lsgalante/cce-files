@@ -130,6 +130,9 @@ enum WidgetFx {
     Boss(f32),
     /// Edges-only carve into whatever is painted below (recessed wells).
     Recess(f32),
+    /// A GPU-textured quad; the id comes from `cce_ui::vk::upload_rgba`
+    /// (the preview pane's image). `color` is unused.
+    Image { id: u32, alpha: f32 },
 }
 
 struct AppWidget {
@@ -497,6 +500,7 @@ impl FilesystemApp {
                 window_pc.texts.extend(plain_pc.texts);
                 window_pc.buttons.extend(plain_pc.buttons);
                 window_pc.reliefs.extend(plain_pc.reliefs);
+                window_pc.images.extend(plain_pc.images);
 
                 // The view dropdown's raised plate (control_relief) lives in its
                 // modern paint(); the flat view loses it — restore it edges-only.
@@ -516,6 +520,7 @@ impl FilesystemApp {
                 pc.texts.extend(browse_pc.texts);
                 pc.buttons.extend(browse_pc.buttons);
                 pc.reliefs.extend(browse_pc.reliefs);
+                pc.images.extend(browse_pc.images);
             }
             Page::Network => {
                 let (nx, ny, nw, nh) = self.network_split.left_rect();
@@ -525,6 +530,7 @@ impl FilesystemApp {
                 pc.texts.extend(network_pc.texts);
                 pc.buttons.extend(network_pc.buttons);
                 pc.reliefs.extend(network_pc.reliefs);
+                pc.images.extend(network_pc.images);
             }
         }
 
@@ -679,6 +685,25 @@ impl FilesystemApp {
                     radius: *r,
                     corners: *corners,
                     fx: WidgetFx::Flat,
+                });
+            }
+            for (id, ix, iy, iw, ih, alpha) in &pc_part.images {
+                let (mut wy, mut wh) = (*iy, *ih);
+                if is_page_content {
+                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
+                        Some((cy, ch)) => { wy = cy; wh = ch; }
+                        None => continue,
+                    }
+                }
+                widgets.push(AppWidget {
+                    x: *ix,
+                    y: wy,
+                    w: *iw,
+                    h: wh,
+                    color: [0.0; 4],
+                    radius: 0.0,
+                    corners: (true, true, true, true),
+                    fx: WidgetFx::Image { id: *id, alpha: *alpha },
                 });
             }
             for (rx, ry, rw, rh, rr, rd, raised) in &pc_part.reliefs {
@@ -1231,6 +1256,7 @@ impl Application for FilesystemApp {
                 WidgetFx::Bevel(depth) => pc.bevel(rect, radii, w.color, depth),
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
+                WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
                 WidgetFx::Flat => {
                     if w.radius > 0.1 {
                         pc.rounded_rect(rect, w.radius, w.corners, w.color);

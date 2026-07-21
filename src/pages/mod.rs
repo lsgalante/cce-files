@@ -39,6 +39,10 @@ pub struct PageContent {
     /// raised). The flat rects own the faces; these are the edges-only boss/recess
     /// walls emitted over them (the ParametersBg::reliefs idiom for flat-view hosts).
     pub reliefs: Vec<(f32, f32, f32, f32, f32, f32, bool)>,
+    /// GPU-textured quads — (image id from `cce_ui::vk::upload_rgba`, x, y, w, h,
+    /// alpha). Drawn after the part's rects, so a fill emitted earlier is the floor
+    /// beneath the image and overlay parts still cover it.
+    pub images: Vec<(u32, f32, f32, f32, f32, f32)>,
 }
 
 impl PageContent {
@@ -48,7 +52,13 @@ impl PageContent {
             texts: Vec::new(),
             buttons: Vec::new(),
             reliefs: Vec::new(),
+            images: Vec::new(),
         }
+    }
+
+    /// A GPU-textured quad (id from `cce_ui::vk::upload_rgba`).
+    pub fn image(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32, alpha: f32) {
+        self.images.push((id, x, y, w, h, alpha));
     }
 
     pub fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {

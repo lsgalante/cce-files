@@ -16,6 +16,9 @@ pub enum PreviewMessage {
 pub fn update(state: &mut PreviewPane, msg: PreviewMessage) {
     match msg {
         PreviewMessage::Clear => {
+            // Free the texture BEFORE the wholesale replace — a plain
+            // Default::default() swap would leak the uploaded id.
+            state.set_image(None);
             *state = PreviewPane::default();
         }
         PreviewMessage::SetPath { path: _ } => {
@@ -32,7 +35,7 @@ pub fn update(state: &mut PreviewPane, msg: PreviewMessage) {
             state.file_type = data.file_type;
             state.target = data.target;
             state.content_preview = data.content_preview;
-            state.image_preview = data.image_preview;
+            state.set_image(data.image_preview.map(|img| (img.pixels, img.width, img.height)));
             state.scroll_line = 0;
         }
     }

@@ -512,7 +512,7 @@ impl FilesystemApp {
                 // the groove ring + edges-only lip pair.
                 let (dx, dy, dw, dh) = (*self_ptr).view_dropdown.rect();
                 let dr = cce_ui::layout::dropdown_corner_radius();
-                let g = cce_ui::layout::bevel_width().min(dh * 0.2);
+                let g = cce_ui::layout::bevel_width().min(dh * 0.2) * 0.5;
                 window_pc.relief_recessed(dx - g, dy - g, dw + 2.0 * g, dh + 2.0 * g, dr + g);
                 window_pc.relief_raised(dx, dy, dw, dh, dr);
             }

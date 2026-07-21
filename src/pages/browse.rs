@@ -274,15 +274,16 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
 
     state.list.push_prims(&mut pc);
     if state.search_visible {
-        cce_ui::layout::render_widget(
-            &mut pc,
-            &mut state.search_box,
+        let (sx, sy, sw, sh) = (
             list_x + 8.0,
             list_y + list_h - search_offset + search_margin_y,
             list_w - 16.0,
             search_h,
-            ctx,
         );
+        cce_ui::layout::render_widget(&mut pc, &mut state.search_box, sx, sy, sw, sh, ctx);
+        // The TextBox's recessed well lives in its modern paint(); the flat view
+        // this host renders through loses it, so carve it here.
+        pc.relief_recessed(sx, sy, sw, sh, cce_ui::layout::textbox_corner_radius());
     }
 
     // Count label in the bottom right corner of the scrolling list
@@ -301,6 +302,7 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
         let (tx, ty, tw, th) = layout.allocate(client_w, textbox_h);
         state.save_name_box.set_row_rect(tx, tw);
         cce_ui::layout::render_widget(&mut pc, &mut state.save_name_box, tx, ty, tw, th, ctx);
+        pc.relief_recessed(tx, ty, tw, th, cce_ui::layout::textbox_corner_radius());
     }
 
     pc

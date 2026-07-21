@@ -35,6 +35,10 @@ pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
     pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
     pub buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, crate::Message)>,
+    /// Relief steps for the control_relief styling — (x, y, w, h, radius, depth,
+    /// raised). The flat rects own the faces; these are the edges-only boss/recess
+    /// walls emitted over them (the ParametersBg::reliefs idiom for flat-view hosts).
+    pub reliefs: Vec<(f32, f32, f32, f32, f32, f32, bool)>,
 }
 
 impl PageContent {
@@ -43,11 +47,30 @@ impl PageContent {
             rects: Vec::new(),
             texts: Vec::new(),
             buttons: Vec::new(),
+            reliefs: Vec::new(),
         }
     }
 
     pub fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {
         self.rects.push((color, x, y, w, h, 0.0, (true, true, true, true)));
+    }
+
+    /// A recessed well carved over the control at (x, y, w, h) — no-op when the
+    /// DE's control_relief styling is off.
+    pub fn relief_recessed(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+        if cce_ui::layout::control_relief() {
+            let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+            self.reliefs.push((x, y, w, h, radius, depth, false));
+        }
+    }
+
+    /// A raised plateau over the control at (x, y, w, h) — no-op when the DE's
+    /// control_relief styling is off.
+    pub fn relief_raised(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+        if cce_ui::layout::control_relief() {
+            let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+            self.reliefs.push((x, y, w, h, radius, depth, true));
+        }
     }
 
     pub fn text(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4]) {

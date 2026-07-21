@@ -113,7 +113,28 @@ fn occlude_against(
     Some(bounds)
 }
 
+/// Height of the chooser-mode bottom action bar (the band carved into the plate).
+const SELECT_BAR_H: f32 = 48.0;
+
+/// Bottom edge of the header strip (window pad + breadcrumb row + a breath) —
+/// the band carved one step down into the plate, recessed-MenuBar style.
+const HEADER_BAND_H: f32 = 46.0;
+
 // ── State ───────────────────────────────────────────────────────────
+
+/// How a flat quad renders under the SDF-lit plate system. `Flat` is the plain
+/// fill; the relief variants carry the roll/carve depth in px.
+#[derive(Clone, Copy, PartialEq)]
+enum WidgetFx {
+    Flat,
+    /// A lit Bevel plate: the quad's own fill plus a rolled, lit lip (raised
+    /// buttons with an opaque face).
+    Bevel(f32),
+    /// Edges-only raised plateau over whatever is painted below.
+    Boss(f32),
+    /// Edges-only carve into whatever is painted below (recessed wells).
+    Recess(f32),
+}
 
 struct AppWidget {
     x: f32,
@@ -123,6 +144,7 @@ struct AppWidget {
     color: [f32; 4],
     radius: f32,
     corners: (bool, bool, bool, bool),
+    fx: WidgetFx,
 }
 
 #[derive(Clone)]
@@ -396,7 +418,7 @@ impl FilesystemApp {
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 32.0;
         let content_y = 16.0;
 
-        let select_bar_h = 48.0;
+        let select_bar_h = SELECT_BAR_H;
         let content_h = if self.select_mode {
             self.height as f32 - 32.0 - select_bar_h
         } else {
@@ -485,20 +507,21 @@ impl FilesystemApp {
                     cce_ui::layout::render_widget(&mut plain_pc, textbox, x, y, w, h, &mut self.ui_context);
                 }
 
-                // Replicate the legacy aggregate's GLOBAL order: every plain child quad,
-                // then the dissolved root plate (its translucent wash sat over the plain
-                // content), then every rounded child quad.
+                // Legacy aggregate order: plain child quads, then rounded child quads.
+                // The dissolved root plate that used to sit between them is now a
+                // Prim::Plate emitted FIRST in display_list — the lit window slab the
+                // rest of the frame sits on (and the surface the band carves CSG into).
                 let (plain, rounded): (Vec<_>, Vec<_>) = plain_pc.rects.into_iter().partition(|r| r.5 <= 0.1);
                 window_pc.rects.extend(plain);
-                let mut c = cce_ui::color::page_low_color();
-                if c[3] > 0.001 {
-                    c[3] = cce_ui::color::active_backplate_opacity();
-                }
-                let radius = cce_ui::color::backplate_corner_radius();
-                window_pc.rects.push((c, 0.0, 0.0, self.width as f32, self.height as f32, radius.max(0.0), (radius > 0.1, radius > 0.1, radius > 0.1, radius > 0.1)));
                 window_pc.rects.extend(rounded);
                 window_pc.texts.extend(plain_pc.texts);
                 window_pc.buttons.extend(plain_pc.buttons);
+                window_pc.reliefs.extend(plain_pc.reliefs);
+
+                // The view dropdown's raised plate (control_relief) lives in its
+                // modern paint(); the flat view loses it — restore it edges-only.
+                let (dx, dy, dw, dh) = (*self_ptr).view_dropdown.rect();
+                window_pc.relief_raised(dx, dy, dw, dh, cce_ui::layout::dropdown_corner_radius());
             }
         }
 
@@ -528,8 +551,11 @@ impl FilesystemApp {
         // to the viewport and would swallow the bar entirely.
         if self.select_mode {
             let bar_y = self.height as f32 - select_bar_h - 16.0;
-            // Divider line
-            window_pc.rect([0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
+            // Divider line — under control_relief the bar is a band carved into the
+            // plate (see display_list), so the flat line is the fallback only.
+            if !cce_ui::layout::control_relief() {
+                window_pc.rect([0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
+            }
 
             let accent = [0.36, 0.56, 0.38, 1.0];
             let text_fg = [0.83, 0.83, 0.83, 1.0];
@@ -588,6 +614,8 @@ impl FilesystemApp {
                 let iy = cy + h_idx as f32 * ROW_H;
                 context_menu_pc.rect([0.20, 0.40, 0.65, 0.6], cx + 2.0, iy + 2.0, cw - 4.0, 20.0);
             }
+            // Raised menu plate (control_relief styling).
+            context_menu_pc.relief_raised(cx, cy, cw, ch, 0.0);
             // Text options
             for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
                 let iy = cy + idx as f32 * ROW_H + (ROW_H - 12.0) / 2.0;
@@ -625,6 +653,9 @@ impl FilesystemApp {
 
             // Set textbox position dynamically using configured textbox height
             textbox.set_rect(tb_x, tb_y, tb_w, tb_h);
+            // Raised dialog plate + recessed command well (control_relief styling).
+            dialog_pc.relief_raised(dialog_x, dialog_y, dialog_w, dialog_h, 0.0);
+            dialog_pc.relief_recessed(tb_x, tb_y, tb_w, tb_h, cce_ui::layout::textbox_corner_radius());
 
             let cancel_hover = self.cursor_x >= btn_cancel_x && self.cursor_x <= btn_cancel_x + btn_cancel_w
                 && self.cursor_y >= btn_cancel_y && self.cursor_y <= btn_cancel_y + btn_cancel_h;
@@ -665,6 +696,26 @@ impl FilesystemApp {
                     color: *c,
                     radius: *r,
                     corners: *corners,
+                    fx: WidgetFx::Flat,
+                });
+            }
+            for (rx, ry, rw, rh, rr, rd, raised) in &pc_part.reliefs {
+                let (mut wy, mut wh) = (*ry, *rh);
+                if is_page_content {
+                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
+                        Some((cy, ch)) => { wy = cy; wh = ch; }
+                        None => continue,
+                    }
+                }
+                widgets.push(AppWidget {
+                    x: *rx,
+                    y: wy,
+                    w: *rw,
+                    h: wh,
+                    color: [0.0; 4],
+                    radius: *rr,
+                    corners: (true, true, true, true),
+                    fx: if *raised { WidgetFx::Boss(*rd) } else { WidgetFx::Recess(*rd) },
                 });
             }
             for (btn, action) in &pc_part.buttons {
@@ -691,6 +742,15 @@ impl FilesystemApp {
                     && self.cursor_y >= wy && self.cursor_y <= wy + wh;
                 let col = if hovering { hover_bg } else { bg };
 
+                // Raised button plate (control_relief): the fill becomes a lit
+                // Bevel — rolled lip owns the edge — mirroring Button::paint's
+                // raised branch. Transparent fills degrade to edges-only Boss.
+                let fx = if cce_ui::layout::control_relief() {
+                    let depth = cce_ui::layout::bevel_width().min(wh * 0.2);
+                    if col[3] > 0.001 { WidgetFx::Bevel(depth) } else { WidgetFx::Boss(depth) }
+                } else {
+                    WidgetFx::Flat
+                };
                 widgets.push(AppWidget {
                     x: wx,
                     y: wy,
@@ -699,6 +759,7 @@ impl FilesystemApp {
                     color: col,
                     radius: 4.0, // standard button radius
                     corners: (true, true, true, true),
+                    fx,
                 });
 
                 let text_x = if btn.justify == cce_ui::widget::Justification::Left {
@@ -1147,12 +1208,60 @@ impl Application for FilesystemApp {
         }
         use cce_ui::scene::layout::Rect;
         let mut pc = cce_ui::scene::paint::PaintCtx::new();
+        let (fw, fh) = (self.width as f32, self.height as f32);
+
+        // The window plate — the dissolved root Backplate as a lit object: page-low
+        // color at the configured opacity, perimeter rolled over bevel_width so the
+        // surface reads as a physical plate rather than a flat fill.
+        let mut plate = cce_ui::color::page_low_color();
+        if plate[3] > 0.001 {
+            plate[3] = cce_ui::color::active_backplate_opacity();
+        }
+        let radius = cce_ui::color::backplate_corner_radius().max(0.0);
+        pc.plate(
+            Rect { x: 0.0, y: 0.0, width: fw, height: fh },
+            (radius, radius, radius, radius),
+            plate,
+            cce_ui::layout::bevel_width(),
+        );
+
+        // Band carves, emitted right after the plate so they CSG-group into its
+        // draw: the header strip (breadcrumb row) one step down, flush to the top
+        // and sides so its only wall is the bottom one; in chooser mode the action
+        // bar is the mirror band carved into the bottom.
+        if cce_ui::layout::control_relief() {
+            let wall = cce_ui::layout::bar_wall_width();
+            pc.recess_edges(
+                Rect { x: 0.0, y: 0.0, width: fw, height: HEADER_BAND_H },
+                (0.0, 0.0, 0.0, 0.0),
+                wall,
+                (false, false, true, false),
+            );
+            if self.select_mode {
+                let band_h = SELECT_BAR_H + 16.0;
+                pc.recess_edges(
+                    Rect { x: 0.0, y: fh - band_h, width: fw, height: band_h },
+                    (0.0, 0.0, 0.0, 0.0),
+                    wall,
+                    (true, false, false, false),
+                );
+            }
+        }
+
         for w in &self.widgets {
             let rect = Rect { x: w.x, y: w.y, width: w.w, height: w.h };
-            if w.radius > 0.1 {
-                pc.rounded_rect(rect, w.radius, w.corners, w.color);
-            } else {
-                pc.quad(rect, w.color);
+            let radii = (w.radius, w.radius, w.radius, w.radius);
+            match w.fx {
+                WidgetFx::Bevel(depth) => pc.bevel(rect, radii, w.color, depth),
+                WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
+                WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
+                WidgetFx::Flat => {
+                    if w.radius > 0.1 {
+                        pc.rounded_rect(rect, w.radius, w.corners, w.color);
+                    } else {
+                        pc.quad(rect, w.color);
+                    }
+                }
             }
         }
         for (text, font_size, x, y, col, font, bounds) in &self.texts {

@@ -13,8 +13,38 @@ use std::path::PathBuf;
 
 use cce_ui::layout::SectionContext;
 use cce_ui::scene::layout::{fit_rect, FitMode, Rect};
-use cce_ui::widget::display::{truncate_head, truncate_tail};
+use cce_ui::widget::display::{measure_text_width, truncate_tail};
 use cce_ui::widget::MouseScrollDelta;
+
+/// Truncate `s` to fit `avail` px, measured for real (resvg-backed, cached per
+/// string+size — the handful of details strings re-measure only on selection
+/// change). `head` replaces the front ("...ail/of/path"), else the back
+/// ("name..."). Binary search on kept chars: ~7 probes for a long path.
+fn truncate_px(s: &str, family: &str, size: f32, avail: f32, head: bool) -> String {
+    if measure_text_width(s, family, size) <= avail {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let build = |keep: usize| -> String {
+        if head {
+            let tail: String = chars[chars.len() - keep..].iter().collect();
+            format!("...{tail}")
+        } else {
+            let kept: String = chars[..keep].iter().collect();
+            format!("{kept}...")
+        }
+    };
+    let (mut lo, mut hi) = (0usize, chars.len().saturating_sub(1));
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if measure_text_width(&build(mid), family, size) <= avail {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    build(lo)
+}
 
 use crate::pages::PageContent;
 
@@ -195,7 +225,10 @@ impl PreviewPane {
                 if text_y + 14.0 > rect_y + rect_h - 8.0 {
                     break;
                 }
-                let limit = (((cw - 40.0) / 6.8).floor() as usize).max(20);
+                // Chars-per-width from one measured glyph (cached) instead of
+                // the old magic 6.8 px/char guess.
+                let char_w = measure_text_width("M", "monospace", 11.0).max(1.0);
+                let limit = (((cw - 40.0) / char_w).floor() as usize).max(20);
                 let line_truncated = truncate_tail(line, limit);
                 pc.text_with_font(&line_truncated, cx + 20.0, text_y, 11.0, text_fg, "monospace");
                 text_y += 15.0;
@@ -229,13 +262,19 @@ impl PreviewPane {
         let header_y = details_content_start_y + 6.0;
         pc.text(icon, cx + 12.0, header_y, 20.0, text_fg);
 
-        let name_truncated = truncate_tail(&self.name, 30);
+        // Pixel-measured budgets against the section frame's inner right edge
+        // (None-font text renders sans-serif — measure with the same family).
+        let frame_right = cx + cw - 4.0 - pad;
+        let name_avail = (frame_right - (cx + 42.0) - 8.0).max(40.0);
+        let val_avail = (frame_right - (cx + 112.0) - 8.0).max(40.0);
+
+        let name_truncated = truncate_px(&self.name, "sans-serif", 16.0, name_avail, false);
         pc.text(&name_truncated, cx + 42.0, header_y + 4.0, 16.0, text_fg);
 
         let mut y = details_content_start_y + 36.0;
         for (label, val) in &details {
             pc.text(label, cx + 12.0, y, 12.0, label_fg);
-            let val_str = truncate_head(val, 40);
+            let val_str = truncate_px(val, "sans-serif", 12.0, val_avail, true);
             pc.text(&val_str, cx + 112.0, y, 12.0, text_dim);
             y += 20.0;
         }
@@ -243,7 +282,7 @@ impl PreviewPane {
         if !self.target.is_empty() {
             y += 8.0;
             pc.text("Target", cx + 12.0, y, 12.0, label_fg);
-            let target_str = truncate_head(&self.target, 40);
+            let target_str = truncate_px(&self.target, "sans-serif", 12.0, val_avail, true);
             pc.text(&target_str, cx + 112.0, y, 12.0, text_dim);
         }
     }

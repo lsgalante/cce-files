@@ -1290,6 +1290,33 @@ impl Application for FilesystemApp {
                 *bounds,
             );
         }
+        // The toolkit's shared context menu (breadcrumb segments, config-bound
+        // controls) draws into the app's display list like every popover. Its
+        // labels carry bounds equal to the menu rect — the engine's popover
+        // occlusion clamp exempts exactly that, so they render inside the menu
+        // while page text beneath stays clamped.
+        if cce_ui::widget::context_menu::is_visible() {
+            let menu_bounds = Some([
+                cce_ui::widget::context_menu::x(),
+                cce_ui::widget::context_menu::y(),
+                cce_ui::widget::context_menu::x() + cce_ui::widget::context_menu::w(),
+                cce_ui::widget::context_menu::y() + cce_ui::widget::context_menu::h(),
+            ]);
+            for (qx, qy, qw, qh, qc) in cce_ui::widget::context_menu::extra_quads() {
+                pc.quad(Rect { x: qx, y: qy, width: qw, height: qh }, qc);
+            }
+            for label in cce_ui::widget::context_menu::text_labels() {
+                pc.text_with(
+                    label.text.clone(),
+                    label.x,
+                    label.y,
+                    label.font_size,
+                    label.color,
+                    None,
+                    menu_bounds,
+                );
+            }
+        }
         Some(pc.finish())
     }
 
@@ -1316,6 +1343,15 @@ impl Application for FilesystemApp {
             }
             *needs_rebuild = true;
             self.needs_rebuild = true;
+            return;
+        }
+
+        // The toolkit's shared context menu gets the pointer exclusively while open.
+        if cce_ui::widget::context_menu::is_visible() {
+            if cce_ui::widget::context_menu::cursor_moved(pos.x, pos.y) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
             return;
         }
 
@@ -1434,6 +1470,16 @@ impl Application for FilesystemApp {
             return None;
         }
 
+        // The toolkit's shared context menu (breadcrumb, config-bound controls)
+        // swallows the click — select or dismiss — before any widget routing.
+        if cce_ui::widget::context_menu::is_visible() {
+            if cce_ui::widget::context_menu::mouse_input(button, state, pos.x, pos.y, Some(&mut self.ui_context)) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            return None;
+        }
+
         if let Some((_path, textbox)) = &mut self.open_with_dialog {
             let r = open_with_rects(self.width as f32, self.height as f32);
             let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
@@ -1525,27 +1571,10 @@ impl Application for FilesystemApp {
             if breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
                 let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
                 let root = breadcrumb.id();
+                // The breadcrumb opens the toolkit's shared context menu itself
+                // (open_context_menu → segment header + Copy Path); the app just
+                // routes the event and redraws — no app-side menu duplicate.
                 if self.ui_context.propagate_event(&ev, root) {
-                    let idx = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
-                    let path_str = breadcrumb.path_to_seg(idx);
-                    
-                    let header = format!("[Breadcrumb]: {}", path_str);
-                    let options = vec![
-                        (header, None),
-                        ("Copy Path".to_string(), Some(Message::CopyPath(path_str))),
-                    ];
-
-                    let (menu_w, menu_h) = context_menu_size(&options);
-
-                    self.context_menu = ContextMenu {
-                        visible: true,
-                        x: pos.x,
-                        y: pos.y,
-                        w: menu_w,
-                        h: menu_h,
-                        options,
-                        hovered: None,
-                    };
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                     return None;

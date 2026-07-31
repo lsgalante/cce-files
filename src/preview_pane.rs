@@ -214,7 +214,7 @@ impl PreviewPane {
         // the well edge sits at the pane edge like the list across the split —
         // the visible split gap is exactly backplate_gap on both sides.
         {
-            let mut preview_sec = SectionContext::new(pc, cx - pad, cy + 12.0, cw + 2.0 * pad, "Preview", false, false);
+            let mut preview_sec = SectionContext::new(pc, cx - pad, cy + 12.0, cw + 2.0 * pad, "", false, false);
             preview_sec.content_y = cy + half_h - pad - 12.0;
             if !relief {
                 preview_sec.finish();
@@ -278,7 +278,7 @@ impl PreviewPane {
         }
 
         {
-            let mut details_sec = SectionContext::new(pc, cx - pad, bottom_y, cw + 2.0 * pad, "Details", false, false);
+            let mut details_sec = SectionContext::new(pc, cx - pad, bottom_y, cw + 2.0 * pad, "", false, false);
             details_sec.content_y = details_content_end_y;
             if !relief {
                 details_sec.finish();

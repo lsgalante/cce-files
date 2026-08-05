@@ -130,7 +130,9 @@ impl RowList {
         }
     }
 
-    fn row_at(&self, px: f32, py: f32) -> Option<usize> {
+    /// The visible row index under (px, py) — the click/hover hit-test, public
+    /// for the app's right-click row menu.
+    pub fn row_at(&self, px: f32, py: f32) -> Option<usize> {
         for idx in 0..self.rows.len() {
             if let Some(draw_y) = self.get_item_draw_y(idx) {
                 if px >= self.x + 2.0 && px <= self.x + self.w - 2.0 && py >= draw_y && py <= draw_y + self.item_height {

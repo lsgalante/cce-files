@@ -33,7 +33,13 @@ pub enum FsRequest {
     ReadDirectory(PathBuf),
     RefreshDirectory(PathBuf),
     ReadPreview(PathBuf),
+    /// Move to the freedesktop trash (the default Delete).
+    TrashPath(PathBuf),
+    /// Unrecoverable delete — the trash's own rows, and "Delete Permanently".
     DeletePath(PathBuf, bool), // (path, is_dir)
+    /// Restore a trashed item (a path under Trash/files) to its origin.
+    RestorePath(PathBuf),
+    EmptyTrash,
     ReadLastDir,
     SaveLastDir(PathBuf),
 }
@@ -74,6 +80,14 @@ impl FsService {
                             ));
                         });
                     }
+                    FsRequest::TrashPath(path) => {
+                        tokio::spawn(async move {
+                            let result = super::trash::move_to_trash(&path).map_err(|e| e.to_string());
+                            let _ = app_sender.send(crate::Message::Browse(
+                                crate::pages::browse::BrowseMessage::Deleted(path, result),
+                            ));
+                        });
+                    }
                     FsRequest::DeletePath(path, is_dir) => {
                         tokio::spawn(async move {
                             let res = if is_dir {
@@ -84,6 +98,24 @@ impl FsService {
                             let result = res.map_err(|e| e.to_string());
                             let _ = app_sender.send(crate::Message::Browse(
                                 crate::pages::browse::BrowseMessage::Deleted(path, result),
+                            ));
+                        });
+                    }
+                    FsRequest::RestorePath(path) => {
+                        tokio::spawn(async move {
+                            // A restored row leaves the trash listing exactly like a
+                            // deleted row leaves its directory — same message.
+                            let result = super::trash::restore(&path).map(|_| ()).map_err(|e| e.to_string());
+                            let _ = app_sender.send(crate::Message::Browse(
+                                crate::pages::browse::BrowseMessage::Deleted(path, result),
+                            ));
+                        });
+                    }
+                    FsRequest::EmptyTrash => {
+                        tokio::spawn(async move {
+                            let result = super::trash::empty().map(|_| ()).map_err(|e| e.to_string());
+                            let _ = app_sender.send(crate::Message::Browse(
+                                crate::pages::browse::BrowseMessage::TrashEmptied(result),
                             ));
                         });
                     }

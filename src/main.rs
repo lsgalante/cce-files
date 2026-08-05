@@ -1581,25 +1581,19 @@ impl Application for FilesystemApp {
                 }
             }
 
-            // Check if right-clicked on a list button
-            let mut right_clicked_action = None;
-            for (btn, action) in &self.page_buttons {
-                let base = btn.base();
-                if pos.x >= base.x && pos.x <= base.x + base.w && pos.y >= base.y && pos.y <= base.y + base.h {
-                    right_clicked_action = Some(action.clone());
-                    break;
-                }
-            }
-
-            if let Some(Message::Browse(browse_action)) = right_clicked_action {
-                let entry_idx = match browse_action {
-                    pages::browse::BrowseMessage::SelectEntry(idx) => Some(idx),
-                    pages::browse::BrowseMessage::NavigateTo(idx) => Some(idx),
-                    _ => None,
+            // Row context menu: hit-test the list directly — rows stopped being
+            // page_buttons when the List became a widget (Phase 6z), so the old
+            // button probe never fired.
+            {
+                let entry_idx = if self.current_page == Page::Browse {
+                    self.browse.list.row_at(pos.x, pos.y)
+                } else {
+                    None
                 };
 
                 if let Some(idx) = entry_idx {
                     if let Some(entry) = self.browse.entries.get(idx) {
+                        let is_trash_dir = services::trash::is_trash_files_dir(&self.browse.current_dir);
                         let header = if entry.is_dir {
                             format!("[Directory] {}", entry.name)
                         } else {
@@ -1623,7 +1617,16 @@ impl Application for FilesystemApp {
 
                         options.push(("Open with...".to_string(), Some(Message::PromptOpenWith(entry.path.clone()))));
 
-                        options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
+                        if is_trash_dir {
+                            options.push(("Restore".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::RestoreEntry(idx)))));
+                            options.push(("Delete Permanently".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntryPermanent(idx)))));
+                            options.push(("Empty Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::EmptyTrash))));
+                        } else {
+                            options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
+                            if let Some(trash_files) = services::trash::files_dir() {
+                                options.push(("Open Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(trash_files)))));
+                            }
+                        }
 
                         // Calculate width
                         let (menu_w, menu_h) = context_menu_size(&options);

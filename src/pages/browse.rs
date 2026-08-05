@@ -82,8 +82,15 @@ pub enum BrowseMessage {
     DirectoryLoaded(PathBuf, Vec<DirEntry>),
     DirectoryRefreshed(PathBuf, Vec<DirEntry>),
     ToggleHidden,
+    /// Delete = move to trash — except inside the trash itself, where the
+    /// update arm degrades it to a permanent delete (re-trashing a trashed
+    /// row would orphan its .trashinfo).
     DeleteEntry(usize),
+    DeleteEntryPermanent(usize),
+    RestoreEntry(usize),
+    EmptyTrash,
     Deleted(PathBuf, Result<(), String>),
+    TrashEmptied(Result<(), String>),
     LastDirLoaded(Option<PathBuf>),
 }
 
@@ -387,10 +394,35 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
         }
         BrowseMessage::DeleteEntry(idx) => {
             if let Some(entry) = state.entries.get(idx) {
+                if crate::services::trash::is_trash_files_dir(&state.current_dir) {
+                    Some(crate::services::fs::FsRequest::DeletePath(entry.path.clone(), entry.is_dir))
+                } else {
+                    Some(crate::services::fs::FsRequest::TrashPath(entry.path.clone()))
+                }
+            } else {
+                None
+            }
+        }
+        BrowseMessage::DeleteEntryPermanent(idx) => {
+            if let Some(entry) = state.entries.get(idx) {
                 Some(crate::services::fs::FsRequest::DeletePath(entry.path.clone(), entry.is_dir))
             } else {
                 None
             }
+        }
+        BrowseMessage::RestoreEntry(idx) => {
+            if let Some(entry) = state.entries.get(idx) {
+                Some(crate::services::fs::FsRequest::RestorePath(entry.path.clone()))
+            } else {
+                None
+            }
+        }
+        BrowseMessage::EmptyTrash => Some(crate::services::fs::FsRequest::EmptyTrash),
+        BrowseMessage::TrashEmptied(result) => {
+            if let Err(e) = result {
+                log::error!("Failed to empty trash: {}", e);
+            }
+            Some(crate::services::fs::FsRequest::ReadDirectory(state.current_dir.clone()))
         }
         BrowseMessage::Deleted(path, result) => {
             match result {
@@ -758,9 +790,12 @@ mod tests {
         // Assert file exists before deletion
         assert!(file_path.exists());
 
-        // Perform update call for DeleteEntry
+        // DeleteEntry outside the trash routes to TrashPath (recoverable);
+        // DeleteEntryPermanent is the unrecoverable path.
         let req = update(&mut state, BrowseMessage::DeleteEntry(0));
-        assert!(matches!(req, Some(crate::services::fs::FsRequest::DeletePath(_, _))));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::TrashPath(_))));
+        let req_perm = update(&mut state, BrowseMessage::DeleteEntryPermanent(0));
+        assert!(matches!(req_perm, Some(crate::services::fs::FsRequest::DeletePath(_, _))));
 
         // Directly delete the file to simulate the FsService action
         std::fs::remove_file(&file_path).unwrap();

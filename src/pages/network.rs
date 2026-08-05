@@ -185,6 +185,7 @@ mod tests {
                 size: 100,
                 permissions: 0o644,
                 modified: String::new(),
+                origin: None,
             },
             DirEntry {
                 name: "subdir".to_string(),
@@ -193,6 +194,7 @@ mod tests {
                 size: 4096,
                 permissions: 0o755,
                 modified: String::new(),
+                origin: None,
             },
         ];
 
@@ -236,6 +238,7 @@ mod tests {
                 size: 4096,
                 permissions: 0o755,
                 modified: String::new(),
+                origin: None,
             },
         ];
 

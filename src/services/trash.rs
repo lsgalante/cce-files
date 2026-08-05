@@ -105,6 +105,24 @@ fn move_to_trash_in(base: &Path, path: &Path) -> io::Result<()> {
     }
 }
 
+/// The origin a trashed item (a path under `files/`) restores to, from its
+/// .trashinfo — the trash listing shows this. None when the sidecar is
+/// missing or malformed.
+pub fn origin_of(trashed: &Path) -> Option<PathBuf> {
+    let base = trash_dir()?;
+    let name = trashed.file_name()?.to_string_lossy().to_string();
+    read_origin(&base.join("info").join(format!("{name}.trashinfo"))).ok()
+}
+
+fn read_origin(info_path: &Path) -> io::Result<PathBuf> {
+    let body = fs::read_to_string(info_path)?;
+    let encoded = body
+        .lines()
+        .find_map(|l| l.strip_prefix("Path="))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "trashinfo has no Path"))?;
+    Ok(PathBuf::from(percent_decode(encoded)))
+}
+
 fn restore_in(base: &Path, trashed: &Path) -> io::Result<PathBuf> {
     let name = trashed
         .file_name()
@@ -112,12 +130,7 @@ fn restore_in(base: &Path, trashed: &Path) -> io::Result<PathBuf> {
         .to_string_lossy()
         .to_string();
     let info_path = base.join("info").join(format!("{name}.trashinfo"));
-    let body = fs::read_to_string(&info_path)?;
-    let encoded = body
-        .lines()
-        .find_map(|l| l.strip_prefix("Path="))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "trashinfo has no Path"))?;
-    let origin = PathBuf::from(percent_decode(encoded));
+    let origin = read_origin(&info_path)?;
 
     if origin.exists() {
         return Err(io::Error::new(

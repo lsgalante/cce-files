@@ -14,6 +14,9 @@ pub struct DirEntry {
     pub size: u64,
     pub permissions: u32,
     pub modified: String,
+    /// For trash listings only: the path this item restores to, read from its
+    /// .trashinfo by `read_directory_internal`. None everywhere else.
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,9 +213,12 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     let (list_x, list_y, list_w, list_h) = layout.allocate(client_w, list_h_val);
 
     // Update List columns dynamically based on list width
-    let show_size = list_w > 400.0;
-    let show_perm = list_w > 480.0;
-    let show_modified = list_w > 280.0;
+    let in_trash = crate::services::trash::is_trash_files_dir(&state.current_dir);
+    let show_size = !in_trash && list_w > 400.0;
+    let show_perm = !in_trash && list_w > 480.0;
+    let show_modified = !in_trash && list_w > 280.0;
+    // Trash listing: the metadata columns yield to where the item restores to.
+    let origin_col_w = if in_trash { (list_w * 0.55).min(460.0).max(160.0) } else { 0.0 };
 
     let mut cols = vec![
         crate::row_list::ListColumn {
@@ -221,6 +227,13 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
             justification: cce_ui::widget::Justification::Left,
         }
     ];
+    if in_trash {
+        cols.push(crate::row_list::ListColumn {
+            name: "Original Location".to_string(),
+            width: crate::row_list::ColumnWidth::RightOffset(origin_col_w),
+            justification: cce_ui::widget::Justification::Left,
+        });
+    }
     if show_size {
         cols.push(crate::row_list::ListColumn {
             name: "Size".to_string(),
@@ -254,6 +267,22 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
         let perm_str = format_permissions(entry.permissions);
 
         let mut cells = vec![entry.name.clone()];
+        if in_trash {
+            // Front-truncate: the deep end of the path is the informative end,
+            // and the list's own truncation cuts the tail. Undershoot the
+            // list's secondary-cell char estimate so it never re-truncates.
+            let origin = entry.origin.as_deref().unwrap_or("—");
+            let cell_size = (cce_ui::layout::list_font_parsed().1 - 1.0).max(8.0);
+            let budget = (((origin_col_w - 8.0) / (cell_size * 0.65)) as usize).saturating_sub(1).max(4);
+            let n = origin.chars().count();
+            let cell = if n > budget {
+                let tail: String = origin.chars().skip(n - budget.saturating_sub(1)).collect();
+                format!("…{tail}")
+            } else {
+                origin.to_string()
+            };
+            cells.push(cell);
+        }
         if show_size {
             cells.push(size_str);
         }
@@ -465,6 +494,7 @@ mod tests {
                     size: 1024 * i as u64,
                     permissions: 0o644,
                     modified: String::new(),
+                    origin: None,
                 })
                 .collect(),
             ..BrowseState::default()
@@ -498,8 +528,8 @@ mod tests {
     fn apply_filters_hides_dotfiles() {
         let mut state = BrowseState::default();
         state.all_entries = vec![
-            DirEntry { name: ".hidden".into(), path: PathBuf::from("/a/.hidden"), is_dir: false, size: 0, permissions: 0o644, modified: String::new() },
-            DirEntry { name: "visible".into(), path: PathBuf::from("/a/visible"), is_dir: false, size: 0, permissions: 0o644, modified: String::new() },
+            DirEntry { name: ".hidden".into(), path: PathBuf::from("/a/.hidden"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
+            DirEntry { name: "visible".into(), path: PathBuf::from("/a/visible"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
         ];
         state.show_hidden = false;
         apply_filters(&mut state);
@@ -511,8 +541,8 @@ mod tests {
     fn apply_filters_shows_dotfiles_when_enabled() {
         let mut state = BrowseState::default();
         state.all_entries = vec![
-            DirEntry { name: ".hidden".into(), path: PathBuf::from("/a/.hidden"), is_dir: false, size: 0, permissions: 0o644, modified: String::new() },
-            DirEntry { name: "visible".into(), path: PathBuf::from("/a/visible"), is_dir: false, size: 0, permissions: 0o644, modified: String::new() },
+            DirEntry { name: ".hidden".into(), path: PathBuf::from("/a/.hidden"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
+            DirEntry { name: "visible".into(), path: PathBuf::from("/a/visible"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
         ];
         state.show_hidden = true;
         apply_filters(&mut state);
@@ -527,6 +557,7 @@ mod tests {
             size: 0,
             permissions: 0o644,
             modified: String::new(),
+            origin: None,
         }
     }
 
@@ -771,6 +802,7 @@ mod tests {
                     size: 19,
                     permissions: 0o644,
                     modified: String::new(),
+                    origin: None,
                 }
             ],
             entries: vec![
@@ -781,6 +813,7 @@ mod tests {
                     size: 19,
                     permissions: 0o644,
                     modified: String::new(),
+                    origin: None,
                 }
             ],
             selected: Some(0),

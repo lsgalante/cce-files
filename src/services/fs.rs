@@ -150,6 +150,7 @@ impl FsService {
 // ── Internal Helper Functions ───────────────────────────────────────
 
 pub fn read_directory_internal(path: &Path) -> Vec<DirEntry> {
+    let in_trash = super::trash::is_trash_files_dir(path);
     let mut entries: Vec<DirEntry> = match fs::read_dir(path) {
         Ok(rd) => rd
             .filter_map(|e| e.ok())
@@ -169,6 +170,11 @@ pub fn read_directory_internal(path: &Path) -> Vec<DirEntry> {
                         Some(datetime.format("%Y-%m-%d %H:%M").to_string())
                     })
                     .unwrap_or_else(|| "—".to_string());
+                let origin = if in_trash {
+                    super::trash::origin_of(&e.path()).map(|p| p.display().to_string())
+                } else {
+                    None
+                };
                 Some(DirEntry {
                     name,
                     path: e.path(),
@@ -176,6 +182,7 @@ pub fn read_directory_internal(path: &Path) -> Vec<DirEntry> {
                     size,
                     permissions,
                     modified,
+                    origin,
                 })
             })
             .collect(),

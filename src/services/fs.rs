@@ -193,6 +193,15 @@ fn load_image_preview(path: &Path) -> Option<ImagePreviewData> {
     })
 }
 
+/// Vector previews rasterize at the same 512px pane budget via cce-ui's shared
+/// resvg path (fontdb-backed, thread-safe — this runs on the FsService thread)
+/// and hand back the same straight-RGBA ImagePreviewData as raster files.
+fn load_svg_preview(path: &Path) -> Option<ImagePreviewData> {
+    let data = fs::read(path).ok()?;
+    let (pixels, width, height) = cce_ui::rasterize_svg(&data, 512)?;
+    Some(ImagePreviewData { width, height, pixels })
+}
+
 /// Path-traced thumbnail for a cce-designer project directory, cached as a
 /// PNG under `~/.cache/cce/thumbnails/` keyed on the project path and its
 /// `state.json` mtime — the GPU renders only on cache misses. Rendering is
@@ -319,8 +328,12 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
         
         if is_img_ext {
             image_preview = load_image_preview(path);
+        } else if matches!(ext.as_str(), "svg" | "svgz") {
+            // On parse failure this stays None and the text fallback below
+            // shows the SVG source.
+            image_preview = load_svg_preview(path);
         }
-        
+
         if image_preview.is_none() {
             if let Ok(mut file) = fs::File::open(path) {
                 use std::io::Read;

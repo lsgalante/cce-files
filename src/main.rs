@@ -883,6 +883,12 @@ impl Application for FilesystemApp {
         Some(&self.ui_context)
     }
 
+    // The engine ticks the exposed context each loop — this is what drives the
+    // dropdown expand/contract animation frames.
+    fn ui_context_mut(&mut self) -> Option<&mut cce_ui::context::UiContext> {
+        Some(&mut self.ui_context)
+    }
+
     fn is_movable_backplate_at(&self, px: f32, py: f32) -> bool {
         // 1. If dialog is open, do not drag
         if self.open_with_dialog.is_some() {

@@ -1009,7 +1009,9 @@ impl Application for FilesystemApp {
             };
             WindowSettings {
                 title: title.to_string(),
-                app_id: "clear-filesystem-chooser".to_string(),
+                // The cce- prefix matters: the compositor's is_cce_app gate keys
+                // blur and the backplate corner radius off it.
+                app_id: "cce-filesystem-chooser".to_string(),
                 width: 900,
                 height: 500,
                 fullscreen: false,

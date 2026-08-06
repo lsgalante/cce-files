@@ -1195,6 +1195,15 @@ impl Application for FilesystemApp {
     }
 
     fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
+        // Pump the widget tick walk (the cce-data-editor pattern): animating
+        // widgets — the view dropdown's expand/contract menu — register as
+        // tick receivers and report changed until their transition lands;
+        // without this the close animation freezes at fully open.
+        if self.ui_context.tick(dt) {
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+        }
+
         if self.just_initialized {
             self.just_initialized = false;
             if self.save_mode {

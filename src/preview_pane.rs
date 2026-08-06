@@ -213,19 +213,21 @@ impl PreviewPane {
         // pane rect (left = cx - pad cancels SectionContext's inner pad), so
         // the well edge sits at the pane edge like the list across the split —
         // the visible split gap is exactly backplate_gap on both sides.
+        // The well's top edge sits AT the pane top, aligned with the
+        // breadcrumb across the split (finish() draws from top+7, so the
+        // fallback frame gets top-7 to land on the same edge).
         {
-            let mut preview_sec = SectionContext::new(pc, cx - pad, cy + 12.0, cw + 2.0 * pad, "", false, false);
+            let mut preview_sec = SectionContext::new(pc, cx - pad, cy - 7.0, cw + 2.0 * pad, "", false, false);
             preview_sec.content_y = cy + half_h - pad - 12.0;
             if !relief {
                 preview_sec.finish();
             }
         }
         if relief {
-            let fy = cy + 12.0 + 7.0;
-            pc.relief_recessed(cx, fy, cw, (cy + half_h) - fy, radius);
+            pc.relief_recessed(cx, cy, cw, half_h, radius);
         }
-        let rect_y = cy + pad + 31.0;
-        let rect_h = half_h - 2.0 * pad - 43.0;
+        let rect_y = cy + 12.0;
+        let rect_h = half_h - pad - 24.0;
 
         // Content fill spans the FULL well width (like the list's fill spans
         // its rect) — the recess carves over it, so the well reads as one dark
@@ -272,21 +274,20 @@ impl PreviewPane {
         ];
 
         let details_content_start_y = bottom_y + pad + 19.0;
-        let mut details_content_end_y = details_content_start_y + 36.0 + details.len() as f32 * 20.0;
-        if !self.target.is_empty() {
-            details_content_end_y += 24.0;
-        }
 
+        // The well's bottom edge sits AT the pane bottom, aligned with the
+        // list across the split (content-sized before; short panes just show
+        // empty well below the rows).
         {
             let mut details_sec = SectionContext::new(pc, cx - pad, bottom_y, cw + 2.0 * pad, "", false, false);
-            details_sec.content_y = details_content_end_y;
+            details_sec.content_y = cy + ch - pad - 12.0;
             if !relief {
                 details_sec.finish();
             }
         }
         if relief {
             let fy = bottom_y + 7.0;
-            pc.relief_recessed(cx, fy, cw, (details_content_end_y + pad + 12.0) - fy, radius);
+            pc.relief_recessed(cx, fy, cw, (cy + ch) - fy, radius);
         }
 
         let header_y = details_content_start_y + 6.0;

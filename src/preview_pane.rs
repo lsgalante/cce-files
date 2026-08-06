@@ -261,8 +261,10 @@ impl PreviewPane {
             pc.text("No preview available", cx + 12.0, rect_y + 12.0, 11.0, text_dim);
         }
 
-        // 2. Bottom pane: Details Section
-        let bottom_y = cy + half_h + 12.0;
+        // 2. Bottom pane: Details Section. The visible gap between the wells
+        // is exactly backplate_gap — the same separator width as everywhere
+        // else on the plate (it was a hardcoded 12+7=19px before).
+        let details_top = cy + half_h + cce_ui::layout::backplate_gap();
         let icon = if self.is_dir { "📁" } else { "📄" };
 
         let details = [
@@ -273,21 +275,21 @@ impl PreviewPane {
             ("Modified", &self.modified),
         ];
 
-        let details_content_start_y = bottom_y + pad + 19.0;
+        let details_content_start_y = details_top + pad + 12.0;
 
         // The well's bottom edge sits AT the pane bottom, aligned with the
         // list across the split (content-sized before; short panes just show
-        // empty well below the rows).
+        // empty well below the rows). finish() draws from top+7, so the
+        // fallback frame gets top-7 to land on the same edge.
         {
-            let mut details_sec = SectionContext::new(pc, cx - pad, bottom_y, cw + 2.0 * pad, "", false, false);
+            let mut details_sec = SectionContext::new(pc, cx - pad, details_top - 7.0, cw + 2.0 * pad, "", false, false);
             details_sec.content_y = cy + ch - pad - 12.0;
             if !relief {
                 details_sec.finish();
             }
         }
         if relief {
-            let fy = bottom_y + 7.0;
-            pc.relief_recessed(cx, fy, cw, (cy + ch) - fy, radius);
+            pc.relief_recessed(cx, details_top, cw, (cy + ch) - details_top, radius);
         }
 
         let header_y = details_content_start_y + 6.0;

@@ -31,14 +31,19 @@ impl Page {
     }
 }
 
+pub const RELIEF_RECESSED: u8 = 0;
+pub const RELIEF_RAISED: u8 = 1;
+pub const RELIEF_INSET: u8 = 2;
+
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
     pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
     pub buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, crate::Message)>,
     /// Relief steps for the control_relief styling — (x, y, w, h, radius, depth,
-    /// raised). The flat rects own the faces; these are the edges-only boss/recess
-    /// walls emitted over them (the ParametersBg::reliefs idiom for flat-view hosts).
-    pub reliefs: Vec<(f32, f32, f32, f32, f32, f32, bool)>,
+    /// kind: [`RELIEF_RECESSED`]/[`RELIEF_RAISED`]/[`RELIEF_INSET`]). The flat rects
+    /// own the faces; these are the edges-only walls emitted over them (the
+    /// ParametersBg::reliefs idiom for flat-view hosts).
+    pub reliefs: Vec<(f32, f32, f32, f32, f32, f32, u8)>,
     /// GPU-textured quads — (image id from `cce_ui::vk::upload_rgba`, x, y, w, h,
     /// alpha). Drawn after the part's rects, so a fill emitted earlier is the floor
     /// beneath the image and overlay parts still cover it.
@@ -70,7 +75,7 @@ impl PageContent {
     pub fn relief_recessed(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
             let depth = cce_ui::layout::bevel_width().min(h * 0.2);
-            self.reliefs.push((x, y, w, h, radius, depth, false));
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RECESSED));
         }
     }
 
@@ -79,7 +84,17 @@ impl PageContent {
     pub fn relief_raised(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
             let depth = cce_ui::layout::bevel_width().min(h * 0.2);
-            self.reliefs.push((x, y, w, h, radius, depth, true));
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RAISED));
+        }
+    }
+
+    /// A flush inset button plate (groove ring + beveled lip, face level with the
+    /// surface — the Button treatment) over the control at (x, y, w, h) — no-op
+    /// when the DE's control_relief styling is off.
+    pub fn relief_inset(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+        if cce_ui::layout::control_relief() {
+            let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_INSET));
         }
     }
 

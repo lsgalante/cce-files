@@ -115,9 +115,16 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut 
     let dropdown_w = 120.0;
     let breadcrumb_w = cw - 16.0 - dropdown_w - 12.0;
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
-    // The breadcrumb's recessed well lives in its modern paint(); the flat view
-    // this host renders through loses it, so carve it here.
-    pc.relief_recessed(cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, cce_ui::layout::breadcrumb_corner_radius());
+    // The breadcrumb's per-segment button plates live in its modern paint();
+    // the flat view this host renders through loses them, so carve each
+    // segment's flush inset here (the dropdown-mirror idiom).
+    {
+        let r = cce_ui::layout::breadcrumb_corner_radius().min(12.0);
+        let rect = cce_ui::scene::layout::Rect { x: cx + 4.0, y: cy + 6.0, width: breadcrumb_w, height: 24.0 };
+        for (sx, sy, sw, sh) in state.breadcrumb.segment_boxes(rect) {
+            pc.relief_inset(sx, sy, sw, sh, r);
+        }
+    }
     cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + 12.0, cy + 6.0, dropdown_w, 24.0, ctx);
 
     // Check if directory changed, or if last_dir is empty, and repopulate

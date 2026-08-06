@@ -715,7 +715,7 @@ impl FilesystemApp {
                     fx: WidgetFx::Image { id: *id, alpha: *alpha },
                 });
             }
-            for (rx, ry, rw, rh, rr, rd, raised) in &pc_part.reliefs {
+            for (rx, ry, rw, rh, rr, rd, kind) in &pc_part.reliefs {
                 let (mut wy, mut wh) = (*ry, *rh);
                 if is_page_content {
                     match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
@@ -731,7 +731,11 @@ impl FilesystemApp {
                     color: [0.0; 4],
                     radius: *rr,
                     corners: (true, true, true, true),
-                    fx: if *raised { WidgetFx::Boss(*rd) } else { WidgetFx::Recess(*rd) },
+                    fx: match *kind {
+                        pages::RELIEF_RAISED => WidgetFx::Boss(*rd),
+                        pages::RELIEF_INSET => WidgetFx::Inset(*rd),
+                        _ => WidgetFx::Recess(*rd),
+                    },
                 });
             }
             for (btn, action) in &pc_part.buttons {

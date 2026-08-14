@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`cce-files` is a Wayland-native file manager, one app in the larger **CCE** desktop-environment ecosystem (the sibling `cce-*` crates under `../`). It renders directly with wgpu + glyphon on a Wayland surface — there is no GTK/Qt/web layer. All GUI primitives come from the sibling crate **`cce-ui`** (`../cce-ui`, a path dependency), which owns the windowing/event loop, the widget toolkit, layout, fonts, and colors.
+`cce-files` is a Wayland-native file manager, one app in the larger **CCE** desktop-environment ecosystem (the sibling `cce-*` crates under `../`). It renders directly on a Wayland surface with raw Vulkan (via **ash**), with glyphon/cosmic-text for text shaping — there is no GTK/Qt/web layer. All GUI primitives come from the sibling crate **`cce-ui`** (`../cce-ui`, a path dependency), which owns the windowing/event loop, the widget toolkit, layout, fonts, and colors; the rendering itself lives in `cce-ui/src/vk/` (`VkRenderer`), so this crate declares no graphics dependency of its own.
 
 ## Build / run / test
 

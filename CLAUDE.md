@@ -41,10 +41,20 @@ Shared, page-independent formatting helpers (`format_size`, `format_permissions`
 ### Widget hierarchy uses raw pointers
 `BrowseContainer` and `NetworkContainer` are composite widgets whose children (`breadcrumb`, `list_box`, `save_name_box`, `graph`) are held as `*mut dyn Element` and wired up in `set_parent` via `ctx.register_widget` / `ctx.link_ids`. This mirrors the cce-ui widget model; the containers are `unsafe impl Send/Sync`. When adding a child widget to a container, replicate the register + link + `set_parent` sequence, and clear it in `rebuild_layout`'s teardown block.
 
-### Two pages, one preview
+### Three pages, one preview
 - **Browse** — the `List` widget (columnar, integrated search box) plus a `Breadcrumb`. The right pane is a `Preview` widget, split from the list by a `SplitBox`.
 - **Network** — a `Graph` view of the same directory (nodes = entries), also split against the preview.
-The active page is picked by `view_dropdown` next to the breadcrumb (there is no sidebar — it was removed; `has_sidebar` is hardcoded `false`).
+- **Space** — a GrandPerspective-style treemap of the whole subtree, also split against the preview.
+The active page is picked by `view_dropdown` next to the breadcrumb (there is no sidebar — it was removed; `has_sidebar` is hardcoded `false`). The dropdown's labels name the *visualization* ("List"/"Graph"/"Space") and are a separate list from `Page::label()` ("Browse"/"Network"/"Space") — but **its order must track `Page::ALL`**, because the selected index is indexed straight into it.
+
+### The Space treemap
+Unlike the other two pages, Space needs data no other page has: the recursive size of everything below the current directory. `services/scan.rs` walks it on the FsService's blocking pool (`FsRequest::ScanTree`), never following symlinks and never crossing a device boundary — the latter is what keeps a scan of `/` out of `/proc`, `/sys`, and mounted drives. Progress is reported every 150 ms; the finished tree arrives as `SpaceMessage::Scanned`.
+
+`pages/space.rs` then lays that tree out with a **squarified** treemap (Bruls/Huizing/van Wijk), which keeps tiles near-square so areas stay visually comparable — a naive slice-and-dice degenerates into unreadable slivers. Layout is recursive, with a directory's children nested inside its rect, and is cached against the pane rect (`laid_out`) so it only recomputes on a resize or a new tree. Tiles under `MIN_TILE` px are dropped rather than emitted as sub-pixel slivers; that culling, not `MAX_TILES`, is what actually bounds tile count. Files are colored by extension `Category`; directories paint only a frame.
+
+Two things to know when touching it:
+- Tiles are flattened **parents-before-children**, so the hit-test is `rposition` (last match = deepest tile).
+- Selection is held as a `PathBuf`, not an index, because a relayout renumbers every tile. Same reason `last_space_path` (not a row index) drives Space's double-click detection.
 
 ## Domain specifics
 

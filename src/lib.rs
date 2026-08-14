@@ -11,6 +11,7 @@ pub enum Message {
     SwitchPage(Page),
     Browse(pages::browse::BrowseMessage),
     Preview(pages::preview::PreviewMessage),
+    Space(pages::space::SpaceMessage),
     SelectOpen,
     SelectCancel,
     PromptOpenWith(std::path::PathBuf),

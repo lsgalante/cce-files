@@ -40,6 +40,10 @@ pub enum FsRequest {
     /// Restore a trashed item (a path under Trash/files) to its origin.
     RestorePath(PathBuf),
     EmptyTrash,
+    /// Walk a whole subtree for the Space view. The flag is the caller's
+    /// cancel token — raising it abandons a scan whose answer is no longer
+    /// wanted (see `SpaceState::begin_scan`).
+    ScanTree(PathBuf, std::sync::Arc<std::sync::atomic::AtomicBool>),
     ReadLastDir,
     SaveLastDir(PathBuf),
 }
@@ -117,6 +121,47 @@ impl FsService {
                             let _ = app_sender.send(crate::Message::Browse(
                                 crate::pages::browse::BrowseMessage::TrashEmptied(result),
                             ));
+                        });
+                    }
+                    FsRequest::ScanTree(path, cancel) => {
+                        // Minutes of blocking recursion on a large tree, so
+                        // this goes to the blocking pool rather than tying up
+                        // an async worker the way the short reads above can.
+                        tokio::task::spawn_blocking(move || {
+                            let progress_sender = app_sender.clone();
+                            let progress_dir = path.clone();
+                            let mut on_progress = |files, bytes| {
+                                let _ = progress_sender.send(crate::Message::Space(
+                                    crate::pages::space::SpaceMessage::Progress {
+                                        dir: progress_dir.clone(),
+                                        files,
+                                        bytes,
+                                    },
+                                ));
+                            };
+                            let result = super::scan::scan(&path, &cancel, &mut on_progress);
+                            match result {
+                                Some(res) if !res.cancelled => {
+                                    let _ = app_sender.send(crate::Message::Space(
+                                        crate::pages::space::SpaceMessage::Scanned {
+                                            dir: path,
+                                            tree: res.tree,
+                                        },
+                                    ));
+                                }
+                                // A cancelled scan's tree is partial. Drop it
+                                // silently — the scan that superseded it is
+                                // already on its way with the real one.
+                                Some(_) => {}
+                                None => {
+                                    let _ = app_sender.send(crate::Message::Space(
+                                        crate::pages::space::SpaceMessage::Failed(format!(
+                                            "Cannot scan {}",
+                                            path.display()
+                                        )),
+                                    ));
+                                }
+                            }
                         });
                     }
                     FsRequest::ReadLastDir => {

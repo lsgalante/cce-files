@@ -298,6 +298,7 @@ struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
     network: pages::network::NetworkState,
+    space: pages::space::SpaceState,
     preview: cce_files::preview_pane::PreviewPane,
 
     // Command-line chooser options
@@ -329,6 +330,11 @@ struct FilesystemApp {
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::Adapted<cce_ui::widget::TextBox>)>,
     browse_split: SplitPane,
     network_split: SplitPane,
+    space_split: SplitPane,
+    // Space's double-click is tracked by path, not row index: its tiles are
+    // renumbered by every relayout, so an index would not survive a resize.
+    last_space_click_time: std::time::Instant,
+    last_space_path: Option<std::path::PathBuf>,
     last_click_time: std::time::Instant,
     last_clicked_idx: Option<usize>,
     keys: BrowseKeys,
@@ -338,6 +344,21 @@ struct FilesystemApp {
 // ── Layout Rebuild ──────────────────────────────────────────────────
 
 impl FilesystemApp {
+    /// Kick off a subtree scan if the Space page is showing a directory it has
+    /// not scanned. Cheap to call — it no-ops off the Space page, and while a
+    /// scan for the same directory is already running.
+    fn ensure_space_scan(&mut self) {
+        if self.current_page != Page::Space {
+            return;
+        }
+        let dir = self.browse.current_dir.clone();
+        if !self.space.needs_scan(&dir) {
+            return;
+        }
+        let cancel = self.space.begin_scan(&dir);
+        self.fs_service.send(services::fs::FsRequest::ScanTree(dir, cancel));
+    }
+
     fn start_watching(&mut self, path: std::path::PathBuf) {
         use tokio::sync::mpsc;
         use std::time::Duration;
@@ -408,6 +429,7 @@ impl FilesystemApp {
         self.browse.breadcrumb.clear_children(&mut self.ui_context); self.browse.breadcrumb.set_parent(None, &mut self.ui_context);
         self.network.breadcrumb.clear_children(&mut self.ui_context); self.network.breadcrumb.set_parent(None, &mut self.ui_context);
         self.network.graph.clear_children(&mut self.ui_context); self.network.graph.set_parent(None, &mut self.ui_context);
+        self.space.breadcrumb.clear_children(&mut self.ui_context); self.space.breadcrumb.set_parent(None, &mut self.ui_context);
         if let Some((_, textbox)) = &mut self.open_with_dialog {
             textbox.clear_children(&mut self.ui_context);
             textbox.set_parent(None, &mut self.ui_context);
@@ -447,6 +469,7 @@ impl FilesystemApp {
         match self.current_page {
             Page::Browse => self.browse_split.set_rect(browse_x, content_y, usable_w, content_h),
             Page::Network => self.network_split.set_rect(browse_x, content_y, usable_w, content_h),
+            Page::Space => self.space_split.set_rect(browse_x, content_y, usable_w, content_h),
         }
 
         if let Some((_, textbox)) = &mut self.open_with_dialog {
@@ -481,6 +504,7 @@ impl FilesystemApp {
                     let split = match self.current_page {
                         Page::Browse => &self.browse_split,
                         Page::Network => &self.network_split,
+                        Page::Space => &self.space_split,
                     };
                     let (dx, dy, dw, dh, dc) = split.divider_quad();
                     plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
@@ -540,6 +564,16 @@ impl FilesystemApp {
                 pc.buttons.extend(network_pc.buttons);
                 pc.reliefs.extend(network_pc.reliefs);
                 pc.images.extend(network_pc.images);
+            }
+            Page::Space => {
+                let (sx, sy, sw, sh) = self.space_split.left_rect();
+                let space_pc = pages::space::view(&mut self.space, &self.browse, &mut self.view_dropdown, sx, sy, sw, sh, &mut self.ui_context);
+
+                pc.rects.extend(space_pc.rects);
+                pc.texts.extend(space_pc.texts);
+                pc.buttons.extend(space_pc.buttons);
+                pc.reliefs.extend(space_pc.reliefs);
+                pc.images.extend(space_pc.images);
             }
         }
 
@@ -927,6 +961,17 @@ impl Application for FilesystemApp {
             if self.network_split.dragging || self.network_split.hovered {
                 return false;
             }
+        } else if self.current_page == Page::Space {
+            if self.space_split.dragging || self.space_split.hovered {
+                return false;
+            }
+            // Same reasoning as the List above: without this veto every press
+            // on a tile starts a compositor window move and the app never sees
+            // the click.
+            let (mx, my, mw, mh) = self.space.map_rect;
+            if px >= mx && px <= mx + mw && py >= my && py <= my + mh {
+                return false;
+            }
         }
         // 5. Root Backplate dissolved: the surface itself is the movable plate; drag
         // anywhere a drag-blocking widget isn't.
@@ -947,8 +992,11 @@ impl Application for FilesystemApp {
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
         let paginator = cce_ui::widget::Paginator::new(pages_names);
+        // These name the visualization rather than the page, so they are not
+        // Page::label(). Order MUST track Page::ALL — the selected index is
+        // indexed straight into it when the dropdown changes.
         let view_dropdown = cce_ui::widget::Dropdown::new(
-            vec!["List".to_string(), "Graph".to_string()],
+            vec!["List".to_string(), "Graph".to_string(), "Space".to_string()],
             0,
         ).with_font_family(&cce_ui::layout::list_font_parsed().0);
 
@@ -959,6 +1007,7 @@ impl Application for FilesystemApp {
             current_page: Page::Browse,
             browse,
             network: pages::network::NetworkState::default(),
+            space: pages::space::SpaceState::default(),
             preview: Default::default(),
             select_mode,
             select_directory,
@@ -992,6 +1041,9 @@ impl Application for FilesystemApp {
             open_with_dialog: None,
             browse_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
             network_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
+            space_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
+            last_space_click_time: std::time::Instant::now(),
+            last_space_path: None,
             last_click_time: std::time::Instant::now(),
             last_clicked_idx: None,
             keys: BrowseKeys::load(),
@@ -1046,6 +1098,9 @@ impl Application for FilesystemApp {
                 let page_idx = Page::ALL.iter().position(|&p| p == page).unwrap_or(0);
                 self.paginator.set_selected_page(page_idx);
                 self.view_dropdown.selected = page_idx;
+                // Switching to Space is what triggers the first scan — it is
+                // far too expensive to run for a page nobody is looking at.
+                self.ensure_space_scan();
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1075,6 +1130,8 @@ impl Application for FilesystemApp {
 
                 if let Some(path) = is_directory_loaded {
                     self.start_watching(path);
+                    // Navigating re-scans the new subtree when Space is up.
+                    self.ensure_space_scan();
                 }
 
                 // If NavigateTo or SelectEntry happened, update Preview path
@@ -1112,6 +1169,11 @@ impl Application for FilesystemApp {
             }
             Message::Preview(msg) => {
                 pages::preview::update(&mut self.preview, msg);
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            Message::Space(msg) => {
+                pages::space::update(&mut self.space, msg);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1407,6 +1469,10 @@ impl Application for FilesystemApp {
             if self.network_split.cursor_moved(pos.x, pos.y) {
                 changed = true;
             }
+        } else if self.current_page == Page::Space {
+            if self.space_split.cursor_moved(pos.x, pos.y) {
+                changed = true;
+            }
         }
 
         if !self.select_mode {
@@ -1464,6 +1530,21 @@ impl Application for FilesystemApp {
                 if self.ui_context.is_dragging {
                     changed = true;
                 }
+            }
+        } else if self.current_page == Page::Space {
+            {
+                let root = self.space.breadcrumb.id();
+                if self.ui_context.propagate_event(&mv, root) {
+                    changed = true;
+                }
+            }
+            // Tile hover drives both the highlight outline and the footer
+            // readout, so only a change of tile is worth a rebuild — a move
+            // within one tile repaints nothing.
+            let hovered = self.space.tile_at(pos.x, pos.y);
+            if hovered != self.space.hovered {
+                self.space.hovered = hovered;
+                changed = true;
             }
         }
 
@@ -1587,8 +1668,11 @@ impl Application for FilesystemApp {
         }
 
         if button == MouseButton::Right && state == ElementState::Pressed {
-            let is_browse = self.current_page == Page::Browse;
-            let breadcrumb = if is_browse { &mut self.browse.breadcrumb } else { &mut self.network.breadcrumb };
+            let breadcrumb = match self.current_page {
+                Page::Browse => &mut self.browse.breadcrumb,
+                Page::Network => &mut self.network.breadcrumb,
+                Page::Space => &mut self.space.breadcrumb,
+            };
             if breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
                 let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
                 let root = breadcrumb.id();
@@ -1693,7 +1777,13 @@ impl Application for FilesystemApp {
             *needs_rebuild = true;
             self.needs_rebuild = true;
             if self.view_dropdown.take_change() {
-                let new_page = if self.view_dropdown.selected == 0 { Page::Browse } else { Page::Network };
+                // Indexed off Page::ALL rather than hand-mapped: the old
+                // `== 0 { Browse } else { Network }` silently sent every
+                // entry past the first to Network.
+                let new_page = Page::ALL
+                    .get(self.view_dropdown.selected)
+                    .copied()
+                    .unwrap_or(Page::Browse);
                 return Some(Message::SwitchPage(new_page));
             }
             return None;
@@ -1706,6 +1796,7 @@ impl Application for FilesystemApp {
             let split = match self.current_page {
                 Page::Browse => &mut self.browse_split,
                 Page::Network => &mut self.network_split,
+                Page::Space => &mut self.space_split,
             };
             if state == ElementState::Pressed {
                 if split.press(pos.x, pos.y) {
@@ -1858,6 +1949,47 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
+        } else if self.current_page == Page::Space {
+            if button == MouseButton::Left && state == ElementState::Pressed {
+                if self.space.breadcrumb.hit_test(pos.x, pos.y, &self.ui_context) {
+                    if { let root = self.space.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
+                        if let Some(seg) = self.space.breadcrumb.path_click() {
+                            let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
+                            changed = true;
+                        }
+                    }
+                } else if let Some(idx) = self.space.tile_at(pos.x, pos.y) {
+                    let tile_path = self.space.tiles[idx].path.clone();
+                    let is_dir = self.space.tiles[idx].is_dir;
+
+                    // Same temporal double-click as the Browse list — the
+                    // toolkit does not deliver a double-click event.
+                    let now = std::time::Instant::now();
+                    let is_double = self.last_space_path.as_ref() == Some(&tile_path)
+                        && now.duration_since(self.last_space_click_time).as_millis() < 500;
+                    self.last_space_click_time = now;
+                    self.last_space_path = Some(tile_path.clone());
+
+                    if is_double {
+                        if is_dir {
+                            // Navigating re-roots the map: ReadDirectory moves
+                            // current_dir, and ensure_space_scan rescans it.
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(tile_path));
+                        } else {
+                            services::fs::open_file(&tile_path);
+                        }
+                    } else {
+                        self.space.selected_path = Some(tile_path.clone());
+                        self.fs_service.send(services::fs::FsRequest::ReadPreview(tile_path));
+                    }
+                    changed = true;
+                }
+            }
+            if changed {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
         }
 
         if state == ElementState::Pressed {
@@ -1891,7 +2023,8 @@ impl Application for FilesystemApp {
     }
 
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
-        if self.current_page == Page::Browse || self.current_page == Page::Network {
+        // Every page shares the preview pane on the right.
+        if matches!(self.current_page, Page::Browse | Page::Network | Page::Space) {
             // The pane hit-tests its own laid-out rect and consumes any wheel
             // over its content region, scrolled or not.
             if let Some(changed) = self.preview.wheel(delta, pos.x as f32, pos.y as f32) {

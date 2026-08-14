@@ -1,5 +1,5 @@
 use wayland_client::QueueHandle;
-use glyphon::FontSystem;
+use cce_ui::cosmic_text::FontSystem;
 
 use cce_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
 use cce_ui::widget::{MouseButton, ElementState, MouseScrollDelta, KeyEvent, WidgetHost, PageSelector, Paginator, MenuController};

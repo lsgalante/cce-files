@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 cce-ui = { path = "../cce-ui" }
 wayland-client = { version = "0.31", features = ["system"] }
-glyphon = "0.8"
 calloop = "0.13.0"
 chrono = "0.4.44"
 tokio = { version = "1", features = ["full"] }

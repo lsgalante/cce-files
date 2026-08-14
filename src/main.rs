@@ -136,6 +136,11 @@ enum WidgetFx {
     /// A GPU-textured quad; the id comes from `cce_ui::vk::upload_rgba`
     /// (the preview pane's image). `color` is unused.
     Image { id: u32, alpha: f32 },
+    /// A line engraved from (ax, ay) to (bx, by) into the widget's rect, which
+    /// is the HOST surface here rather than the mark's own bounds — the shading
+    /// fades out across the host's rolled edge. The breadcrumb's slanted seams;
+    /// the only quad in this list that is not axis-aligned.
+    Groove { ax: f32, ay: f32, bx: f32, by: f32, width: f32, depth: f32 },
 }
 
 struct AppWidget {
@@ -523,13 +528,12 @@ impl FilesystemApp {
                 // The dissolved root plate that used to sit between them is now a
                 // Prim::Plate emitted FIRST in display_list — the lit window slab the
                 // rest of the frame sits on (and the surface the band carves CSG into).
-                let (plain, rounded): (Vec<_>, Vec<_>) = plain_pc.rects.into_iter().partition(|r| r.5 <= 0.1);
+                let mut plain_pc = plain_pc;
+                let (plain, rounded): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut plain_pc.rects).into_iter().partition(|r| r.5 <= 0.1);
                 window_pc.rects.extend(plain);
                 window_pc.rects.extend(rounded);
-                window_pc.texts.extend(plain_pc.texts);
-                window_pc.buttons.extend(plain_pc.buttons);
-                window_pc.reliefs.extend(plain_pc.reliefs);
-                window_pc.images.extend(plain_pc.images);
+                window_pc.absorb(plain_pc);
 
                 // The view dropdown's flush inset plate (control_relief) lives
                 // in its modern paint(); the flat view loses it — restore it as
@@ -549,31 +553,19 @@ impl FilesystemApp {
                 let (bx, by, bw, bh) = self.browse_split.left_rect();
                 let browse_pc = pages::browse::view(&mut self.browse, &mut self.view_dropdown, bx, by, bw, bh, self.select_mode, &mut self.ui_context);
 
-                pc.rects.extend(browse_pc.rects);
-                pc.texts.extend(browse_pc.texts);
-                pc.buttons.extend(browse_pc.buttons);
-                pc.reliefs.extend(browse_pc.reliefs);
-                pc.images.extend(browse_pc.images);
+                pc.absorb(browse_pc);
             }
             Page::Network => {
                 let (nx, ny, nw, nh) = self.network_split.left_rect();
                 let network_pc = pages::network::view(&mut self.network, &self.browse, &mut self.view_dropdown, nx, ny, nw, nh, &mut self.ui_context);
 
-                pc.rects.extend(network_pc.rects);
-                pc.texts.extend(network_pc.texts);
-                pc.buttons.extend(network_pc.buttons);
-                pc.reliefs.extend(network_pc.reliefs);
-                pc.images.extend(network_pc.images);
+                pc.absorb(network_pc);
             }
             Page::Space => {
                 let (sx, sy, sw, sh) = self.space_split.left_rect();
                 let space_pc = pages::space::view(&mut self.space, &self.browse, &mut self.view_dropdown, sx, sy, sw, sh, &mut self.ui_context);
 
-                pc.rects.extend(space_pc.rects);
-                pc.texts.extend(space_pc.texts);
-                pc.buttons.extend(space_pc.buttons);
-                pc.reliefs.extend(space_pc.reliefs);
-                pc.images.extend(space_pc.images);
+                pc.absorb(space_pc);
             }
         }
 
@@ -770,6 +762,27 @@ impl FilesystemApp {
                         pages::RELIEF_INSET => WidgetFx::Inset(*rd),
                         _ => WidgetFx::Recess(*rd),
                     },
+                });
+            }
+            for (ax, ay, bx, by, gw, gd, hx, hy, hw, hh) in &pc_part.grooves {
+                // Clipped by the HOST rect, not the seam's own span: a groove
+                // whose host is scrolled out has nothing left to engrave.
+                let (mut wy, mut wh) = (*hy, *hh);
+                if is_page_content {
+                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
+                        Some((cy, ch)) => { wy = cy; wh = ch; }
+                        None => continue,
+                    }
+                }
+                widgets.push(AppWidget {
+                    x: *hx,
+                    y: wy,
+                    w: *hw,
+                    h: wh,
+                    color: [0.0; 4],
+                    radius: 0.0,
+                    corners: (true, true, true, true),
+                    fx: WidgetFx::Groove { ax: *ax, ay: *ay, bx: *bx, by: *by, width: *gw, depth: *gd },
                 });
             }
             for (btn, action) in &pc_part.buttons {
@@ -1349,6 +1362,9 @@ impl Application for FilesystemApp {
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
                 WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, w.color, depth),
                 WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
+                WidgetFx::Groove { ax, ay, bx, by, width, depth } => {
+                    pc.groove((ax, ay), (bx, by), width, depth, rect)
+                }
                 WidgetFx::Flat => {
                     if w.radius > 0.1 {
                         pc.rounded_rect(rect, w.radius, w.corners, w.color);

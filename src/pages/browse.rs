@@ -198,17 +198,13 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     let breadcrumb_w = client_w - dropdown_w - gap;
     let (bx, by, bw, bh) = layout.allocate(breadcrumb_w, breadcrumb_h);
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
-    // The breadcrumb's well + per-segment button plates live in its modern
-    // paint(); the flat view this host renders through loses them, so carve
-    // here: the full-width recessed well, then each segment's raised button
-    // within it (the dropdown-mirror pairing).
+    // The breadcrumb's well + segment plate live in its modern paint(); the flat
+    // view this host renders through loses them, so carve here: the full-width
+    // recessed well, then the run's raised plate within it (the dropdown-mirror
+    // pairing), divided by the slanted seams.
     {
-        let r = cce_ui::layout::breadcrumb_corner_radius();
-        pc.relief_recessed(bx, by, bw, bh, r);
         let rect = cce_ui::scene::layout::Rect { x: bx, y: by, width: bw, height: bh };
-        for (sx, sy, sw, sh) in state.breadcrumb.segment_boxes(rect) {
-            pc.relief_raised(sx, sy, sw, sh, r.min(sh * 0.5));
-        }
+        crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
     }
     cce_ui::layout::render_widget(&mut pc, view_dropdown, bx + bw + gap, by, dropdown_w, breadcrumb_h, ctx);
 

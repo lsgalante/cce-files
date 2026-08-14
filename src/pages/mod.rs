@@ -36,6 +36,28 @@ impl Page {
     }
 }
 
+/// Mirror the breadcrumb's relief into a flat-path [`PageContent`]: the
+/// full-width recessed well, the ONE raised plate the segment run shares, and a
+/// slanted seam engraved at each boundary between two segments.
+///
+/// `render_widget` drops the relief prims `Breadcrumb::paint` emits, so every
+/// page that shows a breadcrumb has to carve it app-side — this is that carve,
+/// in one place, since all three pages want it identically.
+pub fn breadcrumb_relief(
+    pc: &mut PageContent,
+    breadcrumb: &cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
+    rect: cce_ui::scene::layout::Rect,
+) {
+    let r = cce_ui::layout::breadcrumb_corner_radius();
+    pc.relief_recessed(rect.x, rect.y, rect.width, rect.height, r);
+    let Some(run) = breadcrumb.run_box(rect) else { return };
+    let (rx, ry, rw, rh) = run;
+    pc.relief_raised(rx, ry, rw, rh, r.min(rh * 0.5));
+    for (a, b) in breadcrumb.seams(rect) {
+        pc.groove(a, b, cce_ui::widget::Breadcrumb::SEAM_WIDTH, run);
+    }
+}
+
 pub const RELIEF_RECESSED: u8 = 0;
 pub const RELIEF_RAISED: u8 = 1;
 pub const RELIEF_INSET: u8 = 2;
@@ -49,6 +71,13 @@ pub struct PageContent {
     /// own the faces; these are the edges-only walls emitted over them (the
     /// ParametersBg::reliefs idiom for flat-view hosts).
     pub reliefs: Vec<(f32, f32, f32, f32, f32, f32, u8)>,
+    /// Engraved lines over the flat rects — (ax, ay, bx, by, width, depth) plus
+    /// the (x, y, w, h) of the surface being engraved, which the shading fades
+    /// out against. Unlike [`reliefs`] these are not axis-aligned: this is the
+    /// breadcrumb's slanted segment seams.
+    ///
+    /// [`reliefs`]: PageContent::reliefs
+    pub grooves: Vec<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>,
     /// GPU-textured quads — (image id from `cce_ui::vk::upload_rgba`, x, y, w, h,
     /// alpha). Drawn after the part's rects, so a fill emitted earlier is the floor
     /// beneath the image and overlay parts still cover it.
@@ -62,8 +91,26 @@ impl PageContent {
             texts: Vec::new(),
             buttons: Vec::new(),
             reliefs: Vec::new(),
+            grooves: Vec::new(),
             images: Vec::new(),
         }
+    }
+
+    /// Move every part of `other` into this content.
+    ///
+    /// Field-complete by construction: this replaces four hand-listed runs of
+    /// `self.x.extend(other.x)` in `rebuild_layout`, which silently dropped any
+    /// vec nobody remembered to add a line for — `grooves` was invisible for
+    /// exactly that reason. The destructuring below turns a new field into a
+    /// compile error instead of a missing mark on screen.
+    pub fn absorb(&mut self, other: PageContent) {
+        let PageContent { rects, texts, buttons, reliefs, grooves, images } = other;
+        self.rects.extend(rects);
+        self.texts.extend(texts);
+        self.buttons.extend(buttons);
+        self.reliefs.extend(reliefs);
+        self.grooves.extend(grooves);
+        self.images.extend(images);
     }
 
     /// A GPU-textured quad (id from `cce_ui::vk::upload_rgba`).
@@ -90,6 +137,15 @@ impl PageContent {
         if cce_ui::layout::control_relief() {
             let depth = cce_ui::layout::bevel_width().min(h * 0.2);
             self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RAISED));
+        }
+    }
+
+    /// A line engraved from `a` to `b` into the surface `host` — no-op when the
+    /// DE's control_relief styling is off.
+    pub fn groove(&mut self, a: (f32, f32), b: (f32, f32), width: f32, host: (f32, f32, f32, f32)) {
+        if cce_ui::layout::control_relief() {
+            let depth = cce_ui::layout::bevel_width().min(host.3 * 0.2);
+            self.grooves.push((a.0, a.1, b.0, b.1, width, depth, host.0, host.1, host.2, host.3));
         }
     }
 

@@ -58,6 +58,42 @@ pub fn breadcrumb_relief(
     }
 }
 
+/// Mirror the view dropdown's flush inset plate into a flat-path
+/// [`PageContent`]: the groove ring sunk around the control, and the control's
+/// own edge rolling back up out of it — face level with the window plate, so
+/// the seam is the only thing saying it is a separate part.
+///
+/// `Dropdown::paint` emits this as one `ctx.inset_plate`; `render_widget` keeps
+/// only quads and text, so the carve is app-side — the same story as
+/// [`breadcrumb_relief`], which is the well-and-plate this pairs with.
+///
+/// **Carve it into `window_pc`, AFTER the page's `view()` has run.** Two
+/// constraints pin it there, and they pull in opposite directions:
+///
+/// - *After the pages* — because the pages are what lay the dropdown out. Read
+///   `view_dropdown.rect()` before they run and you get the rect they assigned
+///   on the PREVIOUS frame, so the ring trails the control by a frame through a
+///   resize (and on the very first frame it carves a 0×0 rect).
+/// - *Into `window_pc`, not the page's own `pc`* — because these are overlay
+///   carves, shaded against whatever is already beneath them. Emitting them
+///   page-side puts them after the dropdown's own background quad instead of
+///   before it, which visibly thins the lit top rim. Same rect, different
+///   material. (Verified by pixel-diffing the two orders; `CCE_PLATE_DEBUG=1`
+///   shows both as overlay fallback, so this is compositing order, not
+///   plate grouping.)
+pub fn dropdown_relief(pc: &mut PageContent, rect: cce_ui::scene::layout::Rect) {
+    let r = cce_ui::layout::dropdown_corner_radius();
+    let g = cce_ui::layout::bevel_width().min(rect.height * 0.2) * 0.5;
+    pc.relief_recessed(
+        rect.x - g,
+        rect.y - g,
+        rect.width + 2.0 * g,
+        rect.height + 2.0 * g,
+        r + g,
+    );
+    pc.relief_raised(rect.x, rect.y, rect.width, rect.height, r);
+}
+
 pub const RELIEF_RECESSED: u8 = 0;
 pub const RELIEF_RAISED: u8 = 1;
 pub const RELIEF_INSET: u8 = 2;

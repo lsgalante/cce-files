@@ -535,14 +535,9 @@ impl FilesystemApp {
                 window_pc.rects.extend(rounded);
                 window_pc.absorb(plain_pc);
 
-                // The view dropdown's flush inset plate (control_relief) lives
-                // in its modern paint(); the flat view loses it — restore it as
-                // the groove ring + edges-only lip pair.
-                let (dx, dy, dw, dh) = (*self_ptr).view_dropdown.rect();
-                let dr = cce_ui::layout::dropdown_corner_radius();
-                let g = cce_ui::layout::bevel_width().min(dh * 0.2) * 0.5;
-                window_pc.relief_recessed(dx - g, dy - g, dw + 2.0 * g, dh + 2.0 * g, dr + g);
-                window_pc.relief_raised(dx, dy, dw, dh, dr);
+                // The view dropdown's flush inset plate is carved below, once
+                // the pages have laid the dropdown out — carving it here would
+                // read the previous frame's rect (`pages::dropdown_relief`).
             }
         }
 
@@ -567,6 +562,18 @@ impl FilesystemApp {
 
                 pc.absorb(space_pc);
             }
+        }
+
+        // The view dropdown's flush inset plate (control_relief) lives in its
+        // modern paint(); the flat view loses it, so carve it here — from the
+        // rect the page above just laid the dropdown out at, NOT the one it
+        // held when this method started.
+        {
+            let (dx, dy, dw, dh) = self.view_dropdown.rect();
+            pages::dropdown_relief(
+                &mut window_pc,
+                cce_ui::scene::layout::Rect { x: dx, y: dy, width: dw, height: dh },
+            );
         }
 
         // Draw bottom selection bar if select_mode is enabled. It lives below the

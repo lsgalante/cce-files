@@ -188,6 +188,10 @@ impl PreviewPane {
     }
 
     fn emit(&self, pc: &mut PageContent) {
+        // For `rect_with_radius_corners` on the well fill — the inherent
+        // `rect`/`text` methods still win over the trait's by the usual
+        // inherent-first rule, so the calls below are unaffected.
+        use cce_ui::layout::RenderTarget;
         let (cx, cy, cw, ch) = self.rect;
 
         let text_fg = cce_ui::color::TEXT_FG;
@@ -229,11 +233,16 @@ impl PreviewPane {
         let rect_y = cy + 12.0;
         let rect_h = half_h - pad - 24.0;
 
-        // Content fill spans the FULL well width (like the list's fill spans
-        // its rect) — the recess carves over it, so the well reads as one dark
-        // surface flush with the pane edge across the split.
+        // Content fill spans the FULL well RECT, rounded to the well's radius —
+        // `RowList::push_prims` verbatim, so the two read as the same material
+        // across the split. It used to be a square-cornered rect inset to the
+        // content box (cy + 12, half_h - pad - 24), which left the well floor
+        // showing plate colour in a shelf ~7px deep at the top and ~12px at the
+        // bottom while the list's fill ran edge to edge into its rim. The
+        // content box below is unchanged: text and images already start at
+        // rect_y, so widening the fill moves nothing but the shelf.
         let bg_color = cce_ui::color::list_bg_color();
-        pc.rect(bg_color, cx, rect_y, cw, rect_h);
+        pc.rect_with_radius_corners(bg_color, cx, cy, cw, half_h, radius, (true, true, true, true));
 
         if let Some((id, img_w, img_h)) = self.image_tex {
             let fitted = fit_rect(

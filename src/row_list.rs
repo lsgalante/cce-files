@@ -8,6 +8,16 @@
 //! One deliberate paint fix: `render_widget(List)` emitted the plain quads (scrollbar,
 //! row overlays) BEFORE the rounded background, washing them under the translucent bg —
 //! the same sandwich the settings lists had (Phase 6v). `push_prims` draws bg first.
+//!
+//! **That fix holds only because these prims go into the PAGE's `PageContent`.**
+//! `rebuild_layout` partitions `plain_pc`'s rects by radius and appends all the plain
+//! ones before all the rounded ones, so anything routed through there is re-sorted
+//! rather than drawn in call order. The bg here is rounded (`list_corner_radius`
+//! defaults to 4.0) while the scrollbar and row overlays are radius-0, so moving this
+//! emission to `plain_pc`/`window_pc` — as `PreviewPane::push_prims` does, which makes
+//! it look like the natural thing to do — would sort the bg back after them and
+//! reinstate the exact Phase 6v sandwich this note describes. It would also be silent:
+//! the bg is translucent, so the overlays wash out rather than disappear.
 
 use cce_ui::widget::{Justification, MouseScrollDelta};
 

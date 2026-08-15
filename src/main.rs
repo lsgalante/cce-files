@@ -256,17 +256,32 @@ impl SplitPane {
         std::mem::take(&mut self.dragging)
     }
 
-    /// The divider quad (`SplitBox::extra_quads`): accent while dragging, tint on hover,
-    /// hairline otherwise.
-    fn divider_quad(&self) -> (f32, f32, f32, f32, [f32; 4]) {
+    /// The divider's mark (`SplitBox::extra_quads`): accent while dragging, tint
+    /// on hover, and NOTHING at rest.
+    ///
+    /// At rest the gap is left as bare window plate, which is what the panes
+    /// either side already establish — a strip of surface between two plates,
+    /// with no line drawn down it. The 1px hairline that used to sit here was
+    /// the last painted separator in a UI that is otherwise all lit geometry,
+    /// and against 4 logical px of clearance it read as a mark on a plain
+    /// rather than as a seam.
+    ///
+    /// Note what this deliberately does NOT do: it does not make the divider
+    /// look like the preview|details seam. That seam's floor measures ~79
+    /// against this plate's 96 — it is genuinely RECESSED — and removing marks
+    /// cannot recess a flush gap. Matching it would take a carve. (For the
+    /// opposite mistake, see the reverted `Prim::Ridge` bead in this file's
+    /// history: a crest where that seam has a trough.)
+    fn divider_quad(&self) -> Option<(f32, f32, f32, f32, [f32; 4])> {
         let (sx, sy, sw, sh) = self.divider_rect();
-        if self.dragging {
-            (sx + sw / 2.0 - 1.0, sy, 2.0, sh, [0.36, 0.56, 0.38, 0.8])
+        let color = if self.dragging {
+            [0.36, 0.56, 0.38, 0.8]
         } else if self.hovered {
-            (sx + sw / 2.0 - 1.0, sy, 2.0, sh, [0.25, 0.25, 0.32, 0.6])
+            [0.25, 0.25, 0.32, 0.6]
         } else {
-            (sx + sw / 2.0 - 0.5, sy, 1.0, sh, [0.15, 0.15, 0.18, 0.4])
-        }
+            return None;
+        };
+        Some((sx + sw / 2.0 - 1.0, sy, 2.0, sh, color))
     }
 }
 
@@ -513,8 +528,9 @@ impl FilesystemApp {
                         Page::Network => &self.network_split,
                         Page::Space => &self.space_split,
                     };
-                    let (dx, dy, dw, dh, dc) = split.divider_quad();
-                    plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
+                    if let Some((dx, dy, dw, dh, dc)) = split.divider_quad() {
+                        plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
+                    }
                     let (px_r, py_r, pw_r, ph_r) = split.right_rect();
                     // The pane clamps its own text bounds to its rect inside
                     // push_prims (the old SplitBox clamp, absorbed).

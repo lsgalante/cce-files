@@ -125,22 +125,16 @@ pub fn dropdown_relief(pc: &mut PageContent, rect: cce_ui::scene::layout::Rect) 
 pub const RELIEF_RECESSED: u8 = 0;
 pub const RELIEF_RAISED: u8 = 1;
 pub const RELIEF_INSET: u8 = 2;
-/// A raised crest riding the rect's boundary (`Prim::Ridge`) — used with a
-/// single enabled wall, which is what makes it ONE bead rather than a closed
-/// loop of them. See [`PageContent::relief_ridge`].
-pub const RELIEF_RIDGE: u8 = 3;
 
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
     pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
     pub buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, crate::Message)>,
     /// Relief steps for the control_relief styling — (x, y, w, h, radius, depth,
-    /// kind, edges). `kind` is [`RELIEF_RECESSED`]/[`RELIEF_RAISED`]/[`RELIEF_INSET`]/
-    /// [`RELIEF_RIDGE`]; `edges` is (top, right, bottom, left), which walls of the
-    /// shape actually exist — all-true for everything but a ridge bead. The flat
-    /// rects own the faces; these are the edges-only walls emitted over them (the
+    /// kind: [`RELIEF_RECESSED`]/[`RELIEF_RAISED`]/[`RELIEF_INSET`]). The flat rects
+    /// own the faces; these are the edges-only walls emitted over them (the
     /// ParametersBg::reliefs idiom for flat-view hosts).
-    pub reliefs: Vec<(f32, f32, f32, f32, f32, f32, u8, (bool, bool, bool, bool))>,
+    pub reliefs: Vec<(f32, f32, f32, f32, f32, f32, u8)>,
     /// Engraved lines over the flat rects — (ax, ay, bx, by, width, depth) plus
     /// the (x, y, w, h) of the surface being engraved, which the shading fades
     /// out against. Unlike [`reliefs`] these are not axis-aligned: this is the
@@ -197,7 +191,7 @@ impl PageContent {
     pub fn relief_recessed(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
             let depth = cce_ui::layout::bevel_width().min(h * 0.2);
-            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RECESSED, (true, true, true, true)));
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RECESSED));
         }
     }
 
@@ -206,27 +200,7 @@ impl PageContent {
     pub fn relief_raised(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
             let depth = cce_ui::layout::bevel_width().min(h * 0.2);
-            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RAISED, (true, true, true, true)));
-        }
-    }
-
-    /// A raised bead riding ONE wall of (x, y, w, h) — `Prim::Ridge` with the
-    /// other three walls suppressed, so the crest is a single line rather than a
-    /// closed loop. `edges` is (top, right, bottom, left); enable exactly one.
-    ///
-    /// Depth is the caller's, not `h * 0.2` like the box reliefs: those derive it
-    /// from the control's height because they wrap a control, and a bead running
-    /// the height of a pane would take a 9.3px wall from that rule regardless of
-    /// how much room it actually has beside it. A bead is sized by its
-    /// clearance — no-op when control_relief is off.
-    pub fn relief_ridge(
-        &mut self,
-        x: f32, y: f32, w: f32, h: f32,
-        depth: f32,
-        edges: (bool, bool, bool, bool),
-    ) {
-        if cce_ui::layout::control_relief() {
-            self.reliefs.push((x, y, w, h, 0.0, depth, RELIEF_RIDGE, edges));
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RAISED));
         }
     }
 
@@ -245,7 +219,7 @@ impl PageContent {
     pub fn relief_inset(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
             let depth = cce_ui::layout::bevel_width().min(h * 0.2);
-            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_INSET, (true, true, true, true)));
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_INSET));
         }
     }
 

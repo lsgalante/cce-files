@@ -133,9 +133,6 @@ enum WidgetFx {
     /// A flush inset control (buttons): groove ring carved down around the
     /// rect, beveled lip back up inside, face level with the surface.
     Inset(f32),
-    /// A raised crest riding the rect's boundary, with `edges` selecting which
-    /// walls exist — one wall, so one bead. The split divider.
-    Ridge { depth: f32, edges: (bool, bool, bool, bool) },
     /// A GPU-textured quad; the id comes from `cce_ui::vk::upload_rgba`
     /// (the preview pane's image). `color` is unused.
     Image { id: u32, alpha: f32 },
@@ -259,48 +256,17 @@ impl SplitPane {
         std::mem::take(&mut self.dragging)
     }
 
-    /// The divider's active accent (`SplitBox::extra_quads`): accent while
-    /// dragging, tint on hover, and NOTHING at rest — the resting divider is
-    /// [`Self::divider_bead`], a lit crest rather than a painted hairline.
-    fn divider_quad(&self) -> Option<(f32, f32, f32, f32, [f32; 4])> {
+    /// The divider quad (`SplitBox::extra_quads`): accent while dragging, tint on hover,
+    /// hairline otherwise.
+    fn divider_quad(&self) -> (f32, f32, f32, f32, [f32; 4]) {
         let (sx, sy, sw, sh) = self.divider_rect();
-        let color = if self.dragging {
-            [0.36, 0.56, 0.38, 0.8]
+        if self.dragging {
+            (sx + sw / 2.0 - 1.0, sy, 2.0, sh, [0.36, 0.56, 0.38, 0.8])
         } else if self.hovered {
-            [0.25, 0.25, 0.32, 0.6]
+            (sx + sw / 2.0 - 1.0, sy, 2.0, sh, [0.25, 0.25, 0.32, 0.6])
         } else {
-            return None;
-        };
-        Some((sx + sw / 2.0 - 1.0, sy, 2.0, sh, color))
-    }
-
-    /// The divider as relief: a raised bead running the gap's centreline.
-    ///
-    /// This is the DE's one production `Prim::Ridge` — and the shape is exactly
-    /// what a ridge is for. The two panes are separate plates at the SAME level
-    /// with a strip of window plate between them, so the boundary wants a crest
-    /// that rises out of that strip and falls back to it, not a step (nothing is
-    /// higher or lower here) and not a painted line (everything else in the DE
-    /// is lit geometry). It is also the handle you grab to resize, so it earns
-    /// relief rather than decoration.
-    ///
-    /// Returned as (rect, depth, edges) with ONE wall enabled: a ridge's crest
-    /// rides the whole outline, so a full ring on a thin tall rect would give
-    /// two parallel rails and a pair of caps, not a bead. The enabled wall is
-    /// the right one, and the rect stops at the centreline, so the crest lands
-    /// mid-gap.
-    ///
-    /// Depth is a QUARTER of the gap, not half of it. The crest straddles its
-    /// wall by ±depth/2, so half a gap looks like the obvious fit — but the two
-    /// panes are plates whose own lit rims already spend most of that gap: at
-    /// gap 12 the genuinely flat strip between them measures ~4 logical px, not
-    /// 12. A half-gap bead runs its bright lobe straight into the left pane's
-    /// rim and the two read as one thick band instead of a bead with air around
-    /// it. Size it to the CLEARANCE, not the nominal gap.
-    fn divider_bead(&self) -> ((f32, f32, f32, f32), f32, (bool, bool, bool, bool)) {
-        let (sx, sy, sw, sh) = self.divider_rect();
-        let depth = cce_ui::layout::bevel_width().min(sw * 0.25);
-        ((sx, sy, sw * 0.5, sh), depth, (false, true, false, false))
+            (sx + sw / 2.0 - 0.5, sy, 1.0, sh, [0.15, 0.15, 0.18, 0.4])
+        }
     }
 }
 
@@ -547,18 +513,8 @@ impl FilesystemApp {
                         Page::Network => &self.network_split,
                         Page::Space => &self.space_split,
                     };
-                    // The bead is the divider's physical form and is always
-                    // there; the quad only marks hover/drag. Call order here is
-                    // irrelevant — display_list emits ALL of a PageContent's
-                    // rects before ALL of its reliefs — and that ordering is the
-                    // one we want: the accent tints the strip, then the bead's
-                    // shading lights it, so an active divider reads as a
-                    // coloured bead rather than a line laid over one.
-                    let ((bx, by, bw, bh), bd, bedges) = split.divider_bead();
-                    plain_pc.relief_ridge(bx, by, bw, bh, bd, bedges);
-                    if let Some((dx, dy, dw, dh, dc)) = split.divider_quad() {
-                        plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
-                    }
+                    let (dx, dy, dw, dh, dc) = split.divider_quad();
+                    plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
                     let (px_r, py_r, pw_r, ph_r) = split.right_rect();
                     // The pane clamps its own text bounds to its rect inside
                     // push_prims (the old SplitBox clamp, absorbed).
@@ -794,7 +750,7 @@ impl FilesystemApp {
                     fx: WidgetFx::Image { id: *id, alpha: *alpha },
                 });
             }
-            for (rx, ry, rw, rh, rr, rd, kind, redges) in &pc_part.reliefs {
+            for (rx, ry, rw, rh, rr, rd, kind) in &pc_part.reliefs {
                 let (mut wy, mut wh) = (*ry, *rh);
                 if is_page_content {
                     match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
@@ -813,7 +769,6 @@ impl FilesystemApp {
                     fx: match *kind {
                         pages::RELIEF_RAISED => WidgetFx::Boss(*rd),
                         pages::RELIEF_INSET => WidgetFx::Inset(*rd),
-                        pages::RELIEF_RIDGE => WidgetFx::Ridge { depth: *rd, edges: *redges },
                         _ => WidgetFx::Recess(*rd),
                     },
                 });
@@ -1420,7 +1375,6 @@ impl Application for FilesystemApp {
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
                 WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, w.color, depth),
-                WidgetFx::Ridge { depth, edges } => pc.ridge_edges(rect, radii, depth, edges),
                 WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
                 WidgetFx::Groove { ax, ay, bx, by, width, depth } => {
                     pc.groove((ax, ay), (bx, by), width, depth, rect)

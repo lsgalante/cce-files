@@ -487,9 +487,25 @@ pub fn view(
     // The map occupies everything below the header, less the footer readout.
     let map = (cx, cy + 34.0, cw, (ch - 34.0 - FOOTER_H).max(0.0));
     state.map_rect = map;
+    // Fill and well share one rect AND one radius — `RowList::push_prims`'s
+    // pairing, since this pane is the Browse list's opposite number across the
+    // same split. It used to fill square (`pc.rect`) under a well carved at
+    // `plate_corner_radius` (12.0), so the corners disagreed twice over: with
+    // their own fill, and with the r=4 list the pane sits beside.
+    //
+    // The tiles stay square and unclipped — a treemap cannot follow a curve —
+    // so a corner still contradicts the rim. Dropping 12.0 to 4.0 shrinks that
+    // residual to what RowList already lives with for its square row overlays.
+    // Rounding the fill alone would have been inert: the root directory tile
+    // paints a full square rect over the whole map, so the fill is not visible
+    // except in the 1px inset.
     let bg = cce_ui::color::list_bg_color();
-    pc.rect(bg, map.0, map.1, map.2, map.3);
-    pc.relief_recessed(map.0, map.1, map.2, map.3, cce_ui::layout::plate_corner_radius());
+    let radius = cce_ui::layout::list_corner_radius();
+    {
+        use cce_ui::layout::RenderTarget;
+        pc.rect_with_radius_corners(bg, map.0, map.1, map.2, map.3, radius, (true, true, true, true));
+    }
+    pc.relief_recessed(map.0, map.1, map.2, map.3, radius);
 
     let text_dim = cce_ui::color::TEXT_DIM;
     let text_fg = cce_ui::color::TEXT_FG;

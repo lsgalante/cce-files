@@ -43,6 +43,28 @@ impl Page {
 /// `render_widget` drops the relief prims `Breadcrumb::paint` emits, so every
 /// page that shows a breadcrumb has to carve it app-side — this is that carve,
 /// in one place, since all three pages want it identically.
+///
+/// **Audited against `Breadcrumb::paint` and deliberately left page-side** —
+/// it does NOT need [`dropdown_relief`]'s treatment, for two reasons that are
+/// easy to assume away:
+///
+/// - *The depths already agree.* Each `relief_*`/`groove` helper derives depth
+///   from the height it is handed, and all three here are handed what the
+///   widget uses: the well from `rect.height`, the plate from `rh`, and the
+///   seams from the run as host — the widget engraves the seams at the RUN's
+///   depth, not the well's. Nothing is pre-expanded, so nothing drifts the way
+///   the dropdown's ring did.
+/// - *The rect is fresh.* Every caller builds it as a literal on the line after
+///   laying the breadcrumb out, rather than reading it back off the widget, so
+///   there is no previous-frame rect to pick up.
+///
+/// Nor does the `window_pc`-vs-`pc` split matter here, though `dropdown_relief`
+/// warns loudly about it. `display_list` emits ALL of a `PageContent`'s rects
+/// before ALL of its reliefs, so the call order within `pc` is irrelevant; only
+/// a different PageContent could reorder these. The only quad the breadcrumb
+/// puts under the carve is the hover tint, and that is inset to the seam's
+/// furthest lean by construction, so it does not overlap the grooves. Moving
+/// this carve to `window_pc` would buy nothing.
 pub fn breadcrumb_relief(
     pc: &mut PageContent,
     breadcrumb: &cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,

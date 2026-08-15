@@ -67,6 +67,15 @@ pub fn breadcrumb_relief(
 /// only quads and text, so the carve is app-side — the same story as
 /// [`breadcrumb_relief`], which is the well-and-plate this pairs with.
 ///
+/// It reaches the SAME `inset_plate` call the widget makes, via
+/// [`PageContent::relief_inset`] → `WidgetFx::Inset`. It used to hand-roll the
+/// pair `inset_plate` expands to (`relief_recessed` over an expanded rect, then
+/// `relief_raised`) — which got the ring's depth wrong, because
+/// `relief_recessed` derives depth from the height it is HANDED, and that was
+/// the already-expanded one: a 5.76px wall against a 4.8px lip, so the
+/// descending wall over-ran the lip instead of meeting it in the tight V-groove
+/// with no flat floor that `inset_plate` documents.
+///
 /// **Carve it into `window_pc`, AFTER the page's `view()` has run.** Two
 /// constraints pin it there, and they pull in opposite directions:
 ///
@@ -82,16 +91,13 @@ pub fn breadcrumb_relief(
 ///   shows both as overlay fallback, so this is compositing order, not
 ///   plate grouping.)
 pub fn dropdown_relief(pc: &mut PageContent, rect: cce_ui::scene::layout::Rect) {
-    let r = cce_ui::layout::dropdown_corner_radius();
-    let g = cce_ui::layout::bevel_width().min(rect.height * 0.2) * 0.5;
-    pc.relief_recessed(
-        rect.x - g,
-        rect.y - g,
-        rect.width + 2.0 * g,
-        rect.height + 2.0 * g,
-        r + g,
+    pc.relief_inset(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        cce_ui::layout::dropdown_corner_radius(),
     );
-    pc.relief_raised(rect.x, rect.y, rect.width, rect.height, r);
 }
 
 pub const RELIEF_RECESSED: u8 = 0;

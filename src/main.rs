@@ -1336,8 +1336,13 @@ impl Application for FilesystemApp {
             cce_ui::layout::bevel_width(),
         );
 
-        // Band carves, emitted right after the plate so they CSG-group into its
-        // draw: in chooser mode the action bar is a band carved into the bottom.
+        // Band carves, emitted right after the plate: in chooser mode the action
+        // bar is a band carved into the bottom. These do NOT CSG-group into the
+        // plate's draw, despite sitting immediately behind it — a band flush with
+        // the plate's edge suppresses three of its four walls, and an
+        // edge-suppressed carve is never eligible (its extended walls would smear
+        // across the whole host). The standalone overlay path shades it, which is
+        // correct here. `CCE_PLATE_DEBUG=1` names the rule.
         // (The header strip's menubar-style band was removed — the top of the
         // plate is flush; the breadcrumb row sits directly on the surface.)
         if cce_ui::layout::control_relief() {

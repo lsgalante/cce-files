@@ -499,8 +499,10 @@ impl FilesystemApp {
             let self_ptr = self as *mut Self;
             unsafe {
                 let mut plain_pc = pages::PageContent::new();
-                let (x, y, w, h) = (*self_ptr).view_dropdown.rect();
-                cce_ui::layout::render_widget(&mut plain_pc, &mut (*self_ptr).view_dropdown, x, y, w, h, &mut self.ui_context);
+                // NOT the view dropdown: every page's `view()` already renders
+                // it, so a copy here was a second draw of the same widget — at
+                // the previous frame's rect, and compositing its label's
+                // antialiased edges twice into a faux-bold.
                 // The dissolved splitter's paint: its divider quad, then the preview
                 // pane (the only pane content the pages don't render themselves). The
                 // left pane's container copy is gone — the legacy aggregate painted it

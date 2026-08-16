@@ -2,8 +2,10 @@
 Type=Application
 Name=Files
 Comment=File browser
-Exec=cce-files
+Exec=cce-files %f
 Icon=cce-files
-Categories=System;FileManager;
+Categories=System;FileTools;FileManager;
 Terminal=false
+StartupNotify=true
 StartupWMClass=cce-files
+MimeType=inode/directory;

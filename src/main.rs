@@ -1023,6 +1023,20 @@ impl Application for FilesystemApp {
         let save_mode = args.iter().any(|arg| arg == "--save");
         let select_mode = save_mode || args.iter().any(|arg| arg == "--select" || arg == "--select-dir");
 
+        // A positional path opens there instead of the remembered directory.
+        // This is what `Exec=cce-files %f` passes as the inode/directory
+        // handler; without it the desktop entry could claim the type but
+        // always land on the last-visited dir, ignoring the folder clicked.
+        // Flags are skipped rather than just args[1], so `--select /tmp`
+        // works. A path that does not resolve falls through to the last dir,
+        // and a file opens its containing directory.
+        let start_dir = args
+            .iter()
+            .skip(1)
+            .find(|a| !a.starts_with("--"))
+            .and_then(|a| std::fs::canonicalize(a).ok())
+            .and_then(|p| if p.is_dir() { Some(p) } else { p.parent().map(|q| q.to_path_buf()) });
+
         cce_ui::scale::set_scale_factor(1.0);
 
         let browse = pages::browse::BrowseState::default();
@@ -1088,8 +1102,14 @@ impl Application for FilesystemApp {
         };
 
         
-        // Start initial directory loading via FsService
-        app.fs_service.send(services::fs::FsRequest::ReadLastDir);
+        // Start initial directory loading via FsService. ReadDirectory lands in
+        // the same DirectoryLoaded handler ReadLastDir eventually reaches, so an
+        // argv path just skips the restore step; current_dir and the breadcrumb
+        // are set when the load completes either way.
+        match start_dir {
+            Some(dir) => app.fs_service.send(services::fs::FsRequest::ReadDirectory(dir)),
+            None => app.fs_service.send(services::fs::FsRequest::ReadLastDir),
+        }
 
         // NOTE: do not call rebuild_layout() here. This value is moved out of new()
         // into the engine, which changes its address; the container/splitter widgets

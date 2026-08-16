@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Comment=File browser
+Exec=cce-files
+Icon=system-file-manager
+Categories=System;FileManager;
+Terminal=false
+StartupWMClass=cce-files

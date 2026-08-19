@@ -71,10 +71,12 @@ pub fn breadcrumb_relief(
     rect: cce_ui::scene::layout::Rect,
 ) {
     let r = cce_ui::layout::breadcrumb_corner_radius();
-    pc.relief_recessed(rect.x, rect.y, rect.width, rect.height, r);
     let Some(run) = breadcrumb.run_box(rect) else { return };
     let (rx, ry, rw, rh) = run;
-    pc.relief_raised(rx, ry, rw, rh, r.min(rh * 0.5));
+    // The dropdown's flush inset plate on the segment run (mirroring
+    // Breadcrumb::paint's relief branch) — the full-rect recessed well and
+    // the raised run inside it are gone with the restyle.
+    pc.relief_inset(rx, ry, rw, rh, r.min(rh * 0.5));
     for (a, b) in breadcrumb.seams(rect) {
         pc.groove(a, b, cce_ui::widget::Breadcrumb::SEAM_WIDTH, run);
     }

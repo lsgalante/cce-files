@@ -70,7 +70,7 @@ pub fn breadcrumb_relief(
     breadcrumb: &cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
     rect: cce_ui::scene::layout::Rect,
 ) {
-    let r = cce_ui::layout::breadcrumb_corner_radius();
+    let r = cce_ui::layout::dropdown_corner_radius();
     let Some(run) = breadcrumb.run_box(rect) else { return };
     let (rx, ry, rw, rh) = run;
     // The dropdown's flush inset plate on the segment run (mirroring

@@ -253,6 +253,14 @@ impl PageContent {
         self.buttons.push((btn, action));
     }
 
+    /// A button wearing the toolkit's own face — no per-call colors. The
+    /// hand-tinted variant above predates the themed Button; chrome buttons
+    /// (the chooser's Cancel/Save) should look like every other DE button.
+    pub fn button_plain(&mut self, label: &str, x: f32, y: f32, w: f32, h: f32, action: crate::Message) {
+        let btn = cce_ui::widget::Button::new(x, y, w, h).with_label(label);
+        self.buttons.push((btn, action));
+    }
+
     pub fn button_left(
         &mut self,
         label: &str,

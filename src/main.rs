@@ -605,40 +605,20 @@ impl FilesystemApp {
                 window_pc.rect([0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
             }
 
-            let accent = [0.36, 0.56, 0.38, 1.0];
-            let text_fg = [0.83, 0.83, 0.83, 1.0];
-
             let btn_h = cce_ui::layout::button_height();
             let btn_y = bar_y + (select_bar_h - btn_h) / 2.0;
 
-            // Cancel button
-            let cancel_x = self.width as f32 - 180.0;
-            window_pc.button(
-                "Cancel",
-                cancel_x,
-                btn_y,
-                70.0,
-                btn_h,
-                [0.25, 0.12, 0.12, 0.5],
-                [0.35, 0.15, 0.15, 0.8],
-                text_fg,
-                Message::SelectCancel,
-            );
-
-            // Open/Select/Save button
-            let open_x = self.width as f32 - 100.0;
+            // Cancel and Save/Select: equal widths, one gap, right-aligned to
+            // the content region with the bar's own padding — and the
+            // toolkit's plain button face, not hand-picked red/green tints.
+            let btn_w = 84.0;
+            let gap = 10.0;
+            let pad = cce_ui::layout::backplate_padding().max(gap);
+            let confirm_x = browse_x + usable_w - pad - btn_w;
+            let cancel_x = confirm_x - gap - btn_w;
+            window_pc.button_plain("Cancel", cancel_x, btn_y, btn_w, btn_h, Message::SelectCancel);
             let button_label = if self.save_mode { "Save" } else { "Select" };
-            window_pc.button(
-                button_label,
-                open_x,
-                btn_y,
-                80.0,
-                btn_h,
-                accent,
-                [0.46, 0.66, 0.48, 1.0],
-                [0.10, 0.16, 0.11, 1.0],
-                Message::SelectOpen,
-            );
+            window_pc.button_plain(button_label, confirm_x, btn_y, btn_w, btn_h, Message::SelectOpen);
         }
 
         // Gather all popovers

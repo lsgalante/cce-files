@@ -613,8 +613,9 @@ impl FilesystemApp {
             // toolkit's plain button face, not hand-picked red/green tints.
             let btn_w = 84.0;
             let gap = 10.0;
-            let pad = cce_ui::layout::backplate_padding().max(gap);
-            let confirm_x = browse_x + usable_w - pad - btn_w;
+            // Flush with the panels' right edge — an extra inset here left the
+            // buttons hanging short of the column above them.
+            let confirm_x = browse_x + usable_w - btn_w;
             let cancel_x = confirm_x - gap - btn_w;
             window_pc.button_plain("Cancel", cancel_x, btn_y, btn_w, btn_h, Message::SelectCancel);
             let button_label = if self.save_mode { "Save" } else { "Select" };
@@ -2070,6 +2071,9 @@ impl Application for FilesystemApp {
             // The pane hit-tests its own laid-out rect and consumes any wheel
             // over its content region, scrolled or not.
             if let Some(changed) = self.preview.wheel(delta, pos.x as f32, pos.y as f32) {
+                if cce_ui::scroll_debug() {
+                    eprintln!("[scroll] files: preview consumed at ({:.0},{:.0})", pos.x, pos.y);
+                }
                 if changed {
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
@@ -2079,7 +2083,11 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
-            if self.browse.list.wheel(delta, pos.x, pos.y) {
+            let hit = self.browse.list.wheel(delta, pos.x, pos.y);
+            if cce_ui::scroll_debug() {
+                eprintln!("[scroll] files: browse.list.wheel at ({:.0},{:.0}) -> {hit}", pos.x, pos.y);
+            }
+            if hit {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }

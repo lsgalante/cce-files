@@ -29,6 +29,12 @@ pub struct BrowseState {
     pub search_visible: bool,
     pub search_box: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
     pub selected: Option<usize>,
+    /// The selection the list was last auto-scrolled to. The layout pass runs
+    /// every frame, and an unconditional scroll_into_view there UNDID every
+    /// wheel scroll on the next frame whenever a selection existed — which in
+    /// the chooser is always, since row 0 starts selected. Auto-scroll fires
+    /// on selection CHANGE only.
+    pub autoscrolled_to: Option<usize>,
     pub breadcrumb: Adapted<Breadcrumb>,
     pub save_name_box: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
 }
@@ -50,6 +56,7 @@ impl Default for BrowseState {
                 .with_placeholder("Search...")
                 .with_update_on_type(true),
             selected: None,
+            autoscrolled_to: None,
             breadcrumb,
             save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
         };
@@ -314,9 +321,14 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     state.list.set_rect(list_x, list_y, list_w, list_h, search_offset);
     state.list.update_bounds_from_rows();
 
-    // Auto-scroll to keep selection in view
-    if let Some(selected_idx) = state.selected {
-        state.list.scroll_into_view(selected_idx);
+    // Auto-scroll to keep a NEWLY selected row in view (keyboard nav, click).
+    // Not every frame: this pass runs per frame, and re-asserting the scroll
+    // for an unchanged selection reverted every wheel scroll immediately.
+    if state.selected != state.autoscrolled_to {
+        if let Some(selected_idx) = state.selected {
+            state.list.scroll_into_view(selected_idx);
+        }
+        state.autoscrolled_to = state.selected;
     }
 
     state.list.push_prims(&mut pc);

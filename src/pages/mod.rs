@@ -257,7 +257,14 @@ impl PageContent {
     /// hand-tinted variant above predates the themed Button; chrome buttons
     /// (the chooser's Cancel/Save) should look like every other DE button.
     pub fn button_plain(&mut self, label: &str, x: f32, y: f32, w: f32, h: f32, action: crate::Message) {
-        let btn = cce_ui::widget::Button::new(x, y, w, h).with_label(label);
+        // Colorless chrome: transparent face over the theme's border/relief —
+        // the closed-dropdown convention — with a faint neutral hover. The
+        // toolkit's Primary face is itself blue-tinted, which is exactly what
+        // these buttons are not supposed to be.
+        let btn = cce_ui::widget::Button::new(x, y, w, h)
+            .with_label(label)
+            .with_bg([0.0, 0.0, 0.0, 0.0])
+            .with_hover_bg([1.0, 1.0, 1.0, 0.10]);
         self.buttons.push((btn, action));
     }
 

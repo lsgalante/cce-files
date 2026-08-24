@@ -685,15 +685,11 @@ impl FilesystemApp {
             dialog_pc.relief_raised(dialog_x, dialog_y, dialog_w, dialog_h, 0.0);
             dialog_pc.relief_recessed(tb_x, tb_y, tb_w, tb_h, cce_ui::layout::textbox_corner_radius());
 
-            let cancel_hover = self.cursor_x >= btn_cancel_x && self.cursor_x <= btn_cancel_x + btn_cancel_w
-                && self.cursor_y >= btn_cancel_y && self.cursor_y <= btn_cancel_y + btn_cancel_h;
-            let cancel_bg = if cancel_hover { [0.35, 0.15, 0.15, 0.8] } else { [0.25, 0.12, 0.12, 0.5] };
-            dialog_pc.button("Cancel", btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h, cancel_bg, [0.35, 0.15, 0.15, 0.8], [0.83, 0.83, 0.83, 1.0], Message::OpenWithCancel);
-
-            let open_hover = self.cursor_x >= btn_open_x && self.cursor_x <= btn_open_x + btn_open_w
-                && self.cursor_y >= btn_open_y && self.cursor_y <= btn_open_y + btn_open_h;
-            let open_bg = if open_hover { [0.46, 0.66, 0.48, 1.0] } else { [0.36, 0.56, 0.38, 1.0] };
-            dialog_pc.button("Open", btn_open_x, btn_open_y, btn_open_w, btn_open_h, open_bg, [0.46, 0.66, 0.48, 1.0], [0.1, 0.16, 0.11, 1.0], Message::OpenWithSubmit);
+            // Plain toolkit faces, like the chooser footer: the themed Button
+            // owns its own hover state, so the hand-rolled cursor tracking and
+            // the red/green tints go together.
+            dialog_pc.button_plain("Cancel", btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h, Message::OpenWithCancel);
+            dialog_pc.button_plain("Open", btn_open_x, btn_open_y, btn_open_w, btn_open_h, Message::OpenWithSubmit);
         }
 
         // Translate everything into widgets and text_items!

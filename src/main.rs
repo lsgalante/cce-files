@@ -364,6 +364,14 @@ struct FilesystemApp {
     /// Rows of the OPEN plate-dock corner menu (empty = not ours); routed
     /// before the generic context-menu dispatch.
     plate_menu_actions: Vec<cce_ui::widget::plate_dock::PlateDockAction>,
+    /// The detached preview window's process, while one is out (cce-ui RFC
+    /// 7c). Reaped from tick — the child's own Reattach is exiting, so a
+    /// closed window takes the pane back by the same path.
+    preview_child: Option<std::process::Child>,
+    /// The sync file the detached preview polls: parent pid, then the
+    /// selected path. Written before the spawn, rewritten per selection,
+    /// unlinked on reattach — the child exits when it disappears.
+    preview_sync_path: Option<std::path::PathBuf>,
     // Space's double-click is tracked by path, not row index: its tiles are
     // renumbered by every relayout, so an index would not survive a resize.
     last_space_click_time: std::time::Instant,
@@ -469,11 +477,80 @@ impl FilesystemApp {
                 }
                 self.preview_dock.collapsed = false;
             }
-            // No detach model here (yet): standard_menu is called with
-            // can_detach = false, so these rows never appear.
-            PlateDockAction::Detach | PlateDockAction::Reattach => {}
+            PlateDockAction::Detach => self.detach_preview(),
+            PlateDockAction::Reattach => self.reattach_preview(),
         }
         self.needs_rebuild = true;
+    }
+
+    /// Move the preview pane out into its own window (cce-ui RFC 7c): write
+    /// the sync file FIRST (the designer's rule — shared state is on disk
+    /// before the child starts), spawn ourselves in `--preview-window` mode,
+    /// and stub the pane. The pane column narrows exactly as collapse does,
+    /// through the same prior-fracs machinery.
+    fn detach_preview(&mut self) {
+        if self.preview_dock.detached {
+            return;
+        }
+        let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+        let sync = std::path::Path::new(&dir)
+            .join(format!("cce-files-preview-{}", std::process::id()));
+        if let Err(e) = self.write_preview_sync(&sync) {
+            log::error!("preview detach: cannot write sync file: {e}");
+            return;
+        }
+        let exe = match std::env::current_exe() {
+            Ok(e) => e,
+            Err(e) => {
+                log::error!("preview detach: cannot locate own executable: {e}");
+                return;
+            }
+        };
+        match std::process::Command::new(exe).arg("--preview-window").arg(&sync).spawn() {
+            Ok(child) => {
+                self.preview_child = Some(child);
+                self.preview_sync_path = Some(sync);
+                self.preview_prior_fracs =
+                    Some((self.browse_split.frac, self.network_split.frac, self.space_split.frac));
+                self.preview_dock.detached = true;
+            }
+            // Leave the pane in place if the child never started, rather than
+            // hiding it into a window that does not exist (the designer's rule).
+            Err(e) => {
+                let _ = std::fs::remove_file(&sync);
+                log::error!("preview detach: spawn failed: {e}");
+            }
+        }
+    }
+
+    /// Take the pane back. Killing the child is best-effort — a window the
+    /// user already closed is simply gone, and reattach must work anyway.
+    fn reattach_preview(&mut self) {
+        if let Some(mut child) = self.preview_child.take() {
+            let _ = child.kill();
+            // Reap, or the process table keeps a zombie for the session.
+            let _ = child.wait();
+        }
+        if let Some(p) = self.preview_sync_path.take() {
+            let _ = std::fs::remove_file(p);
+        }
+        self.preview_dock.detached = false;
+        if let Some((b, n, sp)) = self.preview_prior_fracs.take() {
+            self.browse_split.frac = b;
+            self.network_split.frac = n;
+            self.space_split.frac = sp;
+        }
+    }
+
+    /// (Re)write the detached preview's sync file: parent pid, then the
+    /// selected path when there is one.
+    fn write_preview_sync(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut content = format!("{}\n", std::process::id());
+        if let Some(sel) = self.browse.selected_path() {
+            content.push_str(&sel.to_string_lossy());
+            content.push('\n');
+        }
+        std::fs::write(path, content)
     }
 
     fn rebuild_layout(&mut self) {
@@ -546,7 +623,7 @@ impl FilesystemApp {
         // Collapsed preview (plate-dock, cce-ui RFC 7c-2): every page's pane
         // column narrows to the stub's width — re-forced each layout so a
         // window resize keeps the stub fixed while the list takes the rest.
-        if self.preview_dock.collapsed {
+        if self.preview_dock.stubbed() {
             for split in [&mut self.browse_split, &mut self.network_split, &mut self.space_split] {
                 let combined = (split.w - split.gap).max(1.0);
                 split.frac = (1.0 - PREVIEW_STUB_W / combined).clamp(0.0, 1.0);
@@ -589,10 +666,11 @@ impl FilesystemApp {
                         Page::Network => &self.network_split,
                         Page::Space => &self.space_split,
                     };
-                    // A collapsed preview draws neither divider nor content —
-                    // the stub band and its corner control paint in
-                    // display_list, over everything (cce-ui RFC 7c-2).
-                    if !self.preview_dock.collapsed {
+                    // A stubbed preview (collapsed or detached) draws neither
+                    // divider nor content — the stub band and its corner
+                    // control paint in display_list, over everything (cce-ui
+                    // RFC 7c-2/7c).
+                    if !self.preview_dock.stubbed() {
                         if let Some((dx, dy, dw, dh, dc)) = split.divider_quad() {
                             plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
                         }
@@ -1107,6 +1185,8 @@ impl Application for FilesystemApp {
             preview_dock: Default::default(),
             preview_prior_fracs: None,
             plate_menu_actions: Vec::new(),
+            preview_child: None,
+            preview_sync_path: None,
             select_mode,
             select_directory,
             save_mode,
@@ -1244,6 +1324,13 @@ impl Application for FilesystemApp {
                     self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
                 } else {
                     pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
+                }
+                // A detached preview follows the selection through its sync
+                // file (it polls; see preview_window.rs).
+                if let Some(sync) = self.preview_sync_path.clone() {
+                    if let Err(e) = self.write_preview_sync(&sync) {
+                        log::warn!("preview sync write failed: {e}");
+                    }
                 }
 
                 if let Some(idx) = self.browse.selected {
@@ -1393,6 +1480,19 @@ impl Application for FilesystemApp {
         if self.paginator.tick(dt, &mut self.ui_context) {
             *needs_rebuild = true;
             self.needs_rebuild = true;
+        }
+
+        // Notice a detached preview the user closed themselves and take the
+        // pane back — its Reattach IS exiting. try_wait, NOT a signal probe:
+        // the child is ours and unreaped, so once it exits it is a zombie the
+        // probe would report alive forever (the designer's lesson, verbatim).
+        if let Some(child) = self.preview_child.as_mut() {
+            if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                self.preview_child = None;
+                self.reattach_preview();
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
         }
     }
 
@@ -1757,7 +1857,7 @@ impl Application for FilesystemApp {
             let band = self.preview_dock_band();
             if let Some(c) = dock::corner_center(band, self.preview_dock.stubbed()) {
                 if dock::corner_hit(c, pos.x as f32, pos.y as f32) {
-                    let rows = dock::standard_menu(self.preview_dock, false);
+                    let rows = dock::standard_menu(self.preview_dock, true);
                     let (labels, actions): (Vec<String>, Vec<_>) = rows.into_iter().unzip();
                     cce_ui::widget::context_menu::show(
                         c.0 - dock::CORNER_R,
@@ -1995,7 +2095,7 @@ impl Application for FilesystemApp {
         // focus like the legacy ctx.set_focused_ptr / release's clear_focus pair did),
         // a release ends the drag. A collapsed preview owns its column width;
         // the divider is not draggable until the pane expands.
-        if button == MouseButton::Left && !self.preview_dock.collapsed {
+        if button == MouseButton::Left && !self.preview_dock.stubbed() {
             let split = match self.current_page {
                 Page::Browse => &mut self.browse_split,
                 Page::Network => &mut self.network_split,
@@ -2437,5 +2537,11 @@ impl Application for FilesystemApp {
 
 #[tokio::main]
 async fn main() {
+    // The detached preview window (cce-ui RFC 7c) — same binary, second
+    // Application; see the lib's preview_window.rs for the process/sync model.
+    if std::env::args().any(|a| a == "--preview-window") {
+        cce_ui::engine::run::<cce_files::preview_window::PreviewWindowApp>();
+        return;
+    }
     cce_ui::engine::run::<FilesystemApp>();
 }

@@ -171,6 +171,10 @@ struct ContextMenu {
 /// the container copies just coincided (the Phase 0 double-paint) — and (b) own the
 /// divider: its quad, hover tint, and proportion drag. This is (b), app-side, with the
 /// `SplitBox` two-child horizontal math verbatim.
+/// Width of the preview pane's column while collapsed to its title stub:
+/// room for the label and the corner control that restores it.
+const PREVIEW_STUB_W: f32 = 170.0;
+
 struct SplitPane {
     x: f32,
     y: f32,
@@ -351,6 +355,15 @@ struct FilesystemApp {
     browse_split: SplitPane,
     network_split: SplitPane,
     space_split: SplitPane,
+    /// The preview pane's plate-dock state (cce-ui RFC 7c-2): collapsing
+    /// narrows the pane column to a title stub and the list keeps the space.
+    preview_dock: cce_ui::widget::plate_dock::PlateDockState,
+    /// The three splits' fracs as they stood before a collapse, restored on
+    /// expand.
+    preview_prior_fracs: Option<(f32, f32, f32)>,
+    /// Rows of the OPEN plate-dock corner menu (empty = not ours); routed
+    /// before the generic context-menu dispatch.
+    plate_menu_actions: Vec<cce_ui::widget::plate_dock::PlateDockAction>,
     // Space's double-click is tracked by path, not row index: its tiles are
     // renumbered by every relayout, so an index would not survive a resize.
     last_space_click_time: std::time::Instant,
@@ -424,6 +437,45 @@ impl FilesystemApp {
         self.watcher = Some(watcher);
     }
 
+    /// The rect the preview pane's corner control anchors to: the full pane,
+    /// or its title-stub band while stubbed (cce-ui RFC 7c-2).
+    fn preview_dock_band(&self) -> (f32, f32, f32, f32) {
+        let split = match self.current_page {
+            Page::Browse => &self.browse_split,
+            Page::Network => &self.network_split,
+            Page::Space => &self.space_split,
+        };
+        let (rx, ry, rw, rh) = split.right_rect();
+        if self.preview_dock.stubbed() {
+            (rx, ry, rw, cce_ui::widget::plate_dock::STUB_H)
+        } else {
+            (rx, ry, rw, rh)
+        }
+    }
+
+    fn dispatch_preview_dock(&mut self, action: cce_ui::widget::plate_dock::PlateDockAction) {
+        use cce_ui::widget::plate_dock::PlateDockAction;
+        match action {
+            PlateDockAction::Collapse => {
+                self.preview_prior_fracs =
+                    Some((self.browse_split.frac, self.network_split.frac, self.space_split.frac));
+                self.preview_dock.collapsed = true;
+            }
+            PlateDockAction::Expand => {
+                if let Some((b, n, sp)) = self.preview_prior_fracs.take() {
+                    self.browse_split.frac = b;
+                    self.network_split.frac = n;
+                    self.space_split.frac = sp;
+                }
+                self.preview_dock.collapsed = false;
+            }
+            // No detach model here (yet): standard_menu is called with
+            // can_detach = false, so these rows never appear.
+            PlateDockAction::Detach | PlateDockAction::Reattach => {}
+        }
+        self.needs_rebuild = true;
+    }
+
     fn rebuild_layout(&mut self) {
 
         self.ui_context.clear_hierarchy();
@@ -491,6 +543,15 @@ impl FilesystemApp {
             Page::Network => self.network_split.set_rect(browse_x, content_y, usable_w, content_h),
             Page::Space => self.space_split.set_rect(browse_x, content_y, usable_w, content_h),
         }
+        // Collapsed preview (plate-dock, cce-ui RFC 7c-2): every page's pane
+        // column narrows to the stub's width — re-forced each layout so a
+        // window resize keeps the stub fixed while the list takes the rest.
+        if self.preview_dock.collapsed {
+            for split in [&mut self.browse_split, &mut self.network_split, &mut self.space_split] {
+                let combined = (split.w - split.gap).max(1.0);
+                split.frac = (1.0 - PREVIEW_STUB_W / combined).clamp(0.0, 1.0);
+            }
+        }
 
         if let Some((_, textbox)) = &mut self.open_with_dialog {
             self.ui_context.register_widget(textbox.base().id(), textbox.as_ptr_mut());
@@ -528,14 +589,19 @@ impl FilesystemApp {
                         Page::Network => &self.network_split,
                         Page::Space => &self.space_split,
                     };
-                    if let Some((dx, dy, dw, dh, dc)) = split.divider_quad() {
-                        plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
+                    // A collapsed preview draws neither divider nor content —
+                    // the stub band and its corner control paint in
+                    // display_list, over everything (cce-ui RFC 7c-2).
+                    if !self.preview_dock.collapsed {
+                        if let Some((dx, dy, dw, dh, dc)) = split.divider_quad() {
+                            plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
+                        }
+                        let (px_r, py_r, pw_r, ph_r) = split.right_rect();
+                        // The pane clamps its own text bounds to its rect inside
+                        // push_prims (the old SplitBox clamp, absorbed).
+                        (*self_ptr).preview.set_rect(px_r, py_r, pw_r, ph_r);
+                        (*self_ptr).preview.push_prims(&mut plain_pc);
                     }
-                    let (px_r, py_r, pw_r, ph_r) = split.right_rect();
-                    // The pane clamps its own text bounds to its rect inside
-                    // push_prims (the old SplitBox clamp, absorbed).
-                    (*self_ptr).preview.set_rect(px_r, py_r, pw_r, ph_r);
-                    (*self_ptr).preview.push_prims(&mut plain_pc);
                 }
                 if let Some((_, textbox)) = &mut (*self_ptr).open_with_dialog {
                     let (x, y, w, h) = textbox.rect();
@@ -1038,6 +1104,9 @@ impl Application for FilesystemApp {
             network: pages::network::NetworkState::default(),
             space: pages::space::SpaceState::default(),
             preview: Default::default(),
+            preview_dock: Default::default(),
+            preview_prior_fracs: None,
+            plate_menu_actions: Vec::new(),
             select_mode,
             select_directory,
             save_mode,
@@ -1423,6 +1492,38 @@ impl Application for FilesystemApp {
         // controls) draws into the app's display list like every popover. Its
         // labels carry bounds equal to the menu rect — the engine's popover
         // occlusion clamp exempts exactly that, so they render inside the menu
+        // The preview pane's plate-dock affordance (cce-ui RFC 7c-2): the
+        // title stub while collapsed, and the corner control — drawn over
+        // the page content, under the context menu.
+        {
+            use cce_ui::widget::plate_dock as dock;
+            let band = self.preview_dock_band();
+            let stubbed = self.preview_dock.stubbed();
+            if stubbed {
+                let r = cce_ui::layout::plate_corner_radius();
+                pc.plate(
+                    Rect { x: band.0, y: band.1, width: band.2, height: band.3 },
+                    (r, r, r, r),
+                    cce_ui::color::page_low_color(),
+                    cce_ui::layout::bevel_width().min(band.3 * 0.2),
+                );
+                pc.text_with(
+                    "Preview".to_string(),
+                    band.0 + 10.0,
+                    band.1 + (band.3 - 13.0) / 2.0,
+                    13.0,
+                    [0xc8, 0xc8, 0xd4],
+                    None,
+                    Some([band.0, band.1, band.0 + band.2 - dock::CORNER_INSET - dock::CORNER_R, band.1 + band.3]),
+                );
+            }
+            if let Some(c) = dock::corner_center(band, stubbed) {
+                let emphasized = dock::corner_hit(c, self.cursor_x, self.cursor_y)
+                    || !self.plate_menu_actions.is_empty();
+                dock::draw_corner_dot(&mut pc, c, emphasized);
+            }
+        }
+
         // while page text beneath stays clamped.
         if cce_ui::widget::context_menu::is_visible() {
             let menu_bounds = Some([
@@ -1616,6 +1717,61 @@ impl Application for FilesystemApp {
     fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, pos: LogicalPosition, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if button != MouseButton::Left && button != MouseButton::Right {
             return None;
+        }
+
+        // The preview pane's plate-dock menu (cce-ui RFC 7c-2) routes BEFORE
+        // the generic context-menu dispatch below: that path targets widget
+        // ContextActions, not these rows. Keyed on RELEASE: in this app the
+        // routed-widget path upstream consumes left PRESSES before the hook
+        // (only releases reliably arrive here).
+        if button == MouseButton::Left
+            && state == ElementState::Released
+            && !self.plate_menu_actions.is_empty()
+            && cce_ui::widget::context_menu::is_visible()
+        {
+            let (px, py) = (pos.x as f32, pos.y as f32);
+            let picked = if cce_ui::widget::context_menu::hit_test(px, py) {
+                let my = cce_ui::widget::context_menu::y();
+                let row = ((py - my) / 24.0).floor() as usize;
+                self.plate_menu_actions.get(row).copied()
+            } else {
+                None
+            };
+            cce_ui::widget::context_menu::hide();
+            self.plate_menu_actions.clear();
+            if let Some(action) = picked {
+                self.dispatch_preview_dock(action);
+            }
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+            return None;
+        }
+
+        // A left RELEASE on the preview pane's corner control opens its menu
+        // (the designer also opens on release; presses do not reliably reach
+        // this hook — see above). No press arming: the arming protocol
+        // disambiguates click from dock-DRAG, and a single pane has nowhere
+        // to dock.
+        if button == MouseButton::Left && state == ElementState::Released {
+            use cce_ui::widget::plate_dock as dock;
+            let band = self.preview_dock_band();
+            if let Some(c) = dock::corner_center(band, self.preview_dock.stubbed()) {
+                if dock::corner_hit(c, pos.x as f32, pos.y as f32) {
+                    let rows = dock::standard_menu(self.preview_dock, false);
+                    let (labels, actions): (Vec<String>, Vec<_>) = rows.into_iter().unzip();
+                    cce_ui::widget::context_menu::show(
+                        c.0 - dock::CORNER_R,
+                        c.1 + dock::CORNER_R,
+                        labels,
+                        0,
+                        self.paginator.base().id(),
+                    );
+                    self.plate_menu_actions = actions;
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            }
         }
 
         // The toolkit's shared context menu (breadcrumb, config-bound controls)
@@ -1837,8 +1993,9 @@ impl Application for FilesystemApp {
 
         // The dissolved splitter's divider: a left press grabs it (stealing keyboard
         // focus like the legacy ctx.set_focused_ptr / release's clear_focus pair did),
-        // a release ends the drag.
-        if button == MouseButton::Left {
+        // a release ends the drag. A collapsed preview owns its column width;
+        // the divider is not draggable until the pane expands.
+        if button == MouseButton::Left && !self.preview_dock.collapsed {
             let split = match self.current_page {
                 Page::Browse => &mut self.browse_split,
                 Page::Network => &mut self.network_split,
@@ -2073,7 +2230,10 @@ impl Application for FilesystemApp {
         if matches!(self.current_page, Page::Browse | Page::Network | Page::Space) {
             // The pane hit-tests its own laid-out rect and consumes any wheel
             // over its content region, scrolled or not.
-            if let Some(changed) = self.preview.wheel(delta, pos.x as f32, pos.y as f32) {
+            if let Some(changed) = (!self.preview_dock.collapsed)
+                .then(|| self.preview.wheel(delta, pos.x as f32, pos.y as f32))
+                .flatten()
+            {
                 if cce_ui::scroll_debug() {
                     eprintln!("[scroll] files: preview consumed at ({:.0},{:.0})", pos.x, pos.y);
                 }

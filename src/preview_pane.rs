@@ -273,7 +273,7 @@ impl PreviewPane {
         // 2. Bottom pane: Details Section. The visible gap between the wells
         // is exactly backplate_gap — the same separator width as everywhere
         // else on the plate (it was a hardcoded 12+7=19px before).
-        let details_top = cy + half_h + cce_ui::layout::backplate_gap();
+        let details_top = cy + half_h + cce_ui::layout::root_plate_gap();
         let icon = if self.is_dir { "📁" } else { "📄" };
 
         let details = [

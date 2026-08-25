@@ -458,7 +458,7 @@ impl FilesystemApp {
         let has_sidebar = false;
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
         // DE-wide plate rim padding (style.surface.backplate.padding).
-        let pad = cce_ui::layout::backplate_padding();
+        let pad = cce_ui::layout::root_plate_padding();
         let browse_x = if has_sidebar { sidebar_w + pad + 1.0 } else { pad };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 2.0 * pad;
         let content_y = pad;
@@ -598,7 +598,7 @@ impl FilesystemApp {
         // content region, so it goes into window_pc: page content (pc) is clipped
         // to the viewport and would swallow the bar entirely.
         if self.select_mode {
-            let bar_y = self.height as f32 - select_bar_h - cce_ui::layout::backplate_padding();
+            let bar_y = self.height as f32 - select_bar_h - cce_ui::layout::root_plate_padding();
             // Divider line — under control_relief the bar is a band carved into the
             // plate (see display_list), so the flat line is the fallback only.
             if !cce_ui::layout::control_relief() {
@@ -1068,9 +1068,9 @@ impl Application for FilesystemApp {
                 hovered: None,
             },
             open_with_dialog: None,
-            browse_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
-            network_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
-            space_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::backplate_gap()),
+            browse_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
+            network_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
+            space_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
             last_space_click_time: std::time::Instant::now(),
             last_space_path: None,
             last_click_time: std::time::Instant::now(),
@@ -1348,9 +1348,9 @@ impl Application for FilesystemApp {
         // surface reads as a physical plate rather than a flat fill.
         let mut plate = cce_ui::color::page_low_color();
         if plate[3] > 0.001 {
-            plate[3] = cce_ui::color::active_backplate_opacity();
+            plate[3] = cce_ui::color::root_plate_opacity();
         }
-        let radius = cce_ui::color::backplate_corner_radius().max(0.0);
+        let radius = cce_ui::color::root_plate_corner_radius().max(0.0);
         pc.plate(
             Rect { x: 0.0, y: 0.0, width: fw, height: fh },
             (radius, radius, radius, radius),
@@ -1370,7 +1370,7 @@ impl Application for FilesystemApp {
         if cce_ui::layout::control_relief() {
             let wall = cce_ui::layout::bar_wall_width();
             if self.select_mode {
-                let band_h = SELECT_BAR_H + cce_ui::layout::backplate_padding();
+                let band_h = SELECT_BAR_H + cce_ui::layout::root_plate_padding();
                 pc.recess_edges(
                     Rect { x: 0.0, y: fh - band_h, width: fw, height: band_h },
                     (0.0, 0.0, 0.0, 0.0),

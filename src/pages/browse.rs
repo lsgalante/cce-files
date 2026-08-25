@@ -188,7 +188,7 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     // The pane rect already sits backplate_padding off the plate rim — no
     // second inset here, or the list lands 16+12 from the edge while apps
     // that place content at the pane rect (cce-data-editor's tree) sit at 16.
-    let gap = cce_ui::layout::backplate_gap();
+    let gap = cce_ui::layout::root_plate_gap();
     let margin = 0.0;
     let mut layout = ColumnLayout::new(gap);
     let client_x = cx + margin;

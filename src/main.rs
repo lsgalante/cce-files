@@ -1350,13 +1350,16 @@ impl Application for FilesystemApp {
         if plate[3] > 0.001 {
             plate[3] = cce_ui::color::root_plate_opacity();
         }
-        let radius = cce_ui::color::root_plate_corner_radius().max(0.0);
-        pc.plate(
-            Rect { x: 0.0, y: 0.0, width: fw, height: fh },
-            (radius, radius, radius, radius),
-            plate,
-            cce_ui::layout::bevel_width(),
-        );
+        // PlateSpec (cce-ui RFC 7b): all four corners are window corners, so
+        // the perimeter follows the SHARED silhouette curve the compositor
+        // clips with.
+        pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
+            rect: Rect { x: 0.0, y: 0.0, width: fw, height: fh },
+            color: plate,
+            blur: false,
+            window_corners: (true, true, true, true),
+            depth: cce_ui::layout::bevel_width(),
+        });
 
         // Band carves, emitted right after the plate: in chooser mode the action
         // bar is a band carved into the bottom. These do NOT CSG-group into the

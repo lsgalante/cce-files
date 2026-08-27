@@ -76,7 +76,25 @@ pub fn breadcrumb_relief(
     // The dropdown's flush inset plate on the segment run (mirroring
     // Breadcrumb::paint's relief branch) — the full-rect recessed well and
     // the raised run inside it are gone with the restyle.
-    pc.relief_inset(rx, ry, rw, rh, r.min(rh * 0.5));
+    //
+    // Face AND ring, through the `inset_plate` bridge, because the face is
+    // the dropdown's configured fill: `render_widget` offers that fill for a
+    // Dropdown through a per-type hook (layout.rs) but has no Breadcrumb arm,
+    // so a run carved here with no face would keep showing the window plate
+    // while the dropdown beside it went opaque. Both controls read
+    // `dropdown_background_color` now, so they match under any config —
+    // transparent leaves the plate as the face for both.
+    let radius = r.min(rh * 0.5);
+    let depth = cce_ui::layout::bevel_width().min(rh * 0.2);
+    let raw = cce_ui::color::dropdown_background_color();
+    let face = if raw[3] > 0.001 {
+        let mut c = raw;
+        c[3] = 1.0;
+        c
+    } else {
+        [0.0; 4]
+    };
+    pc.inset_plate(face, rx, ry, rw, rh, radius, depth);
     for (a, b) in breadcrumb.seams(rect) {
         pc.groove(a, b, cce_ui::widget::Breadcrumb::SEAM_WIDTH, run);
     }

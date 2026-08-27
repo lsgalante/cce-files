@@ -318,4 +318,29 @@ impl RenderTarget for PageContent {
     fn text_with_font_and_bounds(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: &str, bounds: Option<[f32; 4]>) {
         self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string()), bounds));
     }
+
+    /// The flat-path bridge for a widget's flush inset plate — the Dropdown's
+    /// OPEN popover, which is its trigger surface grown over the unified box.
+    /// Without this override the default degrades it to a plain rounded fill,
+    /// so the menu lost the groove ring and lip the closed trigger has (the
+    /// `dropdown_relief` carve) the moment it expanded.
+    ///
+    /// The face and the walls go to different vecs on purpose — `reliefs` are
+    /// edges-only, drawn over the faces `rects` own — and `display_list` emits
+    /// this part's rects before its reliefs, so one call here lands as fill
+    /// then ring, in that order, within whichever part is being collected.
+    ///
+    /// **The caller's `depth` is used verbatim, NOT re-derived from `h`.** The
+    /// widget computes it from the TRIGGER's height; the box handed here is the
+    /// trigger plus the revealed menu, several times taller. `relief_inset`
+    /// would recompute `bevel_width().min(h * 0.2)` off that expanded height
+    /// and thicken the ring as the menu grows — the same mistake
+    /// [`dropdown_relief`] documents. A ring that swells during the open
+    /// animation is exactly the artifact this override exists to avoid.
+    fn inset_plate(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32, radius: f32, depth: f32) {
+        self.rects.push((color, x, y, w, h, radius, (true, true, true, true)));
+        if cce_ui::layout::control_relief() {
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_INSET));
+        }
+    }
 }

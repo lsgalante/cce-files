@@ -85,11 +85,19 @@ fn occlude_against(
     overlays: &[&pages::PageContent],
 ) -> Option<[f32; 4]> {
     for overlay_pc in overlays {
-        for (_, ox, oy, ow, oh, _, _) in &overlay_pc.rects {
-            let o_min_x = *ox;
-            let o_max_x = *ox + *ow;
-            let o_min_y = *oy;
-            let o_max_y = *oy + *oh;
+        // Plates occlude exactly as rects do — an overlay's opaque face is its
+        // plate now, not a flat fill, and a face missing from this sweep lets the
+        // page's text bleed through the surface covering it.
+        let faces = overlay_pc
+            .rects
+            .iter()
+            .map(|(_, x, y, w, h, _, _)| (*x, *y, *w, *h))
+            .chain(overlay_pc.plates.iter().map(|(_, x, y, w, h, _, _)| (*x, *y, *w, *h)));
+        for (ox, oy, ow, oh) in faces {
+            let o_min_x = ox;
+            let o_max_x = ox + ow;
+            let o_min_y = oy;
+            let o_max_y = oy + oh;
 
             if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
                 if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
@@ -128,6 +136,11 @@ enum WidgetFx {
     Bevel(f32),
     /// Edges-only raised plateau over whatever is painted below.
     Boss(f32),
+    /// A lit plate: a rounded face in the quad's own color plus the rolled, lit
+    /// perimeter, at full size. What the pane plates and the preview stub wear.
+    /// Distinct from [`WidgetFx::Bevel`], which insets its fill by the depth, and
+    /// from [`WidgetFx::Boss`], which is a rim with no face of its own.
+    Plate(f32),
     /// Edges-only carve into whatever is painted below (recessed wells).
     Recess(f32),
     /// A flush inset control (buttons): groove ring carved down around the
@@ -700,17 +713,32 @@ impl FilesystemApp {
             let cw = self.context_menu.w;
             let ch = self.context_menu.h;
 
-            // Border
-            context_menu_pc.rect([0.22, 0.22, 0.28, 1.0], cx, cy, cw, ch);
-            // Background
-            context_menu_pc.rect(cce_ui::color::popover_bg_color(), cx + 1.0, cy + 1.0, cw - 2.0, ch - 2.0);
-            // Hover highlight
+            // The menu is a lit plate, the same material as the panes it floats
+            // over: a rounded face plus the rolled perimeter, one primitive. It
+            // used to be a flat fill inside a 1px border rect with a Boss rim
+            // laid over the top — three marks for one edge, and the rim's hard
+            // light/dark frame at radius 0 read as a drawn box rather than a
+            // surface with a lit edge.
+            let menu_r = cce_ui::layout::plate_corner_radius();
+            context_menu_pc.plate(cce_ui::color::popover_bg_color(), cx, cy, cw, ch, menu_r);
+            // Hover highlight, inset off the roll so it sits on the face rather
+            // than climbing the lit edge. The last row is the only one that meets
+            // a rounded corner (row 0 is the header and never highlights), so it
+            // carries the plate's radius on the bottom two.
             if let Some(h_idx) = self.context_menu.hovered {
                 let iy = cy + h_idx as f32 * ROW_H;
-                context_menu_pc.rect([0.20, 0.40, 0.65, 0.6], cx + 2.0, iy + 2.0, cw - 4.0, 20.0);
+                let inset = (cce_ui::layout::bevel_width().min(ch * 0.2) * 0.5).max(2.0);
+                let last = h_idx + 1 == self.context_menu.options.len();
+                context_menu_pc.rect_rounded(
+                    [0.20, 0.40, 0.65, 0.6],
+                    cx + inset,
+                    iy + 2.0,
+                    cw - 2.0 * inset,
+                    ROW_H - 4.0,
+                    (menu_r - inset).max(0.0),
+                    (false, false, last, last),
+                );
             }
-            // Raised menu plate (control_relief styling).
-            context_menu_pc.relief_raised(cx, cy, cw, ch, 0.0);
             // Text options
             for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
                 let iy = cy + idx as f32 * ROW_H + (ROW_H - 12.0) / 2.0;
@@ -765,6 +793,31 @@ impl FilesystemApp {
 
         for (part_idx, pc_part) in [&window_pc, &pc, &popover_pc, &context_menu_pc, &dialog_pc].into_iter().enumerate() {
             let is_page_content = part_idx == 1;
+
+            // Plates first: a plate owns a FACE, so it is the floor of its part —
+            // everything else the part emits (a hover fill, an engraved seam, the
+            // labels) is meant to land on top of it. Emitted after the rects it
+            // would paint straight over them, which is where the context menu's
+            // hover row went the first time this ran.
+            for (c, px, py, pw, ph, pr, pd) in &pc_part.plates {
+                let (mut wy, mut wh) = (*py, *ph);
+                if is_page_content {
+                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
+                        Some((cy, ch)) => { wy = cy; wh = ch; }
+                        None => continue,
+                    }
+                }
+                widgets.push(AppWidget {
+                    x: *px,
+                    y: wy,
+                    w: *pw,
+                    h: wh,
+                    color: *c,
+                    radius: *pr,
+                    corners: (true, true, true, true),
+                    fx: WidgetFx::Plate(*pd),
+                });
+            }
 
             for (c, x, y, w, h, r, corners) in &pc_part.rects {
                 let wx = *x;
@@ -1457,6 +1510,7 @@ impl Application for FilesystemApp {
             let radii = (w.radius, w.radius, w.radius, w.radius);
             match w.fx {
                 WidgetFx::Bevel(depth) => pc.bevel(rect, radii, w.color, depth),
+                WidgetFx::Plate(depth) => pc.plate(rect, radii, w.color, depth),
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
                 WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, w.color, depth),

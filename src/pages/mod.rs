@@ -166,6 +166,15 @@ pub struct PageContent {
     /// alpha). Drawn after the part's rects, so a fill emitted earlier is the floor
     /// beneath the image and overlay parts still cover it.
     pub images: Vec<(u32, f32, f32, f32, f32, f32)>,
+    /// Lit plates — (color, x, y, w, h, radius, depth). Unlike [`reliefs`], a plate
+    /// owns its FILL as well as its edge: one primitive carrying a rounded face and
+    /// the rolled, lit perimeter, shaded in a single lighting evaluation. That is
+    /// what the pane plates and the preview stub wear, so a floating surface
+    /// (the context menu) reads as the same material rather than as a flat chip
+    /// inside a drawn frame.
+    ///
+    /// [`reliefs`]: PageContent::reliefs
+    pub plates: Vec<([f32; 4], f32, f32, f32, f32, f32, f32)>,
 }
 
 impl PageContent {
@@ -177,6 +186,7 @@ impl PageContent {
             reliefs: Vec::new(),
             grooves: Vec::new(),
             images: Vec::new(),
+            plates: Vec::new(),
         }
     }
 
@@ -188,13 +198,14 @@ impl PageContent {
     /// exactly that reason. The destructuring below turns a new field into a
     /// compile error instead of a missing mark on screen.
     pub fn absorb(&mut self, other: PageContent) {
-        let PageContent { rects, texts, buttons, reliefs, grooves, images } = other;
+        let PageContent { rects, texts, buttons, reliefs, grooves, images, plates } = other;
         self.rects.extend(rects);
         self.texts.extend(texts);
         self.buttons.extend(buttons);
         self.reliefs.extend(reliefs);
         self.grooves.extend(grooves);
         self.images.extend(images);
+        self.plates.extend(plates);
     }
 
     /// A GPU-textured quad (id from `cce_ui::vk::upload_rgba`).
@@ -204,6 +215,31 @@ impl PageContent {
 
     pub fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {
         self.rects.push((color, x, y, w, h, 0.0, (true, true, true, true)));
+    }
+
+    /// [`PageContent::rect`] with a corner radius, applied only to `corners`
+    /// (top-left, top-right, bottom-right, bottom-left) — for a fill that has to
+    /// follow the rounded corner of the plate it sits inside.
+    pub fn rect_rounded(
+        &mut self,
+        color: [f32; 4],
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        corners: (bool, bool, bool, bool),
+    ) {
+        self.rects.push((color, x, y, w, h, radius, corners));
+    }
+
+    /// A lit plate at (x, y, w, h): a rounded face in `color` plus the rolled,
+    /// lit perimeter — the treatment the pane plates wear. Unlike the relief
+    /// helpers this is NOT gated on `control_relief`: a plate owns the fill, so
+    /// skipping it would leave the surface unpainted rather than merely flat.
+    pub fn plate(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32, radius: f32) {
+        let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+        self.plates.push((color, x, y, w, h, radius, depth));
     }
 
     /// A recessed well carved over the control at (x, y, w, h) — no-op when the

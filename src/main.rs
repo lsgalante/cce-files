@@ -73,6 +73,31 @@ fn clip_to_viewport(y: f32, h: f32, top: f32, bottom: f32) -> Option<(f32, f32)>
     Some((ny, nh))
 }
 
+/// Which side of an occluder a box's surviving span lies on, and where the cut
+/// falls — see [`wider_side`].
+enum Side {
+    /// Keep what lies before the occluder: clamp the box's far edge to this.
+    Before(f32),
+    /// Keep what lies after it: clamp the box's near edge to this.
+    After(f32),
+}
+
+/// On one axis, which side of the occluder leaves more of the box — the piece
+/// worth keeping when only one can be. `None` when the occluder covers the span
+/// outright and neither side survives.
+fn wider_side(t_min: f32, t_max: f32, o_min: f32, o_max: f32) -> Option<Side> {
+    let before = o_min - t_min;
+    let after = t_max - o_max;
+    if before <= 0.0 && after <= 0.0 {
+        return None;
+    }
+    if before >= after {
+        Some(Side::Before(o_min))
+    } else {
+        Some(Side::After(o_max))
+    }
+}
+
 /// Clip a text/label box against overlay rects so it does not bleed through
 /// popovers/menus/dialogs. Returns the adjusted clip bounds, or `None` if the
 /// box is fully covered (should be discarded).
@@ -103,17 +128,31 @@ fn occlude_against(
                 if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
                     return None;
                 }
-                if o_min_x > t_min_x && o_min_x < t_max_x {
-                    bounds[2] = bounds[2].min(o_min_x);
-                }
-                if o_max_x > t_min_x && o_max_x < t_max_x {
-                    bounds[0] = bounds[0].max(o_max_x);
-                }
-                if o_min_y > t_min_y && o_min_y < t_max_y {
-                    bounds[3] = bounds[3].min(o_min_y);
-                }
-                if o_max_y > t_min_y && o_max_y < t_max_y {
-                    bounds[1] = bounds[1].max(o_max_y);
+                // Cut on ONE axis, on ONE side. The result of subtracting a rect
+                // from a rect is not a rect, so this picks the largest piece that
+                // is: trim x, unless the occluder already spans the box
+                // horizontally and only a y cut can uncover anything.
+                //
+                // Clamping every side independently is what this used to do, and
+                // two clamps on one axis cross over into an inverted, empty band —
+                // so a box the occluder merely dipped into vanished whole, the
+                // part nothing covered along with the rest. That is how hovering a
+                // context-menu row erased the file-list row beside it: the hover
+                // fill's top edge landed inside that row's text band, and the y
+                // clamp it triggered threw away the name sitting well clear of the
+                // menu.
+                if o_min_x <= t_min_x && o_max_x >= t_max_x {
+                    match wider_side(t_min_y, t_max_y, o_min_y, o_max_y) {
+                        Some(Side::Before(cut)) => bounds[3] = bounds[3].min(cut),
+                        Some(Side::After(cut)) => bounds[1] = bounds[1].max(cut),
+                        None => return None,
+                    }
+                } else {
+                    match wider_side(t_min_x, t_max_x, o_min_x, o_max_x) {
+                        Some(Side::Before(cut)) => bounds[2] = bounds[2].min(cut),
+                        Some(Side::After(cut)) => bounds[0] = bounds[0].max(cut),
+                        None => return None,
+                    }
                 }
             }
         }
@@ -2508,4 +2547,86 @@ impl Application for FilesystemApp {
 #[tokio::main]
 async fn main() {
     cce_ui::engine::run::<FilesystemApp>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WIN: [f32; 4] = [0.0, 0.0, 1000.0, 700.0];
+
+    fn rect_overlay(x: f32, y: f32, w: f32, h: f32) -> pages::PageContent {
+        let mut pc = pages::PageContent::new();
+        pc.rect([0.0, 0.0, 0.0, 1.0], x, y, w, h);
+        pc
+    }
+
+    fn plate_overlay(x: f32, y: f32, w: f32, h: f32) -> pages::PageContent {
+        let mut pc = pages::PageContent::new();
+        pc.plates.push(([0.0, 0.0, 0.0, 1.0], x, y, w, h, 8.0, 4.0));
+        pc
+    }
+
+    /// A box the overlay covers outright is discarded, not clipped.
+    #[test]
+    fn a_covered_box_is_dropped() {
+        let menu = rect_overlay(300.0, 253.0, 430.0, 120.0);
+        assert!(occlude_against(WIN, 320.0, 400.0, 300.0, 317.0, &[&menu]).is_none());
+    }
+
+    /// An overlay's face is a plate now, so the sweep has to see plates or the
+    /// page's text draws straight through the surface covering it.
+    #[test]
+    fn a_plate_occludes_like_a_rect() {
+        let menu = plate_overlay(300.0, 253.0, 430.0, 120.0);
+        assert!(occlude_against(WIN, 320.0, 400.0, 300.0, 317.0, &[&menu]).is_none());
+    }
+
+    /// The regression. A file-list row's name sits well left of the menu, but the
+    /// row's box runs under it, and the hovered menu row's fill dips into that
+    /// box's band from below without spanning it horizontally. Clamping both axes
+    /// crossed the y bounds over into an empty band and the whole line vanished,
+    /// the name along with the part under the menu. Only the x cut is legitimate
+    /// here: the name must survive whole.
+    #[test]
+    fn an_overlay_that_only_dips_in_does_not_erase_the_line() {
+        let menu = rect_overlay(300.0, 253.0, 430.0, 120.0);
+        let hover = rect_overlay(305.0, 294.0, 420.0, 20.0);
+
+        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[&menu, &hover])
+            .expect("a line the overlay only dips into still has a visible run");
+
+        assert_eq!(b[2], 300.0, "clipped at the menu's left edge");
+        assert_eq!(b[3], WIN[3], "and NOT clipped vertically — that is the erasure");
+        assert_eq!(b[1], WIN[1]);
+        assert_eq!(b[0], WIN[0]);
+    }
+
+    /// The y cut is still right when the overlay spans the box horizontally: no
+    /// horizontal trim can uncover anything, so the surviving run is the strip
+    /// above (here) or below the overlay.
+    #[test]
+    fn an_overlay_spanning_the_box_clips_it_vertically() {
+        let menu = rect_overlay(300.0, 253.0, 430.0, 120.0);
+        let b = occlude_against(WIN, 320.0, 400.0, 240.0, 257.0, &[&menu]).expect("straddles the top");
+        assert_eq!(b[3], 253.0, "clipped to the strip above the menu");
+        assert_eq!(b[2], WIN[2], "and not trimmed horizontally");
+    }
+
+    /// Of the two sides an overlay leaves, the cut keeps the wider one — the most
+    /// of the box that a single clip rect can still express.
+    #[test]
+    fn the_cut_keeps_the_wider_side() {
+        // Overlay near the box's right end: the long run before it survives.
+        let right = rect_overlay(380.0, 0.0, 200.0, 700.0);
+        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[&right]).unwrap();
+        assert_eq!(b[2], 380.0);
+        assert_eq!(b[0], WIN[0]);
+
+        // Overlay near the left end: the run after it survives instead.
+        let left = rect_overlay(0.0, 0.0, 80.0, 700.0);
+        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[&left]).unwrap();
+        assert_eq!(b[0], 80.0);
+        assert_eq!(b[2], WIN[2]);
+    }
 }

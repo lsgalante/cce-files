@@ -713,14 +713,26 @@ impl FilesystemApp {
             let cw = self.context_menu.w;
             let ch = self.context_menu.h;
 
-            // The menu is a lit plate, the same material as the panes it floats
-            // over: a rounded face plus the rolled perimeter, one primitive. It
-            // used to be a flat fill inside a 1px border rect with a Boss rim
-            // laid over the top — three marks for one edge, and the rim's hard
-            // light/dark frame at radius 0 read as a drawn box rather than a
-            // surface with a lit edge.
+            // The menu is a lit plate of the same material as the surface it
+            // opens on: it takes the HOST plate's face rather than a popover
+            // color of its own, and floats as frosted glass — the configured
+            // translucency plus the blur-behind sentinel (negative alpha), which
+            // is the breadcrumb's raised-run treatment. The frost is not
+            // decoration at this alpha: it is what keeps the labels readable
+            // over live content instead of over a legible-by-luck backdrop.
+            //
+            // A fully transparent host fill degrades to the edges-only boss,
+            // exactly as the raised run does — with no face to tint, a plate
+            // would paint a hole.
             let menu_r = cce_ui::layout::plate_corner_radius();
-            context_menu_pc.plate(cce_ui::color::popover_bg_color(), cx, cy, cw, ch, menu_r);
+            let face = cce_ui::color::page_low_color();
+            if face[3] > 0.001 {
+                let mut frosted = face;
+                frosted[3] = -frosted[3];
+                context_menu_pc.plate(frosted, cx, cy, cw, ch, menu_r);
+            } else {
+                context_menu_pc.relief_raised(cx, cy, cw, ch, menu_r);
+            }
             // Hover highlight, inset off the roll so it sits on the face rather
             // than climbing the lit edge. The last row is the only one that meets
             // a rounded corner (row 0 is the header and never highlights), so it
@@ -742,12 +754,16 @@ impl FilesystemApp {
             // Text options
             for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
                 let iy = cy + idx as f32 * ROW_H + (ROW_H - 12.0) / 2.0;
+                // The toolkit's semantic text colors, not the hand-mixed greys
+                // that came with the near-black popover face: the header's old
+                // 0.44 grey was a step above black and all but vanishes on the
+                // plate's own mid-slate.
                 let text_color = if idx == 0 {
-                    [0.44, 0.44, 0.47, 1.0]
+                    cce_ui::color::TEXT_DIM
                 } else if self.context_menu.hovered == Some(idx) {
-                    [1.0, 1.0, 1.0, 1.0]
+                    cce_ui::color::TEXT_HEADER
                 } else {
-                    [0.8, 0.8, 0.83, 1.0]
+                    cce_ui::color::TEXT_FG
                 };
                 context_menu_pc.text(opt, cx + 8.0, iy, 12.0, text_color);
             }

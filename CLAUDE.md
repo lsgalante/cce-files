@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`cce-files` is a Wayland-native file manager, one app in the larger **CCE** desktop-environment ecosystem (the sibling `cce-*` crates under `../`). It renders directly on a Wayland surface with raw Vulkan (via **ash**), with glyphon/cosmic-text for text shaping — there is no GTK/Qt/web layer. All GUI primitives come from the sibling crate **`cce-ui`** (`../cce-ui`, a path dependency), which owns the windowing/event loop, the widget toolkit, layout, fonts, and colors; the rendering itself lives in `cce-ui/src/vk/` (`VkRenderer`), so this crate declares no graphics dependency of its own.
+`cce-files` is a Wayland-native file manager, one app in the larger **CCE** desktop-environment ecosystem (the sibling `cce-*` crates under `../`). It renders directly on a Wayland surface with raw Vulkan (via **ash**), with **cosmic-text** for text shaping — there is no GTK/Qt/web layer. All GUI primitives come from the sibling crate **`cce-ui`** (`../cce-ui`, a path dependency), which owns the windowing/event loop, the widget toolkit, layout, fonts, and colors; the rendering itself lives in `cce-ui/src/vk/` (`VkRenderer`), so this crate declares no graphics dependency of its own.
 
 ## Build / run / test
 
@@ -24,9 +24,9 @@ Running the binary requires a Wayland session — it will not run headless. Edit
 `main.rs` defines `FilesystemApp`, which implements `cce_ui::engine::Application`. That trait drives everything through a message loop:
 - **`Message`** (`lib.rs`) is the single top-level event enum; page-specific messages nest inside it (`Message::Browse(BrowseMessage)`, `Message::Preview(PreviewMessage)`).
 - **`update()`** mutates state in response to a `Message` and may dispatch async work to `FsService`.
-- **`view` / `rebuild_layout()`** produce the frame. cce-ui calls `view_rounded_quads()` / `text_items()` to pull the rendered geometry.
+- **`view` / `rebuild_layout()`** produce the frame, and **`display_list()`** is the single paint path: it re-runs `rebuild_layout()` when the size, the scale, or `needs_rebuild` says to, then replays the flattened buffers into a `PaintCtx`. `display_list_text()` opts the text into the engine's shaping pass. (The legacy `view_rounded_quads()` / `text_items()` pull methods are gone.)
 
-Each page has a `state` struct and a `view()` that returns a `PageContent` (`pages/mod.rs`) — a flat list of rects, texts, and buttons — which `rebuild_layout` later translates into GPU quads and glyphon `TextItem`s. Interactive pages also carry their own `Message` enum + `update()` (`pages/browse.rs`, `pages/preview.rs`); Network is view-only, driven directly from `BrowseState` and pointer/graph events, so it has no message type of its own.
+Each page has a `state` struct and a `view()` that returns a `PageContent` (`pages/mod.rs`) — a flat list of rects, texts, and buttons — which `rebuild_layout` later flattens into `self.widgets` + `self.texts` for the paint path. (`PageContent` also carries `reliefs`, `grooves`, and `images` — the edge-only relief walls drawn over the flat rects, the breadcrumb's slanted seams, and GPU-textured quads.) Interactive pages also carry their own `Message` enum + `update()` (`pages/browse.rs`, `pages/preview.rs`); Network is view-only, driven directly from `BrowseState` and pointer/graph events, so it has no message type of its own.
 
 Shared, page-independent formatting helpers (`format_size`, `format_permissions`) live in `src/util.rs`.
 
@@ -34,15 +34,19 @@ Shared, page-independent formatting helpers (`format_size`, `format_permissions`
 `services/fs.rs` runs a Tokio task that receives `FsRequest`s (read dir, refresh, read preview, delete, load/save last dir), performs the blocking IO, and sends results back into the app as `Message`s over a `calloop::channel::Sender`. `update()` never does blocking IO directly — it sends an `FsRequest` and handles the resulting message later. A `notify` watcher (`start_watching`) debounces filesystem events and triggers `RefreshDirectory`.
 
 ### rebuild_layout is the render heart (main.rs)
-`rebuild_layout()` gathers geometry from five sources — the root window, page content, popovers, the context menu, and the open-with dialog — and flattens them into `self.widgets` + `self.text_items`. Two non-obvious concerns live here:
+`rebuild_layout()` gathers geometry from five sources — the root window, page content, popovers, the context menu, and the open-with dialog — and flattens them into `self.widgets` + `self.texts`. Two non-obvious concerns live here:
 - **Viewport clipping**: page content is clipped to the content region so scrolled rows/text don't overflow into the breadcrumb or selection bar.
 - **Overlay occlusion**: text/buttons under a popover, context menu, or dialog are either discarded or bound-clipped so they don't bleed through overlays. This is the logic behind commits like "Fix text rendering through popovers/overlays."
 
-### Widget hierarchy uses raw pointers
-`BrowseContainer` and `NetworkContainer` are composite widgets whose children (`breadcrumb`, `list_box`, `save_name_box`, `graph`) are held as `*mut dyn Element` and wired up in `set_parent` via `ctx.register_widget` / `ctx.link_ids`. This mirrors the cce-ui widget model; the containers are `unsafe impl Send/Sync`. When adding a child widget to a container, replicate the register + link + `set_parent` sequence, and clear it in `rebuild_layout`'s teardown block.
+### Widgets register parentless, once per rebuild
+There are no composite container widgets. Every widget is owned outright by the app or by a page's state struct — `self.paginator`, `self.view_dropdown`, `self.browse.breadcrumb`, `self.browse.save_name_box`, `self.network.graph`, `self.space.breadcrumb`, … — and each `rebuild_layout` re-establishes the whole hierarchy from scratch: `ui_context.clear_hierarchy()`, then a teardown block calling `clear_children` + `set_parent(None)` on every widget, then registration via `ctx.register_widget(w.base().id(), w.as_ptr_mut())` with `set_parent(None)` again. Raw pointers are still involved (`as_ptr_mut`, plus a `self_ptr` alias so the registration loop can hold the app twice), but they belong to the cce-ui widget model rather than to any container of this crate's.
+
+**When adding a widget, add it to both halves of that pass** — the teardown block and the registration block. Skipping the teardown leaves hierarchy links alive across frames.
+
+(`BrowseContainer` and `NetworkContainer` were shims holding children as `*mut dyn Element`; they dissolved in Phase 6y along with the root `Backplate` and `SplitBox`. Their positioning duplicated what the pages already computed from the pane rect — that coincidence was the Phase 0 double-paint — and the only part worth keeping, the divider, became `SplitPane`. See the comment above `SplitPane` in `main.rs`.)
 
 ### Three pages, one preview
-- **Browse** — the `List` widget (columnar, integrated search box) plus a `Breadcrumb`. The right pane is a `Preview` widget, split from the list by a `SplitBox`.
+- **Browse** — the `List` widget (columnar, integrated search box) plus a `Breadcrumb`. The right pane is a `Preview` widget, split from the list by `SplitPane` — app-owned (`main.rs`), carrying the `SplitBox` two-child horizontal math verbatim plus the divider quad, its hover tint, and the proportion drag.
 - **Network** — a `Graph` view of the same directory (nodes = entries), also split against the preview.
 - **Space** — a GrandPerspective-style treemap of the whole subtree, also split against the preview.
 The active page is picked by `view_dropdown` next to the breadcrumb (there is no sidebar — it was removed; `has_sidebar` is hardcoded `false`). The dropdown's labels name the *visualization* ("List"/"Graph"/"Space") and are a separate list from `Page::label()` ("Browse"/"Network"/"Space") — but **its order must track `Page::ALL`**, because the selected index is indexed straight into it.

@@ -1641,9 +1641,10 @@ impl Application for FilesystemApp {
                 cce_ui::widget::context_menu::x() + cce_ui::widget::context_menu::w(),
                 cce_ui::widget::context_menu::y() + cce_ui::widget::context_menu::h(),
             ]);
-            for (qx, qy, qw, qh, qc) in cce_ui::widget::context_menu::extra_quads() {
-                pc.quad(Rect { x: qx, y: qy, width: qw, height: qh }, qc);
-            }
+            // The shared menu paints itself as a lit plate (cce-ui), so the
+            // breadcrumb's copy-path menu is the same frosted glass as the row
+            // menu above rather than the flat quads it used to stack.
+            cce_ui::widget::context_menu::paint(&mut pc);
             for label in cce_ui::widget::context_menu::text_labels() {
                 pc.text_with(
                     label.text.clone(),

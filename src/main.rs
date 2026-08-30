@@ -2418,6 +2418,28 @@ impl Application for FilesystemApp {
             }
         }
 
+        // An open view dropdown takes the keyboard — Escape closes it, arrows
+        // move the hover, Enter selects — routed to the widget exactly like
+        // its mouse events are (see handle_mouse_input). Gated on `open`:
+        // this app routes keys per feature rather than to a whole tree, and
+        // the dropdown was simply never on the list, which left its own
+        // Escape handling unreachable.
+        if self.view_dropdown.open {
+            let kev = cce_ui::widget::Event::KeyInput(event.clone());
+            if { let root = self.view_dropdown.id(); self.ui_context.propagate_event(&kev, root) } {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                if self.view_dropdown.take_change() {
+                    let new_page = Page::ALL
+                        .get(self.view_dropdown.selected)
+                        .copied()
+                        .unwrap_or(Page::Browse);
+                    return Some(Message::SwitchPage(new_page));
+                }
+                return None;
+            }
+        }
+
         // The dissolved List's search keys, app-side: the open shortcut shows the strip
         // and focuses the box; the close shortcut hides it and clears the filter (the
         // legacy List set just_changed after clearing, which surfaced as an empty

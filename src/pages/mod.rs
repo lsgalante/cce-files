@@ -242,11 +242,30 @@ impl PageContent {
         self.plates.push((color, x, y, w, h, radius, depth));
     }
 
+    /// Wall width for a carve whose corners are rounded at `radius`, capped so
+    /// the wall stays crease-free through the corner. A carve's wall straddles
+    /// the boundary, reaching `depth / 2` inward — and the inward offsets of a
+    /// squircle corner kink into a square crease past the corner's diagonal
+    /// curvature radius (`radius / corner_span_factor()`). The plate path
+    /// avoids this by widening its corner span instead, which a carve cannot:
+    /// its silhouette must stay on the widget's own nominal-radius corner.
+    /// Only tall rects ever feel the cap (a control's `h * 0.2` already lands
+    /// under it); the list well is the case that motivated it. Zero radius is
+    /// exempt — square corners meet in a miter by design.
+    fn carve_depth(h: f32, radius: f32) -> f32 {
+        let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+        if radius > 0.0 {
+            depth.min(2.0 * radius / cce_ui::layout::corner_span_factor())
+        } else {
+            depth
+        }
+    }
+
     /// A recessed well carved over the control at (x, y, w, h) — no-op when the
     /// DE's control_relief styling is off.
     pub fn relief_recessed(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
-            let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+            let depth = Self::carve_depth(h, radius);
             self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RECESSED));
         }
     }
@@ -255,7 +274,7 @@ impl PageContent {
     /// control_relief styling is off.
     pub fn relief_raised(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
-            let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+            let depth = Self::carve_depth(h, radius);
             self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RAISED));
         }
     }
@@ -274,7 +293,7 @@ impl PageContent {
     /// when the DE's control_relief styling is off.
     pub fn relief_inset(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
         if cce_ui::layout::control_relief() {
-            let depth = cce_ui::layout::bevel_width().min(h * 0.2);
+            let depth = Self::carve_depth(h, radius);
             self.reliefs.push((x, y, w, h, radius, depth, RELIEF_INSET));
         }
     }

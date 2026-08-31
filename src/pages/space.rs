@@ -313,6 +313,9 @@ pub struct SpaceState {
     /// Raised to abandon the in-flight scan when a newer one supersedes it.
     pub cancel: Arc<AtomicBool>,
     pub error: Option<String>,
+    /// Pointer focus (the app's well-focus tracking): the map well renders as
+    /// the tinted carve — accent ring replacing the relief lighting.
+    pub focused: bool,
 }
 
 impl Default for SpaceState {
@@ -333,6 +336,7 @@ impl Default for SpaceState {
             scan_bytes: 0,
             cancel: Arc::new(AtomicBool::new(false)),
             error: None,
+            focused: false,
         }
     }
 }
@@ -505,7 +509,11 @@ pub fn view(
         use cce_ui::layout::RenderTarget;
         pc.rect_with_radius_corners(bg, map.0, map.1, map.2, map.3, radius, (true, true, true, true));
     }
-    pc.relief_recessed(map.0, map.1, map.2, map.3, radius);
+    if state.focused {
+        pc.relief_recessed_focused(map.0, map.1, map.2, map.3, radius);
+    } else {
+        pc.relief_recessed(map.0, map.1, map.2, map.3, radius);
+    }
 
     let text_dim = cce_ui::color::TEXT_DIM;
     let text_fg = cce_ui::color::TEXT_FG;

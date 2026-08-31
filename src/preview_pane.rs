@@ -66,6 +66,18 @@ pub struct PreviewPane {
     /// site, so a stale id can never leak against the renderer's image budget.
     image_tex: Option<(u32, u32, u32)>,
     pub scroll_line: usize,
+    /// Which of the pane's two wells holds pointer focus (the app's well-focus
+    /// tracking): that well renders as the tinted carve — accent ring
+    /// replacing the relief lighting.
+    pub focused_well: Option<PreviewWell>,
+}
+
+/// The preview pane's two recessed wells: the file-preview section (top half)
+/// and the details section below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewWell {
+    Top,
+    Bottom,
 }
 
 impl Default for PreviewPane {
@@ -84,6 +96,7 @@ impl Default for PreviewPane {
             content_preview: None,
             image_tex: None,
             scroll_line: 0,
+            focused_well: None,
         }
     }
 }
@@ -104,6 +117,29 @@ impl PreviewPane {
 
     pub fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.rect = (x, y, w, h);
+    }
+
+    /// Which well the point lands in, mirroring the paint-time geometry below
+    /// (top well = upper half of the pane rect; details well from half + the
+    /// plate gap down). `None` when no file is shown — the wells aren't drawn,
+    /// so there is nothing to focus.
+    pub fn well_at(&self, px: f32, py: f32) -> Option<PreviewWell> {
+        if self.path.is_none() {
+            return None;
+        }
+        let (cx, cy, cw, ch) = self.rect;
+        if cw <= 0.0 || ch <= 0.0 || px < cx || px > cx + cw {
+            return None;
+        }
+        let half_h = ch * 0.5;
+        let details_top = cy + half_h + cce_ui::layout::root_plate_gap();
+        if py >= cy && py <= cy + half_h {
+            Some(PreviewWell::Top)
+        } else if py >= details_top && py <= cy + ch {
+            Some(PreviewWell::Bottom)
+        } else {
+            None
+        }
     }
 
     pub fn rect(&self) -> (f32, f32, f32, f32) {
@@ -228,7 +264,11 @@ impl PreviewPane {
             }
         }
         if relief {
-            pc.relief_recessed(cx, cy, cw, half_h, radius);
+            if self.focused_well == Some(PreviewWell::Top) {
+                pc.relief_recessed_focused(cx, cy, cw, half_h, radius);
+            } else {
+                pc.relief_recessed(cx, cy, cw, half_h, radius);
+            }
         }
         let rect_y = cy + 12.0;
         let rect_h = half_h - pad - 24.0;
@@ -298,7 +338,11 @@ impl PreviewPane {
             }
         }
         if relief {
-            pc.relief_recessed(cx, details_top, cw, (cy + ch) - details_top, radius);
+            if self.focused_well == Some(PreviewWell::Bottom) {
+                pc.relief_recessed_focused(cx, details_top, cw, (cy + ch) - details_top, radius);
+            } else {
+                pc.relief_recessed(cx, details_top, cw, (cy + ch) - details_top, radius);
+            }
         }
 
         let header_y = details_content_start_y + 6.0;

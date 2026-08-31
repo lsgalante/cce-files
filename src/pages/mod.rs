@@ -145,6 +145,10 @@ pub fn dropdown_relief(pc: &mut PageContent, rect: cce_ui::scene::layout::Rect) 
 pub const RELIEF_RECESSED: u8 = 0;
 pub const RELIEF_RAISED: u8 = 1;
 pub const RELIEF_INSET: u8 = 2;
+/// A recessed well with pointer focus: renders as the tinted carve — the
+/// wrapped accent glint REPLACING the relief lighting (the DE's one focus
+/// language, same treatment as a focused plate's ring).
+pub const RELIEF_RECESSED_FOCUS: u8 = 3;
 
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
@@ -267,6 +271,15 @@ impl PageContent {
         if cce_ui::layout::control_relief() {
             let depth = Self::carve_depth(h, radius);
             self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RECESSED));
+        }
+    }
+
+    /// [`Self::relief_recessed`] for the well holding pointer focus: the ring
+    /// replaces the lighting (see [`RELIEF_RECESSED_FOCUS`]).
+    pub fn relief_recessed_focused(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+        if cce_ui::layout::control_relief() {
+            let depth = Self::carve_depth(h, radius);
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_RECESSED_FOCUS));
         }
     }
 

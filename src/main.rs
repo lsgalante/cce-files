@@ -182,6 +182,11 @@ enum WidgetFx {
     Plate(f32),
     /// Edges-only carve into whatever is painted below (recessed wells).
     Recess(f32),
+    /// [`WidgetFx::Recess`] with pointer focus: the tinted carve — the wrapped
+    /// accent glint REPLACING the relief lighting (the DE's one focus
+    /// language; the shader drops the diffuse/curvature terms for tinted
+    /// carves, so the ring is all that shows).
+    RecessFocus(f32),
     /// A flush inset control (buttons): groove ring carved down around the
     /// rect, beveled lip back up inside, face level with the surface.
     Inset(f32),
@@ -370,12 +375,25 @@ impl BrowseKeys {
     }
 }
 
+/// Which recessed well holds pointer focus — the one wearing the accent ring
+/// (its relief lighting swapped for the tinted carve's wrapped glint, the
+/// same focus language as plates). Follows the last left press that reaches
+/// page content; the content well (list / treemap) starts focused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusedWell {
+    Content,
+    PreviewTop,
+    PreviewBottom,
+}
+
 struct FilesystemApp {
     current_page: Page,
     browse: pages::browse::BrowseState,
     network: pages::network::NetworkState,
     space: pages::space::SpaceState,
     preview: cce_files::preview_pane::PreviewPane,
+    /// See [`FocusedWell`]; drives the per-well `focused` flags each rebuild.
+    focused_well: FocusedWell,
 
     // Command-line chooser options
     select_mode: bool,
@@ -529,6 +547,15 @@ impl FilesystemApp {
     }
 
     fn rebuild_layout(&mut self) {
+
+        // Well focus → the emitters (each picks the tinted carve when set).
+        self.browse.list.focused = self.focused_well == FocusedWell::Content;
+        self.space.focused = self.focused_well == FocusedWell::Content;
+        self.preview.focused_well = match self.focused_well {
+            FocusedWell::PreviewTop => Some(cce_files::preview_pane::PreviewWell::Top),
+            FocusedWell::PreviewBottom => Some(cce_files::preview_pane::PreviewWell::Bottom),
+            FocusedWell::Content => None,
+        };
 
         self.ui_context.clear_hierarchy();
         self.browse.save_name_box.prepare_text(&mut self.font_system);
@@ -936,6 +963,7 @@ impl FilesystemApp {
                     fx: match *kind {
                         pages::RELIEF_RAISED => WidgetFx::Boss(*rd),
                         pages::RELIEF_INSET => WidgetFx::Inset(*rd),
+                        pages::RELIEF_RECESSED_FOCUS => WidgetFx::RecessFocus(*rd),
                         _ => WidgetFx::Recess(*rd),
                     },
                 });
@@ -1212,6 +1240,7 @@ impl Application for FilesystemApp {
             network: pages::network::NetworkState::default(),
             space: pages::space::SpaceState::default(),
             preview: Default::default(),
+            focused_well: FocusedWell::Content,
             preview_dock: Default::default(),
             preview_prior_fracs: None,
             plate_menu_actions: Vec::new(),
@@ -1568,6 +1597,10 @@ impl Application for FilesystemApp {
                 WidgetFx::Plate(depth) => pc.plate(rect, radii, w.color, depth),
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
+                WidgetFx::RecessFocus(depth) => {
+                    let hc = cce_ui::color::highlight_primary_color();
+                    pc.recess_tinted(rect, radii, depth, [hc[0], hc[1], hc[2]]);
+                }
                 WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, w.color, depth),
                 WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
                 WidgetFx::Groove { ax, ay, bx, by, width, depth } => {
@@ -2122,6 +2155,44 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 return None;
+            }
+        }
+
+        // Well focus follows the left click, keyed on RELEASE like the
+        // plate-dock control above: the routed-widget path consumes left
+        // PRESSES before this hook, so only releases reliably arrive here.
+        // Every overlay above the page (plate-dock menu, context menu, dialog,
+        // dropdown, divider grab) has already returned, so a release reaching
+        // here is on page content: move the accent ring to the well it landed
+        // in, then let the release do its normal work. Releases outside any
+        // well (toolbar, plate) change nothing.
+        if button == MouseButton::Left && state == ElementState::Released {
+            let new_focus = if !self.preview_dock.collapsed
+                && let Some(well) = self.preview.well_at(pos.x, pos.y)
+            {
+                Some(match well {
+                    cce_files::preview_pane::PreviewWell::Top => FocusedWell::PreviewTop,
+                    cce_files::preview_pane::PreviewWell::Bottom => FocusedWell::PreviewBottom,
+                })
+            } else {
+                let split = match self.current_page {
+                    Page::Browse => &self.browse_split,
+                    Page::Network => &self.network_split,
+                    Page::Space => &self.space_split,
+                };
+                let (lx, ly, lw, lh) = split.left_rect();
+                if pos.x >= lx && pos.x <= lx + lw && pos.y >= ly && pos.y <= ly + lh {
+                    Some(FocusedWell::Content)
+                } else {
+                    None
+                }
+            };
+            if let Some(f) = new_focus
+                && f != self.focused_well
+            {
+                self.focused_well = f;
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
             }
         }
 

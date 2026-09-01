@@ -133,11 +133,15 @@ impl RowList {
         px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
     }
 
-    /// `ScrollBox::get_item_draw_y` over the row index (rows fully visible only).
+    /// Screen y for row `idx`, or `None` when the row doesn't intersect the
+    /// viewport at all (the toolkit ScrollRegion's intersection contract):
+    /// partially visible rows ARE returned — their bg quads clamp and their
+    /// text is bounds-clipped in `push_prims`, so an edge row renders cut,
+    /// not culled.
     fn get_item_draw_y(&self, idx: usize) -> Option<f32> {
         let virtual_y = idx as f32 * (self.item_height + self.item_gap) + 2.0;
         let draw_y = self.y + virtual_y - self.scroll_y;
-        if draw_y >= self.y - 1.0 && draw_y + self.item_height <= self.y + self.viewport_h + 1.0 {
+        if draw_y + self.item_height >= self.y - 1.0 && draw_y <= self.y + self.viewport_h + 1.0 {
             Some(draw_y)
         } else {
             None
@@ -145,8 +149,13 @@ impl RowList {
     }
 
     /// The visible row index under (px, py) — the click/hover hit-test, public
-    /// for the app's right-click row menu.
+    /// for the app's right-click row menu. The viewport gate keeps the hidden
+    /// part of an edge-straddling row unhittable: only its visible sliver
+    /// matches, mirroring what `push_prims` draws.
     pub fn row_at(&self, px: f32, py: f32) -> Option<usize> {
+        if py < self.y || py > self.y + self.viewport_h {
+            return None;
+        }
         for idx in 0..self.rows.len() {
             if let Some(draw_y) = self.get_item_draw_y(idx) {
                 if px >= self.x + 2.0 && px <= self.x + self.w - 2.0 && py >= draw_y && py <= draw_y + self.item_height {
@@ -407,7 +416,14 @@ impl RowList {
                 [0.0, 0.0, 0.0, 0.0]
             };
             if bg[3] > 0.001 {
-                pc.rect(bg, x + 2.0, draw_y, w - 4.0, self.item_height);
+                // Clamped to the viewport: `get_item_draw_y` returns partial
+                // rows, and an unclamped hover/selection quad would bleed out
+                // of the well (exact for a flat quad).
+                let qy = draw_y.max(y);
+                let qb = (draw_y + self.item_height).min(y + self.viewport_h);
+                if qb > qy {
+                    pc.rect(bg, x + 2.0, qy, w - 4.0, qb - qy);
+                }
             }
 
             let row_fg = if row.selected { fg } else { plain_fg };

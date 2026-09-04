@@ -36,7 +36,7 @@ pub fn update(state: &mut PreviewPane, msg: PreviewMessage) {
             state.target = data.target;
             state.content_preview = data.content_preview;
             state.set_image(data.image_preview.map(|img| (img.pixels, img.width, img.height)));
-            state.scroll_line = 0;
+            state.reset_scroll();
         }
     }
 }

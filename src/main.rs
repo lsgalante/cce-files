@@ -1531,6 +1531,20 @@ impl Application for FilesystemApp {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
+
+        // The app-owned scrollers' wheel glide / flick coast: the wheel only
+        // moves their target, these ticks carry the drawn offsets there, so
+        // frames must keep coming while either is live.
+        if self.browse.list.tick(dt) {
+            // Rows slid under a still pointer: re-derive the hover.
+            self.browse.list.cursor_moved(self.cursor_x, self.cursor_y);
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+        }
+        if self.preview.tick(dt) {
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+        }
     }
 
     fn display_list(&mut self, size: LogicalSize, scale: f64) -> Option<cce_ui::scene::paint::DisplayList> {
@@ -2432,6 +2446,9 @@ impl Application for FilesystemApp {
                 eprintln!("[scroll] files: browse.list.wheel at ({:.0},{:.0}) -> {hit}", pos.x, pos.y);
             }
             if hit {
+                // A trackpad finger moves the rows now: keep the hover on the
+                // row under the pointer (a wheel glide does this in tick).
+                self.browse.list.cursor_moved(self.cursor_x, self.cursor_y);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }

@@ -319,6 +319,12 @@ impl PageContent {
         self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string()), None));
     }
 
+    /// `text_with_font` with an explicit clip box `[l, t, r, b]` — for text
+    /// that scrolls under an edge and must render cut, not culled.
+    pub fn text_with_font_bounded(&mut self, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: &str, bounds: [f32; 4]) {
+        self.texts.push((content.to_string(), size, x, y, color, Some(font.to_string()), Some(bounds)));
+    }
+
     pub fn button(
         &mut self,
         label: &str,

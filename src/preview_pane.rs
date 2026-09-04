@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use cce_ui::layout::SectionContext;
 use cce_ui::scene::layout::{fit_rect, FitMode, Rect};
 use cce_ui::widget::display::{measure_text_width, truncate_tail};
-use cce_ui::widget::MouseScrollDelta;
+use cce_ui::widget::{Bounds, MouseScrollDelta, ScrollMotion};
 
 /// Truncate `s` to fit `avail` px, measured for real (resvg-backed, cached per
 /// string+size — the handful of details strings re-measure only on selection
@@ -48,6 +48,11 @@ fn truncate_px(s: &str, family: &str, size: f32, avail: f32, head: bool) -> Stri
 
 use crate::pages::PageContent;
 
+/// Pitch of the text preview's lines (11px monospace on a 15px advance).
+const PREVIEW_LINE_H: f32 = 15.0;
+/// One wheel notch moves the text preview three lines (the legacy speed).
+const PREVIEW_NOTCH_PX: f32 = 3.0 * PREVIEW_LINE_H;
+
 #[derive(Debug, Clone)]
 pub struct PreviewPane {
     rect: (f32, f32, f32, f32),
@@ -65,7 +70,12 @@ pub struct PreviewPane {
     /// exclusively through [`PreviewPane::set_image`] — the sole upload/free
     /// site, so a stale id can never leak against the renderer's image budget.
     image_tex: Option<(u32, u32, u32)>,
-    pub scroll_line: usize,
+    /// Text-preview scroll offset in pixels — the DRAWN value, which
+    /// `scroll_motion` glides (wheel) or coasts (trackpad flick). The paint
+    /// derives the first whole line and a sub-line remainder from it, so a
+    /// multi-notch wheel slides through the lines instead of stepping.
+    scroll_px: f32,
+    scroll_motion: ScrollMotion,
     /// Which of the pane's two wells holds pointer focus (the app's well-focus
     /// tracking): that well renders as the tinted carve — accent ring
     /// replacing the relief lighting.
@@ -95,7 +105,8 @@ impl Default for PreviewPane {
             target: String::new(),
             content_preview: None,
             image_tex: None,
-            scroll_line: 0,
+            scroll_px: 0.0,
+            scroll_motion: ScrollMotion::new(),
             focused_well: None,
         }
     }
@@ -164,10 +175,18 @@ impl PreviewPane {
         Some(self.scroll(delta, prev_h))
     }
 
-    fn scroll(&mut self, delta: &MouseScrollDelta, ch: f32) -> bool {
-        let content = match &self.content_preview {
-            Some(c) => c,
-            None => return false,
+    /// Back to the top, motion cancelled (a new file loaded).
+    pub fn reset_scroll(&mut self) {
+        self.scroll_px = 0.0;
+        self.scroll_motion = ScrollMotion::new();
+    }
+
+    /// How far the text preview can scroll, in pixels, for a pane `ch` tall:
+    /// the lines that don't fit the content well, times the line pitch. Zero
+    /// when there is no text or it all fits.
+    fn max_scroll_px(&self, ch: f32) -> f32 {
+        let Some(content) = &self.content_preview else {
+            return 0.0;
         };
         let total_lines = content.lines().count();
         let half_h = ch * 0.5;
@@ -177,23 +196,38 @@ impl PreviewPane {
             max_visible_lines += 1;
             text_y += 15.0;
         }
-        if total_lines <= max_visible_lines {
-            if self.scroll_line != 0 {
-                self.scroll_line = 0;
+        total_lines.saturating_sub(max_visible_lines) as f32 * PREVIEW_LINE_H
+    }
+
+    fn scroll(&mut self, delta: &MouseScrollDelta, ch: f32) -> bool {
+        let max = self.max_scroll_px(ch);
+        if max <= 0.0 {
+            if self.scroll_px != 0.0 {
+                self.reset_scroll();
                 return true;
             }
             return false;
         }
-        let max_scroll = total_lines.saturating_sub(max_visible_lines);
-        let scroll_speed = 3.0;
-        let diff = match delta {
-            MouseScrollDelta::LineDelta(_, y) => -y * scroll_speed,
-            MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / 15.0,
-        };
-        let prev_scroll = self.scroll_line;
-        let new_scroll = (self.scroll_line as f32 + diff).round() as isize;
-        self.scroll_line = new_scroll.clamp(0, max_scroll as isize) as usize;
-        self.scroll_line != prev_scroll
+        // A notch is three lines (the legacy `scroll_speed`); a pixel delta
+        // is pixels, as before (it used to be divided by the line pitch and
+        // rounded to whole lines).
+        self.scroll_motion.reconcile(0.0, self.scroll_px);
+        let moved = self.scroll_motion.apply(delta, (PREVIEW_NOTCH_PX, PREVIEW_NOTCH_PX), Bounds::max(0.0), Bounds::max(max));
+        self.scroll_px = self.scroll_motion.y.pos();
+        moved
+    }
+
+    /// Advance the text preview's wheel glide / flick coast; true while the
+    /// offset is moving, so the host keeps frames coming until it settles.
+    pub fn tick(&mut self, dt: f32) -> bool {
+        self.scroll_motion.reconcile(0.0, self.scroll_px);
+        if !self.scroll_motion.is_animating() {
+            return false;
+        }
+        let max = self.max_scroll_px(self.rect.3);
+        let moved = self.scroll_motion.tick(dt, Bounds::max(0.0), Bounds::max(max));
+        self.scroll_px = self.scroll_motion.y.pos();
+        moved || self.scroll_motion.is_animating()
     }
 
     /// One pass: sections, fills, image runs, and text — every text emitted with
@@ -293,9 +327,18 @@ impl PreviewPane {
             );
             pc.image(id, fitted.x, fitted.y, fitted.width, fitted.height, 1.0);
         } else if let Some(content) = &self.content_preview {
-            let mut text_y = rect_y + 12.0;
-            for line in content.lines().skip(self.scroll_line) {
-                if text_y + 14.0 > rect_y + rect_h - 8.0 {
+            // The first whole line scrolled past, plus the sub-line remainder
+            // the glide is mid-way through: lines slide under the well's top
+            // and bottom edges, clipped to the content box so a partial line
+            // renders cut rather than popping.
+            let first_line = (self.scroll_px / PREVIEW_LINE_H).floor().max(0.0);
+            let frac = self.scroll_px - first_line * PREVIEW_LINE_H;
+            let clip_top = rect_y;
+            let clip_bottom = rect_y + rect_h - 8.0;
+            let clip = [cx, clip_top, cx + cw, clip_bottom];
+            let mut text_y = rect_y + 12.0 - frac;
+            for line in content.lines().skip(first_line as usize) {
+                if text_y >= clip_bottom {
                     break;
                 }
                 // Chars-per-width from one measured glyph (cached) instead of
@@ -303,8 +346,8 @@ impl PreviewPane {
                 let char_w = measure_text_width("M", "monospace", 11.0).max(1.0);
                 let limit = (((cw - 24.0) / char_w).floor() as usize).max(20);
                 let line_truncated = truncate_tail(line, limit);
-                pc.text_with_font(&line_truncated, cx + 12.0, text_y, 11.0, text_fg, "monospace");
-                text_y += 15.0;
+                pc.text_with_font_bounded(&line_truncated, cx + 12.0, text_y, 11.0, text_fg, "monospace", clip);
+                text_y += PREVIEW_LINE_H;
             }
         } else {
             pc.text("No preview available", cx + 12.0, rect_y + 12.0, 11.0, text_dim);

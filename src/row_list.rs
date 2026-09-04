@@ -19,7 +19,7 @@
 //! reinstate the exact Phase 6v sandwich this note describes. It would also be silent:
 //! the bg is translucent, so the overlays wash out rather than disappear.
 
-use cce_ui::widget::{Justification, MouseScrollDelta};
+use cce_ui::widget::{Bounds, Justification, MouseScrollDelta, ScrollMotion, LINE_PX};
 
 /// Column sizing (moved here with the cce-ui `List` deletion — RowList is the only
 /// remaining consumer of the column model).
@@ -55,7 +55,11 @@ pub struct RowList {
     /// Row height with `List::new`'s silent adjustment to `max(item_height, list_font + 14)`.
     pub item_height: f32,
     pub item_gap: f32,
+    /// The DRAWN offset — `motion` glides it (wheel) or coasts it (trackpad
+    /// flick); direct writes (thumb drag, scroll_into_view, the clamp) are
+    /// adopted by the motion on its next step.
     pub scroll_y: f32,
+    motion: ScrollMotion,
     pub content_h: f32,
     pub columns: Vec<ListColumn>,
     pub rows: Vec<Row>,
@@ -83,6 +87,7 @@ impl RowList {
             item_height: item_height.max(font_size + 14.0),
             item_gap,
             scroll_y: 0.0,
+            motion: ScrollMotion::new(),
             content_h: 0.0,
             columns: Vec::new(),
             rows: Vec::new(),
@@ -334,18 +339,29 @@ impl RowList {
         }
     }
 
-    /// Hit-scoped wheel (`ScrollBox::mouse_wheel`).
+    /// Hit-scoped wheel (`ScrollBox::mouse_wheel`). A wheel notch moves the
+    /// target and [`Self::tick`] glides the offset there; a trackpad finger
+    /// moves the offset now. True when either moved (repaint).
     pub fn wheel(&mut self, delta: &MouseScrollDelta, px: f32, py: f32) -> bool {
         if !self.hit(px, py) {
             return false;
         }
-        let dy = match delta {
-            MouseScrollDelta::LineDelta(_, y) => -y * 24.0,
-            MouseScrollDelta::PixelDelta(pos) => -pos.y as f32,
-        };
-        let old = self.scroll_y;
-        self.scroll_y = (self.scroll_y + dy).clamp(0.0, self.max_scroll());
-        (self.scroll_y - old).abs() > 0.01
+        self.motion.reconcile(0.0, self.scroll_y);
+        let moved = self.motion.apply(delta, (LINE_PX, LINE_PX), Bounds::max(0.0), Bounds::max(self.max_scroll()));
+        self.scroll_y = self.motion.y.pos();
+        moved
+    }
+
+    /// Advance the wheel glide / flick coast; true while the offset is
+    /// moving, so the host keeps frames coming until it settles.
+    pub fn tick(&mut self, dt: f32) -> bool {
+        self.motion.reconcile(0.0, self.scroll_y);
+        if !self.motion.is_animating() {
+            return false;
+        }
+        let moved = self.motion.tick(dt, Bounds::max(0.0), Bounds::max(self.max_scroll()));
+        self.scroll_y = self.motion.y.pos();
+        moved || self.motion.is_animating()
     }
 
     // ── Paint ──
@@ -532,6 +548,12 @@ mod tests {
     fn wheel_scrolls_and_scroll_into_view_clamps() {
         let mut l = list_with_rows(50);
         assert!(l.wheel(&MouseScrollDelta::LineDelta(0.0, -2.0), 50.0, 50.0));
+        // Two notches glide to 2 * LINE_PX; settle the motion first.
+        for _ in 0..600 {
+            if !l.tick(1.0 / 60.0) {
+                break;
+            }
+        }
         assert_eq!(l.scroll_y, 48.0);
         l.scroll_into_view(0);
         assert_eq!(l.scroll_y, 2.0);

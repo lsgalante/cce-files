@@ -286,7 +286,7 @@ impl PreviewPane {
         // 1. Top pane: File Preview Section. The section frame spans the FULL
         // pane rect (left = cx - pad cancels SectionContext's inner pad), so
         // the well edge sits at the pane edge like the list across the split —
-        // the visible split gap is exactly backplate_gap on both sides.
+        // the visible split gap is exactly root_plate_gap on both sides.
         // The well's top edge sits AT the pane top, aligned with the
         // breadcrumb across the split (finish() draws from top+7, so the
         // fallback frame gets top-7 to land on the same edge).
@@ -354,7 +354,7 @@ impl PreviewPane {
         }
 
         // 2. Bottom pane: Details Section. The visible gap between the wells
-        // is exactly backplate_gap — the same separator width as everywhere
+        // is exactly root_plate_gap — the same separator width as everywhere
         // else on the plate (it was a hardcoded 12+7=19px before).
         let details_top = cy + half_h + cce_ui::layout::root_plate_gap();
         let icon = if self.is_dir { "📁" } else { "📄" };

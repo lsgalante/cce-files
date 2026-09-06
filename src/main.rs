@@ -567,7 +567,7 @@ impl FilesystemApp {
         cce_ui::widget::hover_animation::reset_frame_registration();
         cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
 
-        // Root Backplate DISSOLVED: top-level widgets register parentless below; the
+        // root plate container DISSOLVED: top-level widgets register parentless below; the
         // window plate tuple is emitted in the legacy aggregate order (after the plain
         // child quads).
 
@@ -588,7 +588,7 @@ impl FilesystemApp {
 
         let has_sidebar = false;
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
-        // DE-wide plate rim padding (style.surface.backplate.padding).
+        // DE-wide plate rim padding (style.surface.root plate.padding).
         let pad = cce_ui::layout::root_plate_padding();
         let browse_x = if has_sidebar { sidebar_w + pad + 1.0 } else { pad };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 2.0 * pad;
@@ -647,7 +647,7 @@ impl FilesystemApp {
 
         // Each top-level widget rendered through the same immediate-mode path the root
         // recursion used, replicating the legacy TUPLE ORDER: plain child quads first,
-        // then the dissolved root Backplate's plate, then the rounded children (the
+        // then the dissolved root plate container's plate, then the rounded children (the
         // aggregate emitted all plain quads before the rounded root bg).
         let mut window_pc = pages::PageContent::new();
         {
@@ -1140,7 +1140,7 @@ impl Application for FilesystemApp {
         Some(&mut self.ui_context)
     }
 
-    fn is_movable_backplate_at(&self, px: f32, py: f32) -> bool {
+    fn is_movable_root_plate_at(&self, px: f32, py: f32) -> bool {
         // 1. If dialog is open, do not drag
         if self.open_with_dialog.is_some() {
             return false;
@@ -1168,7 +1168,7 @@ impl Application for FilesystemApp {
                 return false;
             }
             // The dissolved List blocked window drags via its registered ScrollBox
-            // (blocks_backplate_drag); veto app-side now or every row press starts a
+            // (blocks_root_plate_drag); veto app-side now or every row press starts a
             // compositor window move and the app never sees it.
             let l = &self.browse.list;
             if px >= l.x && px <= l.x + l.w && py >= l.y && py <= l.y + l.h {
@@ -1190,7 +1190,7 @@ impl Application for FilesystemApp {
                 return false;
             }
         }
-        // 5. Root Backplate dissolved: the surface itself is the movable plate; drag
+        // 5. root plate container dissolved: the surface itself is the movable plate; drag
         // anywhere a drag-blocking widget isn't.
         self.ui_context.drag_allowed_at(px, py)
     }
@@ -1313,7 +1313,7 @@ impl Application for FilesystemApp {
             WindowSettings {
                 title: title.to_string(),
                 // The cce- prefix matters: the compositor's is_cce_app gate keys
-                // blur and the backplate corner radius off it.
+                // blur and the root plate corner radius off it.
                 app_id: "cce-filesystem-chooser".to_string(),
                 width: 900,
                 height: 500,
@@ -1563,7 +1563,7 @@ impl Application for FilesystemApp {
         let mut pc = cce_ui::scene::paint::PaintCtx::new();
         let (fw, fh) = (self.width as f32, self.height as f32);
 
-        // The window plate — the dissolved root Backplate as a lit object: page-low
+        // The window plate — the dissolved root plate container as a lit object: page-low
         // color at the configured opacity, perimeter rolled over bevel_width so the
         // surface reads as a physical plate rather than a flat fill.
         let mut plate = cce_ui::color::page_low_color();

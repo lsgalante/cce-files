@@ -43,7 +43,7 @@ There are no composite container widgets. Every widget is owned outright by the 
 
 **When adding a widget, add it to both halves of that pass** — the teardown block and the registration block. Skipping the teardown leaves hierarchy links alive across frames.
 
-(`BrowseContainer` and `NetworkContainer` were shims holding children as `*mut dyn Element`; they dissolved in Phase 6y along with the root `Backplate` and `SplitBox`. Their positioning duplicated what the pages already computed from the pane rect — that coincidence was the Phase 0 double-paint — and the only part worth keeping, the divider, became `SplitPane`. See the comment above `SplitPane` in `main.rs`.)
+(`BrowseContainer` and `NetworkContainer` were shims holding children as `*mut dyn Element`; they dissolved in Phase 6y along with the root plate container and `SplitBox`. Their positioning duplicated what the pages already computed from the pane rect — that coincidence was the Phase 0 double-paint — and the only part worth keeping, the divider, became `SplitPane`. See the comment above `SplitPane` in `main.rs`.)
 
 ### Three pages, one preview
 - **Browse** — the `List` widget (columnar, integrated search box) plus a `Breadcrumb`. The right pane is a `Preview` widget, split from the list by `SplitPane` — app-owned (`main.rs`), carrying the `SplitBox` two-child horizontal math verbatim plus the divider quad, its hover tint, and the proportion drag.

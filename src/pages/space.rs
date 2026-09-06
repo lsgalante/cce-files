@@ -302,7 +302,7 @@ pub struct SpaceState {
     /// Rect the current `tiles` were laid out for — a resize invalidates them.
     laid_out: (f32, f32, f32, f32),
     /// The map region as of the last `view`. Input handlers need it to tell a
-    /// press on the treemap from one on the window backplate behind it.
+    /// press on the treemap from one on the window root plate behind it.
     pub map_rect: (f32, f32, f32, f32),
     pub hovered: Option<usize>,
     /// Selection is held by path, not index: a relayout renumbers every tile.

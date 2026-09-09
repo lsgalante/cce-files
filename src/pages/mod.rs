@@ -149,6 +149,9 @@ pub const RELIEF_INSET: u8 = 2;
 /// wrapped accent glint REPLACING the relief lighting (the DE's one focus
 /// language, same treatment as a focused plate's ring).
 pub const RELIEF_RECESSED_FOCUS: u8 = 3;
+/// [`RELIEF_INSET`] with keyboard focus: the flush plate's rim lit in the
+/// highlight — the ring a focused control plate wears (`ControlPlate::with_tint`).
+pub const RELIEF_INSET_FOCUS: u8 = 4;
 
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
@@ -433,6 +436,13 @@ impl RenderTarget for PageContent {
         self.rects.push((color, x, y, w, h, radius, (true, true, true, true)));
         if cce_ui::layout::control_relief() {
             self.reliefs.push((x, y, w, h, radius, depth, RELIEF_INSET));
+        }
+    }
+    /// The focused control plate's ring — same plate, rim lit.
+    fn inset_plate_tinted(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32, radius: f32, depth: f32, _tint: [f32; 3]) {
+        self.rects.push((color, x, y, w, h, radius, (true, true, true, true)));
+        if cce_ui::layout::control_relief() {
+            self.reliefs.push((x, y, w, h, radius, depth, RELIEF_INSET_FOCUS));
         }
     }
 }

@@ -190,6 +190,9 @@ enum WidgetFx {
     /// A flush inset control (buttons): groove ring carved down around the
     /// rect, beveled lip back up inside, face level with the surface.
     Inset(f32),
+    /// [`WidgetFx::Inset`] with keyboard focus: the rim lit in the highlight —
+    /// the ring a focused control plate wears.
+    InsetFocus(f32),
     /// A GPU-textured quad; the id comes from `cce_ui::vk::upload_rgba`
     /// (the preview pane's image). `color` is unused.
     Image { id: u32, alpha: f32 },
@@ -963,6 +966,7 @@ impl FilesystemApp {
                     fx: match *kind {
                         pages::RELIEF_RAISED => WidgetFx::Boss(*rd),
                         pages::RELIEF_INSET => WidgetFx::Inset(*rd),
+                        pages::RELIEF_INSET_FOCUS => WidgetFx::InsetFocus(*rd),
                         pages::RELIEF_RECESSED_FOCUS => WidgetFx::RecessFocus(*rd),
                         _ => WidgetFx::Recess(*rd),
                     },
@@ -1616,6 +1620,9 @@ impl Application for FilesystemApp {
                     pc.recess_tinted(rect, radii, depth, [hc[0], hc[1], hc[2]]);
                 }
                 WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, w.color, depth),
+                WidgetFx::InsetFocus(depth) => {
+                    pc.inset_plate_tinted(rect, radii, w.color, depth, cce_ui::widget::ControlPlate::focus_tint())
+                }
                 WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
                 WidgetFx::Groove { ax, ay, bx, by, width, depth } => {
                     pc.groove((ax, ay), (bx, by), width, depth, rect)

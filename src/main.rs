@@ -2468,6 +2468,11 @@ impl Application for FilesystemApp {
         true
     }
 
+    /// The geometry is cached until the next rebuild — a moved focus ring needs one.
+    fn focus_stepped(&mut self) {
+        self.needs_rebuild = true;
+    }
+
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if event.state != ElementState::Pressed {
             return None;

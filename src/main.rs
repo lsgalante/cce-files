@@ -2462,6 +2462,12 @@ impl Application for FilesystemApp {
         }
     }
 
+    /// Tab walks the toolbar's plates and wells (cce-ui's navigation in
+    /// plate terms); the file rows are the list's to walk.
+    fn plate_navigation(&self) -> bool {
+        true
+    }
+
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if event.state != ElementState::Pressed {
             return None;

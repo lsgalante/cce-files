@@ -17,12 +17,20 @@ const ROW_H: f32 = 24.0;        // context-menu / breadcrumb row height
 const DIALOG_W: f32 = 400.0;
 const DIALOG_H: f32 = 160.0;
 const MENU_MIN_W: f32 = 120.0;
-const MENU_CHAR_W: f32 = 7.5;   // approximate glyph advance used for menu sizing
 
 /// Context-menu width/height for a given set of options.
+///
+/// The width comes from the SHAPED widest label in the menu font — the same
+/// face [`cce_ui::widget::context_menu`] uses for the toolkit's own menus.
+/// The old `bytes * 7.5` estimate belonged to neither face, so the plate was
+/// sized for a font nothing here draws in.
 fn context_menu_size(options: &[(String, Option<Message>)]) -> (f32, f32) {
-    let max_len = options.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
-    let w = ((max_len as f32 * MENU_CHAR_W) + 24.0).max(MENU_MIN_W);
+    let (family, size) = cce_ui::widget::context_menu::label_font();
+    let widest = options
+        .iter()
+        .map(|(s, _)| cce_ui::widget::display::measure_text_width(s, &family, size))
+        .fold(0.0f32, f32::max);
+    let w = (widest + 24.0).max(MENU_MIN_W);
     let h = options.len() as f32 * ROW_H;
     (w, h)
 }
@@ -820,9 +828,13 @@ impl FilesystemApp {
                     (false, false, last, last),
                 );
             }
-            // Text options
+            // Text options, in the DE's menu font — family and size. Drawn
+            // with a hardcoded 12.0 and no family, the row menu read in the
+            // default sans while the list it opened over wore the configured
+            // face.
+            let (menu_family, menu_size) = cce_ui::widget::context_menu::label_font();
             for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
-                let iy = cy + idx as f32 * ROW_H + (ROW_H - 12.0) / 2.0;
+                let iy = cy + idx as f32 * ROW_H + (ROW_H - menu_size) / 2.0;
                 // The toolkit's semantic text colors, not the hand-mixed greys
                 // that came with the near-black popover face: the header's old
                 // 0.44 grey was a step above black and all but vanishes on the
@@ -834,7 +846,7 @@ impl FilesystemApp {
                 } else {
                     cce_ui::color::TEXT_FG
                 };
-                context_menu_pc.text(opt, cx + 8.0, iy, 12.0, text_color);
+                context_menu_pc.text_with_font(opt, cx + 8.0, iy, menu_size, text_color, &menu_family);
             }
         }
 
@@ -1703,29 +1715,12 @@ impl Application for FilesystemApp {
         }
 
         // while page text beneath stays clamped.
-        if cce_ui::widget::context_menu::is_visible() {
-            let menu_bounds = Some([
-                cce_ui::widget::context_menu::x(),
-                cce_ui::widget::context_menu::y(),
-                cce_ui::widget::context_menu::x() + cce_ui::widget::context_menu::w(),
-                cce_ui::widget::context_menu::y() + cce_ui::widget::context_menu::h(),
-            ]);
-            // The shared menu paints itself as a lit plate (cce-ui), so the
-            // breadcrumb's copy-path menu is the same frosted glass as the row
-            // menu above rather than the flat quads it used to stack.
-            cce_ui::widget::context_menu::paint(&mut pc);
-            for label in cce_ui::widget::context_menu::text_labels() {
-                pc.text_with(
-                    label.text.clone(),
-                    label.x,
-                    label.y,
-                    label.font_size,
-                    label.color,
-                    None,
-                    menu_bounds,
-                );
-            }
-        }
+        // The shared menu paints itself as a lit plate (cce-ui), so the
+        // breadcrumb's copy-path menu is the same frosted glass as the row
+        // menu above rather than the flat quads it used to stack. Labels come
+        // with it: `paint_with_labels` carries the menu font's family, which
+        // the hand-rolled `paint` + `text_labels()` loop here did not.
+        cce_ui::widget::context_menu::paint_with_labels(&mut pc);
         Some(pc.finish())
     }
 

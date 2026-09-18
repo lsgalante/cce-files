@@ -998,7 +998,14 @@ impl FilesystemApp {
                 let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
                 let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
                 let label = base.label.as_deref().unwrap_or("");
-                let label_size = 12.0;
+                // The label's font is the configured button font, resolved the
+                // same way `Button::paint` resolves it — family AND size. A
+                // hardcoded 12.0 here rendered every plain button's label a
+                // size or two off whatever the rest of the DE's buttons wear.
+                let (label_family, label_size) = {
+                    let (family, size) = cce_ui::layout::parse_font_string(&cce_ui::layout::button_font());
+                    (family, size.unwrap_or(12.0))
+                };
                 let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
 
                 let wx = base.x;
@@ -1036,20 +1043,26 @@ impl FilesystemApp {
                     fx,
                 });
 
+                // Centring needs the SHAPED width, not `chars * size * 0.65`:
+                // that estimate runs wide on a proportional face (and narrow on
+                // a large mono one), so a centred label sat visibly off to one
+                // side of its own plate — the chooser's Cancel/Select were ~6px
+                // left of centre. Measure the run, as `Button::label_width`
+                // does, and let `align_text_y` place it vertically, the
+                // toolkit's convention for every other text-bearing control.
+                let text_w = cce_ui::widget::display::measure_text_width(label, &label_family, label_size);
                 let text_x = if btn.justify == cce_ui::widget::Justification::Left {
                     base.x + 8.0
                 } else {
-                    let text_w = label.chars().count() as f32 * label_size * 0.65;
                     base.x + (base.w - text_w) / 2.0
                 };
-                let text_y = base.y + (base.h - label_size * 1.4) / 2.0;
+                let text_y = cce_ui::layout::align_text_y(base.y, base.h, label_size, 0.0);
 
                 let start_bounds = if is_page_content {
                     [0.0, content_y, self.width as f32, content_y + content_h]
                 } else {
                     [0.0, 0.0, self.width as f32, self.height as f32]
                 };
-                let text_w = label.chars().count() as f32 * label_size * 0.65;
                 let text_h = label_size * 1.4;
                 let occluded = if part_idx < 2 {
                     occlude_against(
@@ -1071,7 +1084,9 @@ impl FilesystemApp {
                     }
                 };
 
-                texts.push((label.to_string(), label_size, text_x, text_y, label_color, None, final_button_bounds));
+                // The family goes with it: measuring in one face and rendering
+                // in another is how the centring drifted in the first place.
+                texts.push((label.to_string(), label_size, text_x, text_y, label_color, Some(label_family), final_button_bounds));
 
                 page_buttons.push((btn.clone(), action.clone()));
             }

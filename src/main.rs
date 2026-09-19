@@ -431,6 +431,10 @@ struct FilesystemApp {
     ui_context: cce_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
     fs_service: services::fs::FsService,
+    /// Whether a renderer has been handed over yet — the first one is the
+    /// process's own, any later one is a replacement after a reconnect. See
+    /// `renderer_init`.
+    seen_renderer: bool,
     context_menu: ContextMenu,
     open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::Adapted<cce_ui::widget::TextBox>)>,
     browse_split: SplitPane,
@@ -1295,6 +1299,7 @@ impl Application for FilesystemApp {
             ui_context: cce_ui::context::UiContext::new(),
             watcher: None,
             fs_service,
+            seen_renderer: false,
             context_menu: ContextMenu {
                 visible: false,
                 x: 0.0,
@@ -1576,6 +1581,41 @@ impl Application for FilesystemApp {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
+    }
+
+    /// Re-request the shown file's preview when the renderer is replaced.
+    ///
+    /// `PreviewPane` holds a **renderer** image id, and a renderer does not
+    /// outlive its session: `cce-ui`'s `window_runner` repairs a lost Wayland
+    /// transport by opening a new session around the same `Application`, which
+    /// rebuilds the renderer and with it the image table. The cached id then
+    /// names an image that no longer exists, and a draw for an unknown id is
+    /// skipped rather than reported — so a reconnected window kept the file's
+    /// name, size and permissions and showed an empty well where the picture
+    /// was, until the user selected a different file.
+    ///
+    /// The pixels are not kept here (they are moved into the upload), so the
+    /// repair is the same round trip the selection makes: drop the dead
+    /// texture, ask `FsService` for the preview again, and let
+    /// `PreviewMessage::PreviewLoaded` upload it into the live renderer.
+    ///
+    /// Not on the first renderer: nothing has been uploaded yet, and the
+    /// initial directory load is already in flight.
+    fn renderer_init(&mut self, _renderer: &mut cce_ui::vk::VkRenderer) {
+        if !std::mem::replace(&mut self.seen_renderer, true) {
+            return;
+        }
+        let had_texture = self.preview.drop_texture();
+        if let Some(path) = self.preview.path.clone() {
+            if had_texture {
+                log::info!(
+                    "[preview] renderer replaced; re-reading the preview of {}",
+                    path.display()
+                );
+                self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
+            }
+        }
+        self.needs_rebuild = true;
     }
 
     fn display_list(&mut self, size: LogicalSize, scale: f64) -> Option<cce_ui::scene::paint::DisplayList> {

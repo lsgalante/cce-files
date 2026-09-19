@@ -126,6 +126,22 @@ impl PreviewPane {
         }
     }
 
+    /// Forget the uploaded texture, freeing it, and say whether there was one.
+    ///
+    /// For the renderer-replaced path only (see `FilesystemApp::renderer_init`):
+    /// the id belongs to a renderer that no longer exists, so this is a drop
+    /// rather than a clear — everything else about the shown file stays, and
+    /// the caller re-requests the preview to get a live texture back.
+    pub fn drop_texture(&mut self) -> bool {
+        match self.image_tex.take() {
+            Some((id, _, _)) => {
+                cce_ui::vk::free_image(id);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn set_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.rect = (x, y, w, h);
     }

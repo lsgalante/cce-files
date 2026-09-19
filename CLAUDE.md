@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make build      # cargo build --release
 make install    # release build, then `ccebuild install --no-build cce-files`
 make run        # cargo run  (needs a live Wayland compositor)
-cargo test      # run unit tests (nine modules have them; browse.rs has the most)
+cargo test      # run unit tests (nine modules have them; `browse.rs` has the most)
 cargo test test_is_project_dir_detection    # run a single test by name
 ```
 

@@ -10,9 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```sh
 make build      # cargo build --release
-make install    # build + install binary to ~/.local/bin/cce-files
+make install    # release build, then `ccebuild install --no-build cce-files`
 make run        # cargo run  (needs a live Wayland compositor)
-cargo test      # run unit tests (fs and browse modules have them)
+cargo test      # run unit tests (nine modules have them; browse.rs has the most)
 cargo test test_is_project_dir_detection    # run a single test by name
 ```
 
@@ -67,4 +67,4 @@ Two things to know when touching it:
 - **Chooser modes**: launched with `--select`, `--select-dir`, or `--save`, the app becomes a file picker for other CCE apps — it shows a bottom action bar, prints the chosen path to stdout, and `std::process::exit(0)` on selection (or exit code 1 on cancel). This is why `SelectOpen`/`SelectCancel` call `process::exit` directly.
 - **Persistence**: the last-visited directory is saved to `~/.config/cce/cce-files/cce-files-last-dir.txt` and restored on launch.
 - **Double-click**: opening is temporal — `last_click_time` / `last_clicked_idx` in `update()` detect a double-click within 500ms rather than relying on a windowing double-click event.
-- **Fonts**: `cce_ui::create_font_system()` loads fonts from `/home/lsgalante/Dropbox/Fonts` (hardcoded in cce-ui). Set `CCE_LOAD_SYSTEM_FONTS` to also load system fonts.
+- **Fonts**: `cce_ui::create_font_system()` loads bundled fonts from `cce_ui::fonts_dir()` — `$CCE_FONTS_DIR`, else `$HOME/Dropbox/Fonts`. It is resolved, not hardcoded, and the override is what a shadow session needs: a shadow HOME cannot see the real `~/Dropbox/Fonts`, so without `CCE_FONTS_DIR` its screenshots render in a fallback sans. Set `CCE_LOAD_SYSTEM_FONTS` to also load system fonts.

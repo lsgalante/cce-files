@@ -1685,9 +1685,9 @@ impl Application for FilesystemApp {
                     let hc = cce_ui::color::highlight_primary_color();
                     pc.recess_tinted(rect, radii, depth, [hc[0], hc[1], hc[2]]);
                 }
-                WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, w.color, depth),
+                WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, cce_ui::scene::Material::face(w.color).as_ref(), depth),
                 WidgetFx::InsetFocus(depth) => {
-                    pc.inset_plate_tinted(rect, radii, w.color, depth, cce_ui::widget::ControlPlate::focus_tint())
+                    pc.inset_plate_tinted(rect, radii, cce_ui::scene::Material::face(w.color).as_ref(), depth, cce_ui::widget::ControlPlate::focus_tint())
                 }
                 WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
                 WidgetFx::Groove { ax, ay, bx, by, width, depth } => {

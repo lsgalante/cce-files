@@ -1677,8 +1677,8 @@ impl Application for FilesystemApp {
             let rect = Rect { x: w.x, y: w.y, width: w.w, height: w.h };
             let radii = (w.radius, w.radius, w.radius, w.radius);
             match w.fx {
-                WidgetFx::Bevel(depth) => pc.bevel(rect, radii, w.color, depth),
-                WidgetFx::Plate(depth) => pc.plate(rect, radii, w.color, depth),
+                WidgetFx::Bevel(depth) => pc.bevel(rect, radii, &cce_ui::scene::Material::from_fill(w.color), depth),
+                WidgetFx::Plate(depth) => pc.plate(rect, radii, &cce_ui::scene::Material::from_fill(w.color), depth),
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
                 WidgetFx::RecessFocus(depth) => {
@@ -1733,7 +1733,7 @@ impl Application for FilesystemApp {
                 pc.plate(
                     Rect { x: band.0, y: band.1, width: band.2, height: band.3 },
                     (r, r, r, r),
-                    cce_ui::color::page_low_color(),
+                    &cce_ui::scene::Material::from_fill(cce_ui::color::page_low_color()),
                     cce_ui::layout::bevel_width().min(band.3 * 0.2),
                 );
                 pc.text_with(

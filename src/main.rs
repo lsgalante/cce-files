@@ -1646,8 +1646,7 @@ impl Application for FilesystemApp {
         // clips with.
         pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
             rect: Rect { x: 0.0, y: 0.0, width: fw, height: fh },
-            color: plate,
-            blur: false,
+            material: cce_ui::scene::Material::opaque(plate),
             window_corners: (true, true, true, true),
             depth: cce_ui::layout::bevel_width(),
         });

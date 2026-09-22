@@ -1943,13 +1943,8 @@ impl Application for FilesystemApp {
             && cce_ui::widget::context_menu::is_visible()
         {
             let (px, py) = (pos.x as f32, pos.y as f32);
-            let picked = if cce_ui::widget::context_menu::hit_test(px, py) {
-                let my = cce_ui::widget::context_menu::y();
-                let row = ((py - my) / 24.0).floor() as usize;
-                self.plate_menu_actions.get(row).copied()
-            } else {
-                None
-            };
+            let picked = cce_ui::widget::context_menu::row_at(px, py)
+                .and_then(|row| self.plate_menu_actions.get(row).copied());
             cce_ui::widget::context_menu::hide();
             self.plate_menu_actions.clear();
             if let Some(action) = picked {

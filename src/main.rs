@@ -30,6 +30,8 @@ fn context_menu_size(options: &[(String, Option<Message>)]) -> (f32, f32) {
         .iter()
         .map(|(s, _)| cce_ui::widget::display::measure_text_width(s, &family, size))
         .fold(0.0f32, f32::max);
+    // TODO(style): 24 is the menu's own label side-padding (12 a side), a
+    // control-level number the toolkit's context_menu should supply.
     let w = (widest + 24.0).max(MENU_MIN_W);
     let h = options.len() as f32 * ROW_H;
     (w, h)
@@ -51,14 +53,24 @@ fn open_with_rects(win_w: f32, win_h: f32) -> OpenWithRects {
     let y = (win_h - DIALOG_H) / 2.0;
     let tb_h = cce_ui::layout::textbox_height();
     let btn_h = cce_ui::layout::button_height();
+    // The dialog is a pane plate standing on the root: its content insets
+    // from the rim by the pane rung, and its two buttons sit one pane gap
+    // apart, right-aligned to that inset.
+    let pad = cce_ui::layout::plate_padding();
+    let gap = cce_ui::layout::plate_gap();
+    let (cancel_w, open_w) = (70.0, 80.0);
+    let btn_y = y + DIALOG_H - btn_h - pad;
+    let open_x = x + DIALOG_W - pad - open_w;
     OpenWithRects {
         x,
         y,
         w: DIALOG_W,
         h: DIALOG_H,
-        tb: (x + 20.0, y + 60.0, DIALOG_W - 40.0, tb_h),
-        cancel: (x + DIALOG_W - 180.0, y + DIALOG_H - btn_h - 16.0, 70.0, btn_h),
-        open: (x + DIALOG_W - 100.0, y + DIALOG_H - btn_h - 16.0, 80.0, btn_h),
+        // TODO(style): the 60px drop to the well (title, then the prompt at
+        // 42) is the dialog's own text rhythm, not a rung.
+        tb: (x + pad, y + 60.0, DIALOG_W - 2.0 * pad, tb_h),
+        cancel: (open_x - gap - cancel_w, btn_y, cancel_w, btn_h),
+        open: (open_x, btn_y, open_w, btn_h),
     }
 }
 
@@ -603,8 +615,10 @@ impl FilesystemApp {
 
         let has_sidebar = false;
         let sidebar_w = if has_sidebar { self.paginator.sidebar_w() } else { 0.0 };
-        // DE-wide plate rim padding (style.surface.root plate.padding).
-        let pad = cce_ui::layout::root_plate_padding();
+        // Inset from the WINDOW edge: the root plate's roll plus its padding
+        // (the padding alone left most of the run on the roll, so the edge
+        // read narrower than the gap between the panes).
+        let pad = cce_ui::layout::root_plate_inset();
         let browse_x = if has_sidebar { sidebar_w + pad + 1.0 } else { pad };
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 2.0 * pad;
         let content_y = pad;
@@ -758,7 +772,7 @@ impl FilesystemApp {
         // content region, so it goes into window_pc: page content (pc) is clipped
         // to the viewport and would swallow the bar entirely.
         if self.select_mode {
-            let bar_y = self.height as f32 - select_bar_h - cce_ui::layout::root_plate_padding();
+            let bar_y = self.height as f32 - select_bar_h - cce_ui::layout::root_plate_inset();
             // Divider line — under control_relief the bar is a band carved into the
             // plate (see display_list), so the flat line is the fallback only.
             if !cce_ui::layout::control_relief() {
@@ -772,7 +786,7 @@ impl FilesystemApp {
             // the content region with the bar's own padding — and the
             // toolkit's plain button face, not hand-picked red/green tints.
             let btn_w = 84.0;
-            let gap = 10.0;
+            let gap = cce_ui::layout::root_plate_gap();
             // Flush with the panels' right edge — an extra inset here left the
             // buttons hanging short of the column above them.
             let confirm_x = browse_x + usable_w - btn_w;
@@ -850,6 +864,7 @@ impl FilesystemApp {
                 } else {
                     cce_ui::color::TEXT_FG
                 };
+                // TODO(style): the row label's 8px lead-in is a control-level inset.
                 context_menu_pc.text_with_font(opt, cx + 8.0, iy, menu_size, text_color, &menu_family);
             }
         }
@@ -870,10 +885,12 @@ impl FilesystemApp {
             // Dialog panel background
             dialog_pc.rect([0.08, 0.08, 0.12, 1.0], dialog_x + 1.0, dialog_y + 1.0, dialog_w - 2.0, dialog_h - 2.0);
 
-            // Title text
-            dialog_pc.text("Open with...", dialog_x + 20.0, dialog_y + 20.0, 14.0, [1.0, 1.0, 1.0, 1.0]);
-            // Description
-            dialog_pc.text("Enter command:", dialog_x + 20.0, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
+            // Title and prompt, inset from the plate rim by the pane rung
+            // (the same inset the well and buttons take in open_with_rects).
+            let dialog_pad = cce_ui::layout::plate_padding();
+            dialog_pc.text("Open with...", dialog_x + dialog_pad, dialog_y + dialog_pad, 14.0, [1.0, 1.0, 1.0, 1.0]);
+            // TODO(style): the prompt's 42px drop is the dialog's text rhythm.
+            dialog_pc.text("Enter command:", dialog_x + dialog_pad, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
 
             // Set textbox position dynamically using configured textbox height
             textbox.set_rect(tb_x, tb_y, tb_w, tb_h);
@@ -1068,6 +1085,8 @@ impl FilesystemApp {
                 // toolkit's convention for every other text-bearing control.
                 let text_w = cce_ui::widget::display::measure_text_width(label, &label_family, label_size);
                 let text_x = if btn.justify == cce_ui::widget::Justification::Left {
+                    // TODO(style): a left-justified button label's lead-in is a
+                    // control-level inset (Button's own, not a rung).
                     base.x + 8.0
                 } else {
                     base.x + (base.w - text_w) / 2.0
@@ -1650,7 +1669,7 @@ impl Application for FilesystemApp {
         if cce_ui::layout::control_relief() {
             let wall = cce_ui::layout::bar_wall_width();
             if self.select_mode {
-                let band_h = SELECT_BAR_H + cce_ui::layout::root_plate_padding();
+                let band_h = SELECT_BAR_H + cce_ui::layout::root_plate_inset();
                 pc.recess_edges(
                     Rect { x: 0.0, y: fh - band_h, width: fw, height: band_h },
                     (0.0, 0.0, 0.0, 0.0),
@@ -1725,7 +1744,7 @@ impl Application for FilesystemApp {
                 );
                 pc.text_with(
                     "Preview".to_string(),
-                    band.0 + 10.0,
+                    band.0 + cce_ui::layout::plate_padding(),
                     band.1 + (band.3 - 13.0) / 2.0,
                     13.0,
                     [0xc8, 0xc8, 0xd4],

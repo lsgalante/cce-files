@@ -185,7 +185,7 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     let text_dim = cce_ui::color::TEXT_DIM;
 
 
-    // The pane rect already sits root_plate_padding off the plate rim — no
+    // The pane rect already sits root_plate_inset off the window edge — no
     // second inset here, or the list lands 16+12 from the edge while apps
     // that place content at the pane rect (cce-data-editor's tree) sit at 16.
     let gap = cce_ui::layout::root_plate_gap();
@@ -316,7 +316,10 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     // When the search strip is open it reserves the bottom of the frame, exactly as
     // the legacy List::set_rect carved its scroll frame.
     let search_h = 26.0;
-    let search_margin_y = 6.0;
+    // The strip stands off the well's rim (and the rows above it) by the
+    // pane rung, on both axes.
+    let search_pad = cce_ui::layout::plate_padding();
+    let search_margin_y = search_pad;
     let search_offset = if state.search_visible { search_h + 2.0 * search_margin_y } else { 0.0 };
     state.list.set_rect(list_x, list_y, list_w, list_h, search_offset);
     state.list.update_bounds_from_rows();
@@ -334,9 +337,9 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
     state.list.push_prims(&mut pc);
     if state.search_visible {
         let (sx, sy, sw, sh) = (
-            list_x + 8.0,
+            list_x + search_pad,
             list_y + list_h - search_offset + search_margin_y,
-            list_w - 16.0,
+            list_w - 2.0 * search_pad,
             search_h,
         );
         cce_ui::layout::render_widget(&mut pc, &mut state.search_box, sx, sy, sw, sh, ctx);
@@ -351,6 +354,8 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
         state.entries.len(),
         if state.show_hidden { " (.)" } else { "" }
     );
+    // TODO(style): the 24 keeps the estimated-width label clear of the
+    // list's scrollbar as well as the rim; the 18 is a text baseline drop.
     let count_text_w = count_str.len() as f32 * 6.0;
     let count_x = list_x + list_w - count_text_w - 24.0;
     let count_y = list_y + list_h - 18.0;

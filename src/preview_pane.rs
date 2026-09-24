@@ -285,12 +285,15 @@ impl PreviewPane {
         let label_fg = cce_ui::color::TEXT_ACCENT;
 
         if self.path.is_none() {
-            pc.text("Select a file to view details", cx + 12.0, cy + 12.0, 13.0, text_dim);
+            let pad = cce_ui::layout::plate_padding();
+            pc.text("Select a file to view details", cx + pad, cy + pad, 13.0, text_dim);
             return;
         }
 
         let half_h = ch * 0.5;
         let pad = cce_ui::layout::section_padding();
+        // Inside each well the content stands off the rim by the pane rung.
+        let inset = cce_ui::layout::plate_padding();
         // Under control_relief the section frames are recessed wells carved
         // into the plate (the list's treatment); the SectionContext 1px line
         // frame is the flat fallback. Titles come from SectionContext::new
@@ -307,6 +310,9 @@ impl PreviewPane {
         // breadcrumb across the split (finish() draws from top+7, so the
         // fallback frame gets top-7 to land on the same edge).
         {
+            // style: deliberate — the 7 and 12 mirror SectionContext::finish's
+            // own frame geometry (top+7 down to content_y+pad+12), so the flat
+            // fallback frame lands on the well's edges.
             let mut preview_sec = SectionContext::new(pc, cx - pad, cy - 7.0, cw + 2.0 * pad, "", false, false);
             preview_sec.content_y = cy + half_h - pad - 12.0;
             if !relief {
@@ -320,8 +326,8 @@ impl PreviewPane {
                 pc.relief_recessed(cx, cy, cw, half_h, radius);
             }
         }
-        let rect_y = cy + 12.0;
-        let rect_h = half_h - pad - 24.0;
+        let rect_y = cy + inset;
+        let rect_h = half_h - pad - 2.0 * inset;
 
         // Content fill spans the FULL well RECT, rounded to the well's radius —
         // `RowList::push_prims` verbatim, so the two read as the same material
@@ -352,7 +358,7 @@ impl PreviewPane {
             let clip_top = rect_y;
             let clip_bottom = rect_y + rect_h - 8.0;
             let clip = [cx, clip_top, cx + cw, clip_bottom];
-            let mut text_y = rect_y + 12.0 - frac;
+            let mut text_y = rect_y + inset - frac;
             for line in content.lines().skip(first_line as usize) {
                 if text_y >= clip_bottom {
                     break;
@@ -360,13 +366,13 @@ impl PreviewPane {
                 // Chars-per-width from one measured glyph (cached) instead of
                 // the old magic 6.8 px/char guess.
                 let char_w = measure_text_width("M", "monospace", 11.0).max(1.0);
-                let limit = (((cw - 24.0) / char_w).floor() as usize).max(20);
+                let limit = (((cw - 2.0 * inset) / char_w).floor() as usize).max(20);
                 let line_truncated = truncate_tail(line, limit);
-                pc.text_with_font_bounded(&line_truncated, cx + 12.0, text_y, 11.0, text_fg, "monospace", clip);
+                pc.text_with_font_bounded(&line_truncated, cx + inset, text_y, 11.0, text_fg, "monospace", clip);
                 text_y += PREVIEW_LINE_H;
             }
         } else {
-            pc.text("No preview available", cx + 12.0, rect_y + 12.0, 11.0, text_dim);
+            pc.text("No preview available", cx + inset, rect_y + inset, 11.0, text_dim);
         }
 
         // 2. Bottom pane: Details Section. The visible gap between the wells
@@ -383,13 +389,14 @@ impl PreviewPane {
             ("Modified", &self.modified),
         ];
 
-        let details_content_start_y = details_top + pad + 12.0;
+        let details_content_start_y = details_top + pad + inset;
 
         // The well's bottom edge sits AT the pane bottom, aligned with the
         // list across the split (content-sized before; short panes just show
         // empty well below the rows). finish() draws from top+7, so the
         // fallback frame gets top-7 to land on the same edge.
         {
+            // style: deliberate — SectionContext::finish's frame geometry, as above.
             let mut details_sec = SectionContext::new(pc, cx - pad, details_top - 7.0, cw + 2.0 * pad, "", false, false);
             details_sec.content_y = cy + ch - pad - 12.0;
             if !relief {
@@ -404,8 +411,10 @@ impl PreviewPane {
             }
         }
 
+        // TODO(style): the header's 6px drop, the 42/112 label columns and
+        // the 20px row pitch are the details form's own rhythm.
         let header_y = details_content_start_y + 6.0;
-        pc.text(icon, cx + 12.0, header_y, 20.0, text_fg);
+        pc.text(icon, cx + inset, header_y, 20.0, text_fg);
 
         // Pixel-measured budgets against the section frame's inner right edge
         // (None-font text renders sans-serif — measure with the same family).
@@ -418,15 +427,16 @@ impl PreviewPane {
 
         let mut y = details_content_start_y + 36.0;
         for (label, val) in &details {
-            pc.text(label, cx + 12.0, y, 12.0, label_fg);
+            pc.text(label, cx + inset, y, 12.0, label_fg);
             let val_str = truncate_px(val, "sans-serif", 12.0, val_avail, true);
             pc.text(&val_str, cx + 112.0, y, 12.0, text_dim);
             y += 20.0;
         }
 
         if !self.target.is_empty() {
-            y += 8.0;
-            pc.text("Target", cx + 12.0, y, 12.0, label_fg);
+            // One pane gap sets the link target off from the rows above.
+            y += cce_ui::layout::plate_gap();
+            pc.text("Target", cx + inset, y, 12.0, label_fg);
             let target_str = truncate_px(&self.target, "sans-serif", 12.0, val_avail, true);
             pc.text(&target_str, cx + 112.0, y, 12.0, text_dim);
         }

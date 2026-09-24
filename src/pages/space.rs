@@ -471,13 +471,16 @@ pub fn view(
     // Breadcrumb + view dropdown, mirroring the Network page's header so the
     // two views line up when you switch between them.
     let dropdown_w = 120.0;
-    let breadcrumb_w = cw - 16.0 - dropdown_w - 12.0;
+    // TODO(style): the 4/6/16 offsets are a leftover inset from the pane rect
+    // that browse.rs has already dropped; the gap to the dropdown is the rung.
+    let gap = cce_ui::layout::root_plate_gap();
+    let breadcrumb_w = cw - 16.0 - dropdown_w - gap;
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
     {
         let rect = cce_ui::scene::layout::Rect { x: cx + 4.0, y: cy + 6.0, width: breadcrumb_w, height: 24.0 };
         crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
     }
-    cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + 12.0, cy + 6.0, dropdown_w, 24.0, ctx);
+    cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + gap, cy + 6.0, dropdown_w, 24.0, ctx);
 
     let mut segments = Vec::new();
     for component in browse.current_dir.components() {
@@ -519,7 +522,7 @@ pub fn view(
     let text_fg = cce_ui::color::TEXT_FG;
 
     if let Some(err) = &state.error {
-        pc.text(err, map.0 + 12.0, map.1 + 12.0, 11.0, text_dim);
+        pc.text(err, map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
         return pc;
     }
 
@@ -530,7 +533,7 @@ pub fn view(
             state.scan_files,
             format_size(state.scan_bytes)
         );
-        pc.text(&msg, map.0 + 12.0, map.1 + 12.0, 11.0, text_dim);
+        pc.text(&msg, map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
         return pc;
     }
 
@@ -538,7 +541,7 @@ pub fn view(
     state.relayout((map.0 + 1.0, map.1 + 1.0, (map.2 - 2.0).max(0.0), (map.3 - 2.0).max(0.0)));
 
     if state.tiles.is_empty() {
-        pc.text("Nothing to show — the directory is empty.", map.0 + 12.0, map.1 + 12.0, 11.0, text_dim);
+        pc.text("Nothing to show — the directory is empty.", map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
         return pc;
     }
 

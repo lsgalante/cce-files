@@ -113,13 +113,16 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut 
 
     // Render the Breadcrumb and Dropdown next to it
     let dropdown_w = 120.0;
-    let breadcrumb_w = cw - 16.0 - dropdown_w - 12.0;
+    // TODO(style): the 4/6/16 offsets are a leftover inset from the pane rect
+    // that browse.rs has already dropped; the gap to the dropdown is the rung.
+    let gap = cce_ui::layout::root_plate_gap();
+    let breadcrumb_w = cw - 16.0 - dropdown_w - gap;
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
     {
         let rect = cce_ui::scene::layout::Rect { x: cx + 4.0, y: cy + 6.0, width: breadcrumb_w, height: 24.0 };
         crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
     }
-    cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + 12.0, cy + 6.0, dropdown_w, 24.0, ctx);
+    cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + gap, cy + 6.0, dropdown_w, 24.0, ctx);
 
     // Check if directory changed, or if last_dir is empty, and repopulate
     if state.last_dir != browse.current_dir || state.graph.get_nodes().is_empty() {

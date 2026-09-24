@@ -1634,22 +1634,9 @@ impl Application for FilesystemApp {
         let mut pc = cce_ui::scene::paint::PaintCtx::new();
         let (fw, fh) = (self.width as f32, self.height as f32);
 
-        // The window plate — the dissolved root plate container as a lit object: page-low
-        // color at the configured opacity, perimeter rolled over bevel_width so the
-        // surface reads as a physical plate rather than a flat fill.
-        let mut plate = cce_ui::color::page_low_color();
-        if plate[3] > 0.001 {
-            plate[3] = cce_ui::color::root_plate_opacity();
-        }
-        // PlateSpec (cce-ui RFC 7b): all four corners are window corners, so
-        // the perimeter follows the SHARED silhouette curve the compositor
-        // clips with.
-        pc.plate_spec(&cce_ui::scene::paint::PlateSpec {
-            rect: Rect { x: 0.0, y: 0.0, width: fw, height: fh },
-            material: cce_ui::scene::Material::opaque(plate),
-            window_corners: (true, true, true, true),
-            depth: cce_ui::layout::bevel_width(),
-        });
+        // The standard root plate (cce-ui `PlateSpec::window`): the DE root
+        // material at its opacity, the shared silhouette arc, the DE roll.
+        pc.root_plate(fw, fh);
 
         // Band carves, emitted right after the plate: in chooser mode the action
         // bar is a band carved into the bottom. These do NOT CSG-group into the

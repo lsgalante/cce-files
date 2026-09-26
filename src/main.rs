@@ -371,8 +371,9 @@ impl SplitPane {
 
 
 /// Browse-page shortcuts, resolved once at startup from input.kdl
-/// (`cce-files` domain → `cce-ui` domain), defaulting to the historical
-/// vim-ish keys. Arrow keys, Enter-in-save-mode, and Escape stay fixed.
+/// (`cce-files` domain → `cce-ui` domain), defaulting to vim-ish j/k for
+/// selection and u/i (up/in) for directories. Arrow keys,
+/// Enter-in-save-mode, and Escape stay fixed.
 struct BrowseKeys {
     open_file: String,
     enter_dir: String,
@@ -388,8 +389,8 @@ impl BrowseKeys {
         let get = cce_ui::input::app_chord;
         Self {
             open_file: get("open_file", "enter"),
-            enter_dir: get("enter_dir", "l"),
-            parent_dir: get("parent_dir", "h"),
+            enter_dir: get("enter_dir", "i"),
+            parent_dir: get("parent_dir", "u"),
             select_next: get("select_next", "j"),
             select_prev: get("select_prev", "k"),
             delete_entry: get("delete_entry", "delete"),

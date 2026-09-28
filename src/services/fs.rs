@@ -675,7 +675,18 @@ pub fn spawn_command_for_path(cmd: &str, path: &Path) -> bool {
         command.arg(arg);
     }
     command.arg(path);
-    cce_ui::process::spawn_detached(command).is_ok()
+    spawn_detached(command).is_ok()
+}
+
+/// Spawn `cmd` and reap it on a background thread, so the child never lingers
+/// as a zombie once it exits. This was `cce_ui::process::spawn_detached` until
+/// the toolkit dropped that module (cce-ui 4e94236) as caller-less — it had two callers here.
+fn spawn_detached(mut cmd: std::process::Command) -> std::io::Result<()> {
+    let mut child = cmd.spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 pub fn open_file(path: &Path) {
@@ -687,7 +698,7 @@ pub fn open_file(path: &Path) {
     if !opened {
         let mut command = std::process::Command::new("xdg-open");
         command.arg(path);
-        let _ = cce_ui::process::spawn_detached(command);
+        let _ = spawn_detached(command);
     }
 }
 

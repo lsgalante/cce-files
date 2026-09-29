@@ -18,7 +18,6 @@ impl Default for NetworkState {
         graph.set_skipped_sizes(35.0, 35.0);
         graph.set_grid_origin(60.0, 60.0);
         graph.set_grid_snap_enabled(true);
-        graph.set_uniform_background(false);
         graph.set_network_opacity(0.95);
 
         let mut breadcrumb = Breadcrumb::new();

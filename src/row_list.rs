@@ -134,7 +134,9 @@ impl RowList {
         }
     }
 
-    fn hit(&self, px: f32, py: f32) -> bool {
+    /// Whether (px, py) is inside the list's full rect — public for the app's
+    /// right-click menu on the empty space below the rows.
+    pub fn hit(&self, px: f32, py: f32) -> bool {
         px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
     }
 

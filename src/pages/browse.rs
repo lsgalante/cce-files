@@ -35,6 +35,8 @@ pub struct BrowseState {
     /// the chooser is always, since row 0 starts selected. Auto-scroll fires
     /// on selection CHANGE only.
     pub autoscrolled_to: Option<usize>,
+    /// A just-created folder to select once a refresh lists it.
+    pub pending_select: Option<PathBuf>,
     pub breadcrumb: Adapted<Breadcrumb>,
     pub save_name_box: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
 }
@@ -57,6 +59,7 @@ impl Default for BrowseState {
                 .with_update_on_type(true),
             selected: None,
             autoscrolled_to: None,
+            pending_select: None,
             breadcrumb,
             save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
         };
@@ -99,6 +102,10 @@ pub enum BrowseMessage {
     DeleteEntryPermanent(usize),
     RestoreEntry(usize),
     EmptyTrash,
+    /// Create a new folder in the current directory.
+    NewFolder,
+    /// (parent dir, the created folder or the error).
+    FolderCreated(PathBuf, Result<PathBuf, String>),
     Deleted(PathBuf, Result<(), String>),
     TrashEmptied(Result<(), String>),
     LastDirLoaded(Option<PathBuf>),
@@ -420,6 +427,7 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
         BrowseMessage::DirectoryLoaded(path, entries) => {
             state.current_dir = path.clone();
             state.all_entries = entries;
+            state.pending_select = None;
             state.search_box.text.clear();
             state.search_box.edit_buffer.clear();
             state.search_visible = false;
@@ -429,7 +437,10 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
         }
         BrowseMessage::DirectoryRefreshed(path, entries) => {
             if state.current_dir == path {
-                let selected_path = state.selected.and_then(|idx| state.entries.get(idx).map(|e| e.path.clone()));
+                let selected_path = state
+                    .pending_select
+                    .take()
+                    .or_else(|| state.selected.and_then(|idx| state.entries.get(idx).map(|e| e.path.clone())));
                 state.all_entries = entries;
                 apply_filters(state);
                 if let Some(path) = selected_path {
@@ -469,6 +480,18 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
             }
         }
         BrowseMessage::EmptyTrash => Some(crate::services::fs::FsRequest::EmptyTrash),
+        BrowseMessage::NewFolder => Some(crate::services::fs::FsRequest::CreateDir(state.current_dir.clone())),
+        BrowseMessage::FolderCreated(parent, result) => {
+            match result {
+                Ok(path) => state.pending_select = Some(path),
+                Err(e) => log::error!("Failed to create folder in {}: {}", parent.display(), e),
+            }
+            if state.current_dir == parent {
+                Some(crate::services::fs::FsRequest::RefreshDirectory(parent))
+            } else {
+                None
+            }
+        }
         BrowseMessage::TrashEmptied(result) => {
             if let Err(e) = result {
                 log::error!("Failed to empty trash: {}", e);

@@ -490,6 +490,13 @@ impl FilesystemApp {
         self.fs_service.send(services::fs::FsRequest::ScanTree(dir, cancel));
     }
 
+    /// Show the app's context menu at (x, y). Row 0 of `options` is the
+    /// non-interactive header.
+    fn open_context_menu(&mut self, x: f32, y: f32, options: Vec<(String, Option<Message>)>) {
+        let (w, h) = context_menu_size(&options);
+        self.context_menu = ContextMenu { visible: true, x, y, w, h, options, hovered: None };
+    }
+
     fn start_watching(&mut self, path: std::path::PathBuf) {
         use tokio::sync::mpsc;
         use std::time::Duration;
@@ -2145,27 +2152,37 @@ impl Application for FilesystemApp {
                             options.push(("Empty Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::EmptyTrash))));
                         } else {
                             options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
+                            options.push(("New Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NewFolder))));
                             if let Some(trash_files) = services::trash::files_dir() {
                                 options.push(("Open Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(trash_files)))));
                             }
                         }
 
-                        // Calculate width
-                        let (menu_w, menu_h) = context_menu_size(&options);
-
-                        self.context_menu = ContextMenu {
-                            visible: true,
-                            x: pos.x,
-                            y: pos.y,
-                            w: menu_w,
-                            h: menu_h,
-                            options,
-                            hovered: None,
-                        };
+                        self.open_context_menu(pos.x, pos.y, options);
                         *needs_rebuild = true;
                         self.needs_rebuild = true;
                         return None;
                     }
+                } else if self.current_page == Page::Browse
+                    && self.browse.list.hit(pos.x, pos.y)
+                    && pos.y <= self.browse.list.y + self.browse.list.viewport_h
+                    && !services::trash::is_trash_files_dir(&self.browse.current_dir)
+                {
+                    // Empty space below the rows: a menu for the directory itself.
+                    let name = self
+                        .browse
+                        .current_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "/".to_string());
+                    let options = vec![
+                        (format!("[Directory] {}", name), None),
+                        ("New Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NewFolder))),
+                    ];
+                    self.open_context_menu(pos.x, pos.y, options);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
                 }
             }
         }

@@ -40,6 +40,8 @@ pub enum FsRequest {
     /// Restore a trashed item (a path under Trash/files) to its origin.
     RestorePath(PathBuf),
     EmptyTrash,
+    /// Create a new, uniquely named folder inside the given directory.
+    CreateDir(PathBuf),
     /// Walk a whole subtree for the Space view. The flag is the caller's
     /// cancel token — raising it abandons a scan whose answer is no longer
     /// wanted (see `SpaceState::begin_scan`).
@@ -123,6 +125,14 @@ impl FsService {
                             ));
                         });
                     }
+                    FsRequest::CreateDir(parent) => {
+                        tokio::spawn(async move {
+                            let result = create_new_folder(&parent).map_err(|e| e.to_string());
+                            let _ = app_sender.send(crate::Message::Browse(
+                                crate::pages::browse::BrowseMessage::FolderCreated(parent, result),
+                            ));
+                        });
+                    }
                     FsRequest::ScanTree(path, cancel) => {
                         // Minutes of blocking recursion on a large tree, so
                         // this goes to the blocking pool rather than tying up
@@ -193,6 +203,22 @@ impl FsService {
 }
 
 // ── Internal Helper Functions ───────────────────────────────────────
+
+/// Create "New Folder" in `parent`, or "New Folder 2", "New Folder 3", … when
+/// the name is taken. `create_dir` itself is the existence check, so a name
+/// claimed between two attempts just moves on to the next one.
+pub fn create_new_folder(parent: &Path) -> std::io::Result<PathBuf> {
+    for n in 1u32.. {
+        let name = if n == 1 { "New Folder".to_string() } else { format!("New Folder {n}") };
+        let path = parent.join(name);
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
 
 pub fn read_directory_internal(path: &Path) -> Vec<DirEntry> {
     let in_trash = super::trash::is_trash_files_dir(path);
@@ -705,6 +731,23 @@ pub fn open_file(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_create_new_folder_picks_unique_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "cce_test_new_folder_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let first = create_new_folder(&dir).unwrap();
+        let second = create_new_folder(&dir).unwrap();
+        assert_eq!(first, dir.join("New Folder"));
+        assert_eq!(second, dir.join("New Folder 2"));
+        assert!(first.is_dir() && second.is_dir());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     #[serial_test::serial]

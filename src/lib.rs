@@ -15,7 +15,8 @@ pub enum Message {
     SelectOpen,
     SelectCancel,
     PromptOpenWith(std::path::PathBuf),
-    OpenWithSubmit,
-    OpenWithCancel,
+    PromptRename(std::path::PathBuf),
+    PromptSubmit,
+    PromptCancel,
     CopyPath(String),
 }

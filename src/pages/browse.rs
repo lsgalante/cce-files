@@ -106,6 +106,10 @@ pub enum BrowseMessage {
     NewFolder,
     /// (parent dir, the created folder or the error).
     FolderCreated(PathBuf, Result<PathBuf, String>),
+    /// Rename the entry at this path to the given bare name, in place.
+    RenameEntry(PathBuf, String),
+    /// (old path, the new path or the error).
+    Renamed(PathBuf, Result<PathBuf, String>),
     Deleted(PathBuf, Result<(), String>),
     TrashEmptied(Result<(), String>),
     LastDirLoaded(Option<PathBuf>),
@@ -150,6 +154,23 @@ pub fn path_to_segment(current_dir: &Path, seg: usize) -> PathBuf {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/// The target path for renaming `path` to `new_name`, or `Ok(None)` when the
+/// name is unchanged. Only bare names are accepted — a rename never moves an
+/// entry to another directory.
+pub fn validate_new_name(path: &Path, new_name: &str) -> Result<Option<PathBuf>, String> {
+    if new_name.is_empty() || new_name == "." || new_name == ".." {
+        return Err(format!("\"{new_name}\" is not a valid name"));
+    }
+    if new_name.contains('/') || new_name.contains('\0') {
+        return Err("names cannot contain '/'".to_string());
+    }
+    if path.file_name().is_some_and(|n| n == new_name) {
+        return Ok(None);
+    }
+    let parent = path.parent().ok_or_else(|| "cannot rename the root".to_string())?;
+    Ok(Some(parent.join(new_name)))
+}
 
 pub fn read_directory(path: &Path) -> Vec<DirEntry> {
     crate::services::fs::read_directory_internal(path)
@@ -497,6 +518,23 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
                 log::error!("Failed to empty trash: {}", e);
             }
             Some(crate::services::fs::FsRequest::ReadDirectory(state.current_dir.clone()))
+        }
+        BrowseMessage::RenameEntry(path, new_name) => {
+            match validate_new_name(&path, &new_name) {
+                Ok(Some(to)) => Some(crate::services::fs::FsRequest::RenamePath(path, to)),
+                Ok(None) => None,
+                Err(e) => {
+                    log::error!("Cannot rename {}: {}", path.display(), e);
+                    None
+                }
+            }
+        }
+        BrowseMessage::Renamed(from, result) => {
+            match result {
+                Ok(to) => state.pending_select = Some(to),
+                Err(e) => log::error!("Failed to rename {}: {}", from.display(), e),
+            }
+            Some(crate::services::fs::FsRequest::RefreshDirectory(state.current_dir.clone()))
         }
         BrowseMessage::Deleted(path, result) => {
             match result {
@@ -890,6 +928,16 @@ mod tests {
 
         // Clean up directory
         let _ = std::fs::remove_dir_all(&test_subdir);
+    }
+
+    #[test]
+    fn test_validate_new_name() {
+        let path = PathBuf::from("/home/user/notes.txt");
+        assert_eq!(validate_new_name(&path, "todo.md"), Ok(Some(PathBuf::from("/home/user/todo.md"))));
+        assert_eq!(validate_new_name(&path, "notes.txt"), Ok(None));
+        for bad in ["", ".", "..", "a/b", "../x"] {
+            assert!(validate_new_name(&path, bad).is_err(), "{bad:?} should be rejected");
+        }
     }
 
     #[test]

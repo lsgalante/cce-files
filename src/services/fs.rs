@@ -42,6 +42,8 @@ pub enum FsRequest {
     EmptyTrash,
     /// Create a new, uniquely named folder inside the given directory.
     CreateDir(PathBuf),
+    /// Rename (from, to) — refused when `to` already exists.
+    RenamePath(PathBuf, PathBuf),
     /// Walk a whole subtree for the Space view. The flag is the caller's
     /// cancel token — raising it abandons a scan whose answer is no longer
     /// wanted (see `SpaceState::begin_scan`).
@@ -133,6 +135,14 @@ impl FsService {
                             ));
                         });
                     }
+                    FsRequest::RenamePath(from, to) => {
+                        tokio::spawn(async move {
+                            let result = rename_no_clobber(&from, &to).map(|_| to).map_err(|e| e.to_string());
+                            let _ = app_sender.send(crate::Message::Browse(
+                                crate::pages::browse::BrowseMessage::Renamed(from, result),
+                            ));
+                        });
+                    }
                     FsRequest::ScanTree(path, cancel) => {
                         // Minutes of blocking recursion on a large tree, so
                         // this goes to the blocking pool rather than tying up
@@ -203,6 +213,23 @@ impl FsService {
 }
 
 // ── Internal Helper Functions ───────────────────────────────────────
+
+/// `fs::rename`, except it will not replace an existing `to` — plain rename
+/// silently overwrites a file of the same name.
+pub fn rename_no_clobber(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    // The same inode is a case-only rename on a case-insensitive mount, not a clobber.
+    let same_file = |a: &fs::Metadata, b: &fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+    if let Ok(existing) = fs::symlink_metadata(to)
+        && !fs::symlink_metadata(from).is_ok_and(|m| same_file(&m, &existing))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{} already exists", to.display()),
+        ));
+    }
+    fs::rename(from, to)
+}
 
 /// Create "New Folder" in `parent`, or "New Folder 2", "New Folder 3", … when
 /// the name is taken. `create_dir` itself is the existence check, so a name
@@ -731,6 +758,28 @@ pub fn open_file(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_rename_no_clobber() {
+        let dir = std::env::temp_dir().join(format!(
+            "cce_test_rename_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let (a, b, c) = (dir.join("a.txt"), dir.join("b.txt"), dir.join("c.txt"));
+        fs::write(&a, "a").unwrap();
+        fs::write(&b, "b").unwrap();
+
+        // An existing target is refused and left untouched.
+        assert!(rename_no_clobber(&a, &b).is_err());
+        assert_eq!(fs::read_to_string(&b).unwrap(), "b");
+
+        rename_no_clobber(&a, &c).unwrap();
+        assert!(!a.exists());
+        assert_eq!(fs::read_to_string(&c).unwrap(), "a");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_create_new_folder_picks_unique_names() {

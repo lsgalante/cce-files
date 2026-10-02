@@ -37,18 +37,56 @@ fn context_menu_size(options: &[(String, Option<Message>)]) -> (f32, f32) {
     (w, h)
 }
 
-/// Computed rects for the "Open with…" modal, so layout and hit-testing agree.
-struct OpenWithRects {
+/// Computed rects for the prompt modal ("Open with…" / "Rename"), so layout
+/// and hit-testing agree.
+struct PromptRects {
     x: f32,
     y: f32,
     w: f32,
     h: f32,
     tb: (f32, f32, f32, f32),
     cancel: (f32, f32, f32, f32),
-    open: (f32, f32, f32, f32),
+    ok: (f32, f32, f32, f32),
 }
 
-fn open_with_rects(win_w: f32, win_h: f32) -> OpenWithRects {
+/// What a [`PromptDialog`] submits to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromptKind {
+    /// Run the typed command on `path`.
+    OpenWith,
+    /// Rename `path` to the typed name, in place.
+    Rename,
+}
+
+impl PromptKind {
+    fn title(self) -> &'static str {
+        match self {
+            PromptKind::OpenWith => "Open with...",
+            PromptKind::Rename => "Rename",
+        }
+    }
+    fn prompt(self) -> &'static str {
+        match self {
+            PromptKind::OpenWith => "Enter command:",
+            PromptKind::Rename => "New name:",
+        }
+    }
+    fn ok_label(self) -> &'static str {
+        match self {
+            PromptKind::OpenWith => "Open",
+            PromptKind::Rename => "Rename",
+        }
+    }
+}
+
+/// The single-line modal prompt: one text well, Cancel + an OK button.
+struct PromptDialog {
+    kind: PromptKind,
+    path: std::path::PathBuf,
+    textbox: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
+}
+
+fn prompt_rects(win_w: f32, win_h: f32) -> PromptRects {
     let x = (win_w - DIALOG_W) / 2.0;
     let y = (win_h - DIALOG_H) / 2.0;
     let tb_h = cce_ui::layout::textbox_height();
@@ -61,7 +99,7 @@ fn open_with_rects(win_w: f32, win_h: f32) -> OpenWithRects {
     let (cancel_w, open_w) = (70.0, 80.0);
     let btn_y = y + DIALOG_H - btn_h - pad;
     let open_x = x + DIALOG_W - pad - open_w;
-    OpenWithRects {
+    PromptRects {
         x,
         y,
         w: DIALOG_W,
@@ -70,7 +108,7 @@ fn open_with_rects(win_w: f32, win_h: f32) -> OpenWithRects {
         // 42) is the dialog's own text rhythm, not a rung.
         tb: (x + pad, y + 60.0, DIALOG_W - 2.0 * pad, tb_h),
         cancel: (open_x - gap - cancel_w, btn_y, cancel_w, btn_h),
-        open: (open_x, btn_y, open_w, btn_h),
+        ok: (open_x, btn_y, open_w, btn_h),
     }
 }
 
@@ -449,7 +487,7 @@ struct FilesystemApp {
     /// `renderer_init`.
     seen_renderer: bool,
     context_menu: ContextMenu,
-    open_with_dialog: Option<(std::path::PathBuf, cce_ui::widget::Adapted<cce_ui::widget::TextBox>)>,
+    prompt_dialog: Option<PromptDialog>,
     browse_split: SplitPane,
     network_split: SplitPane,
     space_split: SplitPane,
@@ -616,7 +654,7 @@ impl FilesystemApp {
         self.network.breadcrumb.clear_children(&mut self.ui_context); self.network.breadcrumb.set_parent(None, &mut self.ui_context);
         self.network.graph.clear_children(&mut self.ui_context); self.network.graph.set_parent(None, &mut self.ui_context);
         self.space.breadcrumb.clear_children(&mut self.ui_context); self.space.breadcrumb.set_parent(None, &mut self.ui_context);
-        if let Some((_, textbox)) = &mut self.open_with_dialog {
+        if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
             textbox.clear_children(&mut self.ui_context);
             textbox.set_parent(None, &mut self.ui_context);
         }
@@ -669,7 +707,7 @@ impl FilesystemApp {
             }
         }
 
-        if let Some((_, textbox)) = &mut self.open_with_dialog {
+        if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
             self.ui_context.register_widget(textbox.base().id(), textbox.as_ptr_mut());
             textbox.set_parent(None, &mut self.ui_context);
         }
@@ -719,7 +757,7 @@ impl FilesystemApp {
                         (*self_ptr).preview.push_prims(&mut plain_pc);
                     }
                 }
-                if let Some((_, textbox)) = &mut (*self_ptr).open_with_dialog {
+                if let Some(PromptDialog { textbox, .. }) = &mut (*self_ptr).prompt_dialog {
                     let (x, y, w, h) = textbox.rect();
                     cce_ui::layout::render_widget(&mut plain_pc, textbox, x, y, w, h, &mut self.ui_context);
                 }
@@ -877,14 +915,15 @@ impl FilesystemApp {
             }
         }
 
-        // Gather open-with dialog backdrop & dialog panel if active (open_with_dialog uses textbox rendering manually but we can gather its other quads/texts)
+        // Gather the prompt dialog backdrop & panel if active (its textbox renders with the window widgets; this is everything else)
         let mut dialog_pc = pages::PageContent::new();
-        if let Some((_path, textbox)) = &mut self.open_with_dialog {
-            let r = open_with_rects(self.width as f32, self.height as f32);
+        if let Some(PromptDialog { kind, textbox, .. }) = &mut self.prompt_dialog {
+            let kind = *kind;
+            let r = prompt_rects(self.width as f32, self.height as f32);
             let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
             let (tb_x, tb_y, tb_w, tb_h) = r.tb;
             let (btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h) = r.cancel;
-            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.open;
+            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.ok;
 
             // Semi-transparent backdrop overlay
             dialog_pc.rect([0.02, 0.02, 0.03, 0.6], 0.0, 0.0, self.width as f32, self.height as f32);
@@ -894,11 +933,11 @@ impl FilesystemApp {
             dialog_pc.rect([0.08, 0.08, 0.12, 1.0], dialog_x + 1.0, dialog_y + 1.0, dialog_w - 2.0, dialog_h - 2.0);
 
             // Title and prompt, inset from the plate rim by the pane rung
-            // (the same inset the well and buttons take in open_with_rects).
+            // (the same inset the well and buttons take in prompt_rects).
             let dialog_pad = cce_ui::layout::plate_padding();
-            dialog_pc.text("Open with...", dialog_x + dialog_pad, dialog_y + dialog_pad, 14.0, [1.0, 1.0, 1.0, 1.0]);
+            dialog_pc.text(kind.title(), dialog_x + dialog_pad, dialog_y + dialog_pad, 14.0, [1.0, 1.0, 1.0, 1.0]);
             // TODO(style): the prompt's 42px drop is the dialog's text rhythm.
-            dialog_pc.text("Enter command:", dialog_x + dialog_pad, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
+            dialog_pc.text(kind.prompt(), dialog_x + dialog_pad, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
 
             // Set textbox position dynamically using configured textbox height
             textbox.set_rect(tb_x, tb_y, tb_w, tb_h);
@@ -909,8 +948,8 @@ impl FilesystemApp {
             // Plain toolkit faces, like the chooser footer: the themed Button
             // owns its own hover state, so the hand-rolled cursor tracking and
             // the red/green tints go together.
-            dialog_pc.button_plain("Cancel", btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h, Message::OpenWithCancel);
-            dialog_pc.button_plain("Open", btn_open_x, btn_open_y, btn_open_w, btn_open_h, Message::OpenWithSubmit);
+            dialog_pc.button_plain("Cancel", btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h, Message::PromptCancel);
+            dialog_pc.button_plain(kind.ok_label(), btn_open_x, btn_open_y, btn_open_w, btn_open_h, Message::PromptSubmit);
         }
 
         // Translate everything into widgets and text_items!
@@ -1204,7 +1243,7 @@ impl Application for FilesystemApp {
 
     fn is_movable_root_plate_at(&self, px: f32, py: f32) -> bool {
         // 1. If dialog is open, do not drag
-        if self.open_with_dialog.is_some() {
+        if self.prompt_dialog.is_some() {
             return false;
         }
         // 2. If context menu is visible, do not drag
@@ -1336,7 +1375,7 @@ impl Application for FilesystemApp {
                 options: Vec::new(),
                 hovered: None,
             },
-            open_with_dialog: None,
+            prompt_dialog: None,
             browse_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
             network_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
             space_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
@@ -1541,26 +1580,57 @@ impl Application for FilesystemApp {
                     .with_placeholder("Program/Command");
                 tb.focus();
                 self.ui_context.set_focused(&mut tb);
-                self.open_with_dialog = Some((path, tb));
+                self.prompt_dialog = Some(PromptDialog { kind: PromptKind::OpenWith, path, textbox: tb });
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
-            Message::OpenWithSubmit => {
-                if let Some((path, textbox)) = self.open_with_dialog.take() {
-                    let cmd_str = if textbox.editing {
+            Message::PromptRename(path) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                // Preselect the stem, not the extension, so typing replaces
+                // just the part people usually mean to change.
+                let stem_chars = if path.is_dir() {
+                    name.chars().count()
+                } else {
+                    path.file_stem().map(|s| s.to_string_lossy().chars().count()).unwrap_or(0)
+                };
+                let mut tb = cce_ui::widget::TextBox::new(name).with_max_width(None);
+                tb.focus();
+                tb.cursor_idx = stem_chars;
+                tb.select_anchor = Some(0);
+                tb.all_selected = false;
+                tb.sync_editor_state();
+                self.ui_context.set_focused(&mut tb);
+                self.prompt_dialog = Some(PromptDialog { kind: PromptKind::Rename, path, textbox: tb });
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            Message::PromptSubmit => {
+                if let Some(PromptDialog { kind, path, textbox }) = self.prompt_dialog.take() {
+                    let value = if textbox.editing {
                         textbox.edit_buffer.trim().to_string()
                     } else {
                         textbox.text.trim().to_string()
                     };
-                    if !cmd_str.is_empty() {
-                        crate::services::fs::spawn_command_for_path(&cmd_str, &path);
+                    match kind {
+                        PromptKind::OpenWith => {
+                            if !value.is_empty() {
+                                crate::services::fs::spawn_command_for_path(&value, &path);
+                            }
+                        }
+                        PromptKind::Rename => {
+                            self.update(
+                                Message::Browse(pages::browse::BrowseMessage::RenameEntry(path, value)),
+                                needs_rebuild,
+                                _exit,
+                            );
+                        }
                     }
                 }
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
-            Message::OpenWithCancel => {
-                self.open_with_dialog = None;
+            Message::PromptCancel => {
+                self.prompt_dialog = None;
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1793,8 +1863,8 @@ impl Application for FilesystemApp {
 
         // Routed dispatch (6bd shrink): one Event through the router per targeted root.
         let mv = cce_ui::widget::Event::PointerMove { x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-        if self.open_with_dialog.is_some() {
-            if let Some((_path, textbox)) = &mut self.open_with_dialog {
+        if self.prompt_dialog.is_some() {
+            if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
                 let root = textbox.id();
                 let _ = self.ui_context.propagate_event(&mv, root);
             }
@@ -2006,19 +2076,19 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if let Some((_path, textbox)) = &mut self.open_with_dialog {
-            let r = open_with_rects(self.width as f32, self.height as f32);
+        if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
+            let r = prompt_rects(self.width as f32, self.height as f32);
             let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
             let (tb_x, tb_y, tb_w, tb_h) = r.tb;
             let (btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h) = r.cancel;
-            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.open;
+            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.ok;
 
             if state == ElementState::Pressed {
                 let clicked_inside = pos.x >= dialog_x && pos.x <= dialog_x + dialog_w && pos.y >= dialog_y && pos.y <= dialog_y + dialog_h;
                 if !clicked_inside {
                     textbox.unfocus();
                     self.ui_context.clear_focus();
-                    return Some(Message::OpenWithCancel);
+                    return Some(Message::PromptCancel);
                 }
 
                 if button == MouseButton::Left {
@@ -2033,11 +2103,11 @@ impl Application for FilesystemApp {
                     } else if pos.x >= btn_cancel_x && pos.x <= btn_cancel_x + btn_cancel_w && pos.y >= btn_cancel_y && pos.y <= btn_cancel_y + btn_cancel_h {
                         textbox.unfocus();
                         self.ui_context.clear_focus();
-                        return Some(Message::OpenWithCancel);
+                        return Some(Message::PromptCancel);
                     } else if pos.x >= btn_open_x && pos.x <= btn_open_x + btn_open_w && pos.y >= btn_open_y && pos.y <= btn_open_y + btn_open_h {
                         textbox.unfocus();
                         self.ui_context.clear_focus();
-                        return Some(Message::OpenWithSubmit);
+                        return Some(Message::PromptSubmit);
                     } else {
                         textbox.unfocus();
                         self.ui_context.clear_focus();
@@ -2145,6 +2215,9 @@ impl Application for FilesystemApp {
                         }
 
                         options.push(("Open with...".to_string(), Some(Message::PromptOpenWith(entry.path.clone()))));
+                        if !is_trash_dir {
+                            options.push(("Rename".to_string(), Some(Message::PromptRename(entry.path.clone()))));
+                        }
 
                         if is_trash_dir {
                             options.push(("Restore".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::RestoreEntry(idx)))));
@@ -2553,16 +2626,16 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if let Some((_path, textbox)) = &mut self.open_with_dialog {
+        if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
             if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
                 textbox.unfocus();
                 self.ui_context.clear_focus();
-                return Some(Message::OpenWithSubmit);
+                return Some(Message::PromptSubmit);
             }
             if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) {
                 textbox.unfocus();
                 self.ui_context.clear_focus();
-                return Some(Message::OpenWithCancel);
+                return Some(Message::PromptCancel);
             }
             let kev = cce_ui::widget::Event::KeyInput(event.clone());
             let root = textbox.id();

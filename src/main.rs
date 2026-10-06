@@ -469,6 +469,11 @@ struct FilesystemApp {
     texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
     font_system: FontSystem,
     needs_rebuild: bool,
+    /// What the last rebuild's widgets claimed for text input (an editing
+    /// TextBox, `cce_ui::text_input::capture`). Claimed again every frame:
+    /// a frame that only replays the cached layout paints no widget, and
+    /// would otherwise read as the field closing.
+    text_claim: Option<[f32; 4]>,
     width: u32,
     height: u32,
     scale_factor: f64,
@@ -619,7 +624,14 @@ impl FilesystemApp {
         self.needs_rebuild = true;
     }
 
+    /// Lay the window out and flatten it into the cached frame, keeping what
+    /// its widgets claimed for text input (`text_claim`).
     fn rebuild_layout(&mut self) {
+        let ((), claim) = cce_ui::text_input::capture(|| self.rebuild_layout_inner());
+        self.text_claim = claim;
+    }
+
+    fn rebuild_layout_inner(&mut self) {
 
         // Well focus → the emitters (each picks the tinted carve when set).
         self.browse.list.focused = self.focused_well == FocusedWell::Content;
@@ -1352,6 +1364,7 @@ impl Application for FilesystemApp {
             texts: Vec::new(),
             font_system: cce_ui::create_font_system(),
             needs_rebuild: true,
+            text_claim: None,
             width: initial_w,
             height: initial_h,
             scale_factor: 1.0,
@@ -1844,6 +1857,9 @@ impl Application for FilesystemApp {
         // with it: `paint_with_labels` carries the menu font's family, which
         // the hand-rolled `paint` + `text_labels()` loop here did not.
         cce_ui::widget::context_menu::paint_with_labels(&mut pc);
+        if let Some([x, y, w, h]) = self.text_claim {
+            cce_ui::text_input::claim(x, y, w, h);
+        }
         Some(pc.finish())
     }
 

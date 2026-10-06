@@ -76,6 +76,10 @@ const LEGEND_GAP: f32 = 14.0;
 const FILE_GAP: f32 = 1.0;
 const FILE_GAP_MIN: f32 = 4.0;
 
+/// Opacity of the frame around the hovered tile's top-level folder: there
+/// to be found, not to compete with the hover outline itself.
+const TOP_FOLDER_ALPHA: f32 = 0.45;
+
 /// How far a directory drawn as one block is pulled from its kind's colour
 /// toward the frame: dim enough that it never reads as one big file of that
 /// kind, bright enough that it never reads as empty.
@@ -705,7 +709,14 @@ pub fn view(
         }
     }
 
-    // Selection and hover are drawn as outlines over the tiles.
+    // Selection and hover are drawn as outlines over the tiles. Under them,
+    // fainter and heavier, the top-level folder the hovered tile lies in:
+    // deep in the map, "which of my folders is this?" is the first question,
+    // and a 1px frame on the dark between tiles did not answer it.
+    if let Some(top) = state.hovered.and_then(|i| top_folder(&state.tiles, i)) {
+        let [r, g, b, _] = cce_ui::color::TEXT_ACCENT;
+        outline(&mut pc, state.tiles[top].rect, [r, g, b, TOP_FOLDER_ALPHA], 2.0);
+    }
     if let Some(sel) = &state.selected_path {
         if let Some(t) = state.tiles.iter().find(|t| &t.path == sel) {
             outline(&mut pc, t.rect, cce_ui::color::TEXT_HEADER, 2.0);
@@ -749,6 +760,16 @@ pub fn view(
     }
 
     pc
+}
+
+/// The top-level folder (depth 1) holding tile `idx`, when it lies deeper
+/// than that. Tiles are flattened depth-first, parents first, so the nearest
+/// depth-1 tile before it is its ancestor.
+fn top_folder(tiles: &[Tile], idx: usize) -> Option<usize> {
+    if tiles.get(idx)?.depth < 2 {
+        return None;
+    }
+    tiles[..idx].iter().rposition(|t| t.depth == 1)
 }
 
 /// The part of a file tile its colour fills: the tile less half of
@@ -1076,6 +1097,42 @@ mod tests {
         assert!(!state.tiles.iter().any(|t| t.name == "x.mp3"), "its children are not placed");
         // An opened directory, and any file, is not an aggregate.
         assert!(state.tiles.iter().filter(|t| t.name != "sub").all(|t| t.aggregate.is_none()));
+    }
+
+    #[test]
+    fn top_folder_is_the_hovered_tiles_depth_one_ancestor() {
+        let tree = TreeNode {
+            name: "root".into(),
+            size: 1000,
+            is_dir: true,
+            children: vec![
+                TreeNode {
+                    name: "a".into(),
+                    size: 600,
+                    is_dir: true,
+                    children: vec![TreeNode {
+                        name: "deep".into(),
+                        size: 600,
+                        is_dir: true,
+                        children: vec![file("x.bin", 400), file("y.bin", 200)],
+                    }],
+                },
+                TreeNode { name: "b".into(), size: 300, is_dir: true, children: vec![file("z.bin", 300)] },
+                file("loose.txt", 100),
+            ],
+        };
+        let mut tiles = Vec::new();
+        place(&tree, Path::new("/root"), (0.0, 0.0, 400.0, 400.0), 0, &HashMap::new(), &mut tiles);
+        let at = |name: &str| tiles.iter().position(|t| t.name == name).unwrap();
+
+        assert_eq!(top_folder(&tiles, at("y.bin")), Some(at("a")));
+        assert_eq!(top_folder(&tiles, at("deep")), Some(at("a")));
+        // Laid out after all of `a`, z must not be credited to it.
+        assert_eq!(top_folder(&tiles, at("z.bin")), Some(at("b")));
+        // At depth 1 or above there is nothing more to frame.
+        assert_eq!(top_folder(&tiles, at("a")), None);
+        assert_eq!(top_folder(&tiles, at("loose.txt")), None);
+        assert_eq!(top_folder(&tiles, 0), None);
     }
 
     #[test]

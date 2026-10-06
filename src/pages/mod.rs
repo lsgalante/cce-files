@@ -145,6 +145,31 @@ pub const RELIEF_RECESSED_FOCUS: u8 = 3;
 /// highlight — the ring a focused control plate wears (`ControlPlate::with_tint`).
 pub const RELIEF_INSET_FOCUS: u8 = 4;
 
+/// A stroked shape a widget draws: a graph's wire (a line, or an arc at a
+/// rounded bend) or its port (a disc). Coordinates as `PaintCtx` takes them;
+/// an arc's `radius` is its OUTER edge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Stroke {
+    Line { x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, cap: cce_ui::scene::paint::Cap },
+    Arc { cx: f32, cy: f32, radius: f32, thickness: f32, start: f32, end: f32 },
+    Disc { cx: f32, cy: f32, radius: f32 },
+}
+
+impl Stroke {
+    /// The shape's bounding box `(x, y, w, h)` — what culls it.
+    pub fn bounds(&self) -> (f32, f32, f32, f32) {
+        match *self {
+            Stroke::Line { x1, y1, x2, y2, thickness, .. } => {
+                let h = thickness * 0.5;
+                (x1.min(x2) - h, y1.min(y2) - h, (x1 - x2).abs() + thickness, (y1 - y2).abs() + thickness)
+            }
+            Stroke::Arc { cx, cy, radius, .. } | Stroke::Disc { cx, cy, radius } => {
+                (cx - radius, cy - radius, 2.0 * radius, 2.0 * radius)
+            }
+        }
+    }
+}
+
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
     pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
@@ -171,6 +196,10 @@ pub struct PageContent {
     /// order, after its images. The clip cuts a glyph scrolled half under an
     /// edge rather than squashing it, as text bounds cut a label.
     pub icons: Vec<(String, f32, f32, f32, f32, [f32; 4], Option<[f32; 4]>)>,
+    /// Strokes, arcs and discs — (shape, colour, clip `[l, t, r, b]`): a
+    /// widget's wires and ports as `render_widget` hands them over
+    /// (`RenderTarget::line` / `arc` / `circle`). The graph page's wires.
+    pub strokes: Vec<(Stroke, [f32; 4], Option<[f32; 4]>)>,
     /// Lit plates — (color, x, y, w, h, radius, depth). Unlike [`reliefs`], a plate
     /// owns its FILL as well as its edge: one primitive carrying a rounded face and
     /// the rolled, lit perimeter, shaded in a single lighting evaluation. That is
@@ -192,6 +221,7 @@ impl PageContent {
             grooves: Vec::new(),
             images: Vec::new(),
             icons: Vec::new(),
+            strokes: Vec::new(),
             plates: Vec::new(),
         }
     }
@@ -204,7 +234,7 @@ impl PageContent {
     /// exactly that reason. The destructuring below turns a new field into a
     /// compile error instead of a missing mark on screen.
     pub fn absorb(&mut self, other: PageContent) {
-        let PageContent { rects, texts, buttons, reliefs, grooves, images, icons, plates } = other;
+        let PageContent { rects, texts, buttons, reliefs, grooves, images, icons, strokes, plates } = other;
         self.rects.extend(rects);
         self.texts.extend(texts);
         self.buttons.extend(buttons);
@@ -212,6 +242,7 @@ impl PageContent {
         self.grooves.extend(grooves);
         self.images.extend(images);
         self.icons.extend(icons);
+        self.strokes.extend(strokes);
         self.plates.extend(plates);
     }
 
@@ -219,7 +250,8 @@ impl PageContent {
     /// fill wholly outside is dropped), and the bounds of every label and
     /// glyph narrowed to it. For a widget that paints past the rect it was
     /// given — the graph, panned — since a flat host has no clip stack.
-    /// Parts with no clip of their own (buttons, reliefs, grooves, images,
+    /// Strokes are cut by their clip as glyphs are. Parts with no clip of
+    /// their own (buttons, reliefs, grooves, images,
     /// plates) pass through as they are.
     pub fn clipped_to(mut self, clip: [f32; 4]) -> Self {
         let [l, t, r, b] = clip;
@@ -243,6 +275,9 @@ impl PageContent {
         }
         for i in &mut self.icons {
             i.6 = narrow(i.6);
+        }
+        for st in &mut self.strokes {
+            st.2 = narrow(st.2);
         }
         self
     }
@@ -431,6 +466,18 @@ impl PageContent {
 impl RenderTarget for PageContent {
     fn icon(&mut self, name: &str, rect: cce_ui::scene::layout::Rect, color: [f32; 4]) {
         PageContent::icon(self, name, rect.x, rect.y, rect.width, rect.height, color);
+    }
+
+    fn line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: [f32; 4], cap: cce_ui::scene::paint::Cap) {
+        self.strokes.push((Stroke::Line { x1, y1, x2, y2, thickness, cap }, color, None));
+    }
+
+    fn arc(&mut self, cx: f32, cy: f32, radius: f32, thickness: f32, start: f32, end: f32, color: [f32; 4]) {
+        self.strokes.push((Stroke::Arc { cx, cy, radius, thickness, start, end }, color, None));
+    }
+
+    fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: [f32; 4]) {
+        self.strokes.push((Stroke::Disc { cx, cy, radius }, color, None));
     }
 
     fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {

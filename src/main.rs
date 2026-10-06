@@ -266,6 +266,10 @@ enum WidgetFx {
     /// A cce-icons glyph tinted with the widget's `color` (`PaintCtx::icon`),
     /// cut to `clip` when it has one.
     Icon { name: String, clip: Option<cce_ui::scene::layout::Rect> },
+    /// A widget's stroke, arc or disc (a graph's wire or port) in the
+    /// widget's `color`, cut to `clip` when it has one; the rect is its
+    /// bounding box, for culling.
+    Stroke { shape: crate::pages::Stroke, clip: Option<cce_ui::scene::layout::Rect> },
     /// A line engraved from (ax, ay) to (bx, by) into the widget's rect, which
     /// is the HOST surface here rather than the mark's own bounds — the shading
     /// fades out across the host's rolled edge. The breadcrumb's slanted seams;
@@ -1082,6 +1086,41 @@ impl FilesystemApp {
                     fx: WidgetFx::Icon { name: name.clone(), clip },
                 });
             }
+            for (shape, color, bounds) in &pc_part.strokes {
+                // Cut by a clip, as the glyphs are: a wire is a line, not a
+                // fill to press flat.
+                let (sx, sy, sw, sh) = shape.bounds();
+                let mut clip = bounds.map(|[l, t, r, b]| cce_ui::scene::layout::Rect { x: l, y: t, width: r - l, height: b - t });
+                if is_page_content {
+                    // The page's view cuts a stroke top and bottom only. Its
+                    // own box is no clip across: a vertical wire is one pixel
+                    // wide on a half-pixel, and a scissor that tight rounds
+                    // it away (the graph page drew only its horizontal runs).
+                    let view = cce_ui::scene::layout::Rect { x: sx - 4.0, y: content_y, width: sw + 8.0, height: content_h };
+                    clip = Some(match clip {
+                        Some(c) => intersect_rect(c, view),
+                        None => view,
+                    });
+                }
+                if let Some(c) = clip {
+                    if c.width <= 0.0 || c.height <= 0.0
+                        || c.x >= sx + sw || c.x + c.width <= sx
+                        || c.y >= sy + sh || c.y + c.height <= sy
+                    {
+                        continue;
+                    }
+                }
+                widgets.push(AppWidget {
+                    x: sx,
+                    y: sy,
+                    w: sw,
+                    h: sh,
+                    color: *color,
+                    radius: 0.0,
+                    corners: (true, true, true, true),
+                    fx: WidgetFx::Stroke { shape: *shape, clip },
+                });
+            }
             for (rx, ry, rw, rh, rr, rd, kind) in &pc_part.reliefs {
                 let (mut wy, mut wh) = (*ry, *rh);
                 if is_page_content {
@@ -1835,6 +1874,19 @@ impl Application for FilesystemApp {
                         pc.push_clip(c);
                     }
                     pc.icon(&name, rect, w.color);
+                    if clip.is_some() {
+                        pc.pop_clip();
+                    }
+                }
+                WidgetFx::Stroke { shape, clip } => {
+                    if let Some(c) = clip {
+                        pc.push_clip(c);
+                    }
+                    match shape {
+                        crate::pages::Stroke::Line { x1, y1, x2, y2, thickness, cap } => pc.vector(x1, y1, x2, y2, thickness, w.color, cap),
+                        crate::pages::Stroke::Arc { cx, cy, radius, thickness, start, end } => pc.arc(cx, cy, radius, thickness, start, end, w.color),
+                        crate::pages::Stroke::Disc { cx, cy, radius } => pc.circle(cx, cy, radius, w.color),
+                    }
                     if clip.is_some() {
                         pc.pop_clip();
                     }

@@ -16,6 +16,8 @@ cargo test      # run unit tests (nine modules have them; `browse.rs` has the mo
 cargo test test_is_project_dir_detection    # run a single test by name
 ```
 
+**Tests never set `HOME` / `XDG_CONFIG_HOME`.** The env is process-wide, so every test running alongside one sees the temp dir too — and cce-ui's style registry loads once per process, so a first load inside that window left the whole run on built-in defaults (that is what made the network fit test flaky). A config reader takes the dir as a parameter instead (`read_last_dir_in`, `save_last_dir_in`, `load_kdl_associations_in`), with the env-resolving wrapper beside it; tests pass a temp dir.
+
 Running the binary requires a Wayland session — it will not run headless. Edition is **2024**; the `cce-ui` sibling is edition 2021. When touching layout/widget behavior, the actual widget implementations live in `../cce-ui/src/widget/`, not here.
 
 ## Architecture

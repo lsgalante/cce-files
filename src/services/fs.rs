@@ -566,14 +566,19 @@ pub fn cce_config_dir() -> Option<PathBuf> {
     Some(cce_ui::config::cce_config_dir())
 }
 
-fn get_last_dir_file_path() -> Option<PathBuf> {
-    let dir = cce_config_dir()?.join("cce-files");
-    let _ = fs::create_dir_all(&dir);
-    Some(dir.join("cce-files-last-dir.txt"))
+/// The last-dir file under a cce config dir (`cce_config_dir()` in the app; a temp dir
+/// in tests, which is why it is a parameter: setting HOME in a test points every test
+/// running alongside it at the wrong config too).
+fn last_dir_file_in(config_dir: &Path) -> PathBuf {
+    config_dir.join("cce-files").join("cce-files-last-dir.txt")
 }
 
 pub fn read_last_dir_internal() -> Option<PathBuf> {
-    let path = get_last_dir_file_path()?;
+    read_last_dir_in(&cce_config_dir()?)
+}
+
+pub fn read_last_dir_in(config_dir: &Path) -> Option<PathBuf> {
+    let path = last_dir_file_in(config_dir);
     if path.exists() {
         let content = fs::read_to_string(path).ok()?;
         let trimmed = content.trim();
@@ -588,9 +593,17 @@ pub fn read_last_dir_internal() -> Option<PathBuf> {
 }
 
 pub fn save_last_dir_internal(dir: &Path) {
-    if let Some(path) = get_last_dir_file_path() {
-        let _ = fs::write(path, dir.to_string_lossy().as_bytes());
+    if let Some(config_dir) = cce_config_dir() {
+        save_last_dir_in(&config_dir, dir);
     }
+}
+
+pub fn save_last_dir_in(config_dir: &Path, dir: &Path) {
+    let path = last_dir_file_in(config_dir);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, dir.to_string_lossy().as_bytes());
 }
 
 pub fn get_mime_type(path: &Path) -> Option<String> {
@@ -618,7 +631,12 @@ pub fn get_mime_type(path: &Path) -> Option<String> {
 }
 
 pub fn load_kdl_associations() -> Option<std::collections::HashMap<String, String>> {
-    let path = cce_config_dir()?.join("mime.kdl");
+    load_kdl_associations_in(&cce_config_dir()?)
+}
+
+/// `mime.kdl` under `config_dir`; see `last_dir_file_in` for why it is a parameter.
+pub fn load_kdl_associations_in(config_dir: &Path) -> Option<std::collections::HashMap<String, String>> {
+    let path = config_dir.join("mime.kdl");
     if !path.exists() {
         return None;
     }
@@ -820,41 +838,25 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_kdl() {
-        let unique_dir_name = format!("cce_test_kdl_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-        let temp_path = std::env::temp_dir().join(unique_dir_name);
-        let config_dir = temp_path.join(".config").join("cce");
-        std::fs::create_dir_all(&config_dir).unwrap();
-        let mime_file = config_dir.join("mime.kdl");
-        std::fs::write(&mime_file, "associations { association \"text/plain\" \"cce-text-editor\" }").unwrap();
-        
-        let old_home = std::env::var("HOME").ok();
-        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        unsafe {
-            std::env::set_var("HOME", &temp_path);
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
+        let config_dir = std::env::temp_dir().join(format!(
+            "cce_test_kdl_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("mime.kdl"),
+            "associations { association \"text/plain\" \"cce-text-editor\" }",
+        )
+        .unwrap();
 
-        let assoc = load_kdl_associations();
+        let assoc = load_kdl_associations_in(&config_dir);
+        let _ = fs::remove_dir_all(&config_dir);
 
-        unsafe {
-            if let Some(ref h) = old_home {
-                std::env::set_var("HOME", h);
-            } else {
-                std::env::remove_var("HOME");
-            }
-            if let Some(ref x) = old_xdg {
-                std::env::set_var("XDG_CONFIG_HOME", x);
-            } else {
-                std::env::remove_var("XDG_CONFIG_HOME");
-            }
-        }
-
-        let _ = std::fs::remove_dir_all(&temp_path);
-        
-        println!("Parsed associations: {:?}", assoc);
-        assert!(assoc.is_some());
+        assert_eq!(
+            assoc.and_then(|m| m.get("text/plain").cloned()).as_deref(),
+            Some("cce-text-editor")
+        );
     }
 }
 

@@ -834,47 +834,20 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_directory_persistence() {
-        let temp_dir = std::env::temp_dir();
-        let original_home = std::env::var("HOME");
-        let original_xdg = std::env::var("XDG_CONFIG_HOME");
-        
-        // Mock HOME env variable so we don't overwrite user's actual config
-        let mock_home = temp_dir.join("mock_home_dir_cce");
-        let _ = std::fs::create_dir_all(&mock_home);
-        unsafe {
-            std::env::set_var("HOME", &mock_home);
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
-        
-        let test_dir = temp_dir.join("test_persist_dir");
-        let _ = std::fs::create_dir_all(&test_dir);
-        
-        // Save last directory
-        crate::services::fs::save_last_dir_internal(&test_dir);
-        
-        // Read last directory
-        let restored = crate::services::fs::read_last_dir_internal();
-        assert_eq!(restored, Some(test_dir.clone()));
-        
-        // Restore HOME env var
-        if let Ok(val) = original_home {
-            unsafe { std::env::set_var("HOME", val); }
-        } else {
-            unsafe { std::env::remove_var("HOME"); }
-        }
-        
-        // Restore XDG_CONFIG_HOME
-        if let Ok(val) = original_xdg {
-            unsafe { std::env::set_var("XDG_CONFIG_HOME", val); }
-        } else {
-            unsafe { std::env::remove_var("XDG_CONFIG_HOME"); }
-        }
-        
-        // Clean up
-        let _ = std::fs::remove_dir_all(&mock_home);
-        let _ = std::fs::remove_dir(&test_dir);
+        let root = std::env::temp_dir().join(format!(
+            "cce_test_persist_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let config_dir = root.join("config");
+        let test_dir = root.join("persisted");
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        crate::services::fs::save_last_dir_in(&config_dir, &test_dir);
+        let restored = crate::services::fs::read_last_dir_in(&config_dir);
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(restored, Some(test_dir));
     }
 
     #[tokio::test]

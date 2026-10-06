@@ -14,11 +14,6 @@ image = { version = "0.25.10", features = ["png", "jpeg"] }
 log = "0.4"
 kdl = "6.7.1"
 
-
-
-[dev-dependencies]
-serial_test = "3"
-
 [lib]
 name = "cce_files"
 path = "src/lib.rs"

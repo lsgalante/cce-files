@@ -229,21 +229,12 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let client_h = ch - 2.0 * margin;
     layout.init(client_x, client_y, client_w, client_h);
 
-    let breadcrumb_h = 24.0;
+    let breadcrumb_h = crate::pages::BREADCRUMB_H;
     let textbox_h = cce_ui::layout::textbox_height();
 
-    // 1. Allocate and render the Breadcrumb, full width: the view switch that
-    // used to sit beside it is in its context menu now.
-    let (bx, by, bw, bh) = layout.allocate(client_w, breadcrumb_h);
-    cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, bx, by, bw, bh, ctx);
-    // The breadcrumb's well + segment plate live in its modern paint(); the flat
-    // view this host renders through loses them, so carve here: the full-width
-    // recessed well, then the run's raised plate within it (the dropdown-mirror
-    // pairing), divided by the slanted seams.
-    {
-        let rect = cce_ui::scene::layout::Rect { x: bx, y: by, width: bw, height: bh };
-        crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
-    }
+    // 1. Allocate and render the Breadcrumb, where every page puts it.
+    let (bx, by, bw, _) = layout.allocate(client_w, breadcrumb_h);
+    crate::pages::breadcrumb_header(&mut pc, &mut state.breadcrumb, bx, by, bw, ctx);
 
     // 2. Allocate and render List (ScrollBox)
     // The scrolling list height occupies the remaining vertical space:

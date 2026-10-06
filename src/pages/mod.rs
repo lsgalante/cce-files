@@ -38,6 +38,30 @@ impl Page {
     }
 }
 
+/// The breadcrumb's height on every page.
+pub const BREADCRUMB_H: f32 = 24.0;
+
+/// Lay out, render and carve a page's breadcrumb: the pane's full width along
+/// its top edge, the same on every page, so switching views leaves it where it
+/// was. Returns the top of the content under it, one plate gap below.
+///
+/// Network and Space used to place theirs 4px in, 6px down and 16px narrower
+/// than Browse, an inset left over from before the pane rect carried it, and
+/// started their content 28px and 34px down against Browse's 24 + gap.
+pub fn breadcrumb_header(
+    pc: &mut PageContent,
+    breadcrumb: &mut cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
+    cx: f32,
+    cy: f32,
+    cw: f32,
+    ctx: &mut cce_ui::context::UiContext,
+) -> f32 {
+    cce_ui::layout::render_widget(pc, breadcrumb, cx, cy, cw, BREADCRUMB_H, ctx);
+    let rect = cce_ui::scene::layout::Rect { x: cx, y: cy, width: cw, height: BREADCRUMB_H };
+    breadcrumb_relief(pc, breadcrumb, rect);
+    cy + BREADCRUMB_H + cce_ui::layout::root_plate_gap()
+}
+
 /// Mirror the breadcrumb's relief into a flat-path [`PageContent`]: the
 /// full-width recessed well, the ONE raised plate the segment run shares, and a
 /// slanted seam engraved at each boundary between two segments.

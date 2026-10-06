@@ -204,18 +204,10 @@ impl NetworkState {
 pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
 
-    // Render the Breadcrumb, full width (the view switch is in its context menu).
-    // TODO(style): the 4/6/16 offsets are a leftover inset from the pane rect
-    // that browse.rs has already dropped.
-    let breadcrumb_w = cw - 16.0;
-    cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
-    {
-        let rect = cce_ui::scene::layout::Rect { x: cx + 4.0, y: cy + 6.0, width: breadcrumb_w, height: 24.0 };
-        crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
-    }
+    let top = crate::pages::breadcrumb_header(&mut pc, &mut state.breadcrumb, cx, cy, cw, ctx);
 
     // The pane the graph is laid out in, under the breadcrumb.
-    let pane = (cx, cy + 28.0, cw, (ch - 28.0).max(0.0));
+    let pane = (cx, top, cw, (cy + ch - top).max(0.0));
     let moved = (pane.0 - state.laid_out_for.0).abs() > 0.5
         || (pane.1 - state.laid_out_for.1).abs() > 0.5
         || (pane.2 - state.laid_out_for.2).abs() > 0.5
@@ -270,17 +262,17 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw
         }
     }
 
-    // Render the Graph widget into PageContent, shifted down by 28.0 to leave
-    // room for the breadcrumb — cut to its pane, since a graph panned or
-    // zoomed past its edge would otherwise draw over the preview beside it.
+    // Render the Graph widget into its pane under the breadcrumb — cut to
+    // it, since a graph panned or zoomed past its edge would otherwise draw
+    // over the preview beside it.
     let mut graph_pc = PageContent::new();
-    cce_ui::layout::render_widget(&mut graph_pc, &mut state.graph, cx, cy + 28.0, cw, ch - 28.0, ctx);
-    pc.absorb(graph_pc.clipped_to([cx, cy + 28.0, cx + cw, cy + ch]));
+    cce_ui::layout::render_widget(&mut graph_pc, &mut state.graph, pane.0, pane.1, pane.2, pane.3, ctx);
+    pc.absorb(graph_pc.clipped_to([cx, top, cx + cw, cy + ch]));
 
     // Each node's glyph on the left of its body, at the size and inset the
     // graph's geometry toggle has on the right (hidden here): scaled with
     // the zoom. Cut to the graph's rect, as its labels are.
-    let canvas = [cx, cy + 28.0, cx + cw, cy + ch];
+    let canvas = [cx, top, cx + cw, cy + ch];
     let glyph_color = [0xcc as f32 / 255.0, 0xcc as f32 / 255.0, 0xd4 as f32 / 255.0, 1.0];
     for (idx, glyph) in state.node_glyphs.iter().enumerate() {
         let Some((nx, ny, nw, nh)) = state.graph.node_rect(idx) else { continue };

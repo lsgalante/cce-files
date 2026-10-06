@@ -467,16 +467,7 @@ pub fn view(
 ) -> PageContent {
     let mut pc = PageContent::new();
 
-    // The breadcrumb, mirroring the Network page's header so the two views
-    // line up when you switch between them.
-    // TODO(style): the 4/6/16 offsets are a leftover inset from the pane rect
-    // that browse.rs has already dropped.
-    let breadcrumb_w = cw - 16.0;
-    cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
-    {
-        let rect = cce_ui::scene::layout::Rect { x: cx + 4.0, y: cy + 6.0, width: breadcrumb_w, height: 24.0 };
-        crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
-    }
+    let top = crate::pages::breadcrumb_header(&mut pc, &mut state.breadcrumb, cx, cy, cw, ctx);
 
     let mut segments = Vec::new();
     for component in browse.current_dir.components() {
@@ -488,7 +479,7 @@ pub fn view(
     state.breadcrumb.set_path(&segments);
 
     // The map occupies everything below the header, less the footer readout.
-    let map = (cx, cy + 34.0, cw, (ch - 34.0 - FOOTER_H).max(0.0));
+    let map = (cx, top, cw, (cy + ch - top - FOOTER_H).max(0.0));
     state.map_rect = map;
     // Fill and well share one rect AND one radius — `RowList::push_prims`'s
     // pairing, since this pane is the Browse list's opposite number across the

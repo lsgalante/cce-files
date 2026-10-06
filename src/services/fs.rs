@@ -449,8 +449,9 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
                 for entry in entries.flatten().take(100) {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let is_sub_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    let icon = if is_sub_dir { "📁" } else { "📄" };
-                    names.push(format!("{} {}", icon, name));
+                    // A text body: a directory wears the plain-text marker,
+                    // a trailing slash, rather than a pictogram.
+                    names.push(if is_sub_dir { format!("{name}/") } else { name });
                 }
                 if names.is_empty() {
                     content_preview = Some("[Empty directory]".to_string())

@@ -26,14 +26,6 @@ impl Page {
             Page::Space => "Space",
         }
     }
-
-    pub fn icon(self) -> &'static str {
-        match self {
-            Page::Browse => "📁",
-            Page::Network => "🌐",
-            Page::Space => "▦",
-        }
-    }
 }
 
 /// Mirror the breadcrumb's relief into a flat-path [`PageContent`]: the
@@ -173,6 +165,12 @@ pub struct PageContent {
     /// alpha). Drawn after the part's rects, so a fill emitted earlier is the floor
     /// beneath the image and overlay parts still cover it.
     pub images: Vec<(u32, f32, f32, f32, f32, f32)>,
+    /// cce-icons glyphs — (name, x, y, w, h, colour, clip `[l, t, r, b]`).
+    /// The colour is a text colour (raw sRGB, alpha = opacity), so a glyph and
+    /// the label beside it match; drawn through `PaintCtx::icon` in the part's
+    /// order, after its images. The clip cuts a glyph scrolled half under an
+    /// edge rather than squashing it, as text bounds cut a label.
+    pub icons: Vec<(String, f32, f32, f32, f32, [f32; 4], Option<[f32; 4]>)>,
     /// Lit plates — (color, x, y, w, h, radius, depth). Unlike [`reliefs`], a plate
     /// owns its FILL as well as its edge: one primitive carrying a rounded face and
     /// the rolled, lit perimeter, shaded in a single lighting evaluation. That is
@@ -193,6 +191,7 @@ impl PageContent {
             reliefs: Vec::new(),
             grooves: Vec::new(),
             images: Vec::new(),
+            icons: Vec::new(),
             plates: Vec::new(),
         }
     }
@@ -205,19 +204,31 @@ impl PageContent {
     /// exactly that reason. The destructuring below turns a new field into a
     /// compile error instead of a missing mark on screen.
     pub fn absorb(&mut self, other: PageContent) {
-        let PageContent { rects, texts, buttons, reliefs, grooves, images, plates } = other;
+        let PageContent { rects, texts, buttons, reliefs, grooves, images, icons, plates } = other;
         self.rects.extend(rects);
         self.texts.extend(texts);
         self.buttons.extend(buttons);
         self.reliefs.extend(reliefs);
         self.grooves.extend(grooves);
         self.images.extend(images);
+        self.icons.extend(icons);
         self.plates.extend(plates);
     }
 
     /// A GPU-textured quad (id from `cce_ui::vk::upload_rgba`).
     pub fn image(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32, alpha: f32) {
         self.images.push((id, x, y, w, h, alpha));
+    }
+
+    /// A cce-icons glyph (`folder`, `file-image`, …) at `(x, y, w, h)`, tinted
+    /// `color` as a label is — the one way this crate draws a symbol.
+    pub fn icon(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+        self.icons.push((name.to_string(), x, y, w, h, color, None));
+    }
+
+    /// [`PageContent::icon`] cut to `bounds` `[l, t, r, b]`.
+    pub fn icon_bounded(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32, color: [f32; 4], bounds: Option<[f32; 4]>) {
+        self.icons.push((name.to_string(), x, y, w, h, color, bounds));
     }
 
     pub fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {
@@ -386,6 +397,10 @@ impl PageContent {
 }
 
 impl RenderTarget for PageContent {
+    fn icon(&mut self, name: &str, rect: cce_ui::scene::layout::Rect, color: [f32; 4]) {
+        PageContent::icon(self, name, rect.x, rect.y, rect.width, rect.height, color);
+    }
+
     fn rect(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32) {
         self.rects.push((color, x, y, w, h, 0.0, (true, true, true, true)));
     }

@@ -112,6 +112,15 @@ fn prompt_rects(win_w: f32, win_h: f32) -> PromptRects {
     }
 }
 
+/// The overlap of two rects (zero-sized where they do not meet).
+fn intersect_rect(a: cce_ui::scene::layout::Rect, b: cce_ui::scene::layout::Rect) -> cce_ui::scene::layout::Rect {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    cce_ui::scene::layout::Rect { x: x0, y: y0, width: (x1 - x0).max(0.0), height: (y1 - y0).max(0.0) }
+}
+
 /// Clip a vertical span `[y, y+h)` to the viewport `[top, bottom)`.
 /// Returns the clipped `(y, h)`, or `None` if fully outside.
 fn clip_to_viewport(y: f32, h: f32, top: f32, bottom: f32) -> Option<(f32, f32)> {
@@ -225,7 +234,7 @@ const SELECT_BAR_H: f32 = 48.0;
 
 /// How a flat quad renders under the SDF-lit plate system. `Flat` is the plain
 /// fill; the relief variants carry the roll/carve depth in px.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum WidgetFx {
     Flat,
     /// A lit Bevel plate: the quad's own fill plus a rolled, lit lip (raised
@@ -254,6 +263,9 @@ enum WidgetFx {
     /// A GPU-textured quad; the id comes from `cce_ui::vk::upload_rgba`
     /// (the preview pane's image). `color` is unused.
     Image { id: u32, alpha: f32 },
+    /// A cce-icons glyph tinted with the widget's `color` (`PaintCtx::icon`),
+    /// cut to `clip` when it has one.
+    Icon { name: String, clip: Option<cce_ui::scene::layout::Rect> },
     /// A line engraved from (ax, ay) to (bx, by) into the widget's rect, which
     /// is the HOST surface here rather than the mark's own bounds — the shading
     /// fades out across the host's rolled edge. The breadcrumb's slanted seams;
@@ -1039,6 +1051,37 @@ impl FilesystemApp {
                     fx: WidgetFx::Image { id: *id, alpha: *alpha },
                 });
             }
+            for (name, ix, iy, iw, ih, color, bounds) in &pc_part.icons {
+                // Cut, never squashed: a glyph is a picture, so a row scrolled
+                // half under the list's edge loses its half rather than being
+                // pressed flat the way the fills are clipped.
+                let mut clip = bounds.map(|[l, t, r, b]| cce_ui::scene::layout::Rect { x: l, y: t, width: r - l, height: b - t });
+                if is_page_content {
+                    let view = cce_ui::scene::layout::Rect { x: *ix, y: content_y, width: *iw, height: content_h };
+                    clip = Some(match clip {
+                        Some(c) => intersect_rect(c, view),
+                        None => view,
+                    });
+                }
+                if let Some(c) = clip {
+                    if c.width <= 0.0 || c.height <= 0.0
+                        || c.x >= ix + iw || c.x + c.width <= *ix
+                        || c.y >= iy + ih || c.y + c.height <= *iy
+                    {
+                        continue;
+                    }
+                }
+                widgets.push(AppWidget {
+                    x: *ix,
+                    y: *iy,
+                    w: *iw,
+                    h: *ih,
+                    color: *color,
+                    radius: 0.0,
+                    corners: (true, true, true, true),
+                    fx: WidgetFx::Icon { name: name.clone(), clip },
+                });
+            }
             for (rx, ry, rw, rh, rr, rd, kind) in &pc_part.reliefs {
                 let (mut wy, mut wh) = (*ry, *rh);
                 if is_page_content {
@@ -1773,7 +1816,7 @@ impl Application for FilesystemApp {
         for w in &self.widgets {
             let rect = Rect { x: w.x, y: w.y, width: w.w, height: w.h };
             let radii = (w.radius, w.radius, w.radius, w.radius);
-            match w.fx {
+            match w.fx.clone() {
                 WidgetFx::Bevel(depth) => pc.bevel(rect, radii, &cce_ui::scene::Material::from_fill(w.color), depth),
                 WidgetFx::Plate(depth) => pc.plate(rect, radii, &cce_ui::scene::Material::from_fill(w.color), depth),
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
@@ -1787,6 +1830,15 @@ impl Application for FilesystemApp {
                     pc.inset_plate_tinted(rect, radii, cce_ui::scene::Material::face(w.color).as_ref(), depth, cce_ui::widget::ControlPlate::focus_tint())
                 }
                 WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
+                WidgetFx::Icon { name, clip } => {
+                    if let Some(c) = clip {
+                        pc.push_clip(c);
+                    }
+                    pc.icon(&name, rect, w.color);
+                    if clip.is_some() {
+                        pc.pop_clip();
+                    }
+                }
                 WidgetFx::Groove { ax, ay, bx, by, width, depth } => {
                     pc.groove((ax, ay), (bx, by), width, depth, rect)
                 }

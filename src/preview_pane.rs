@@ -379,7 +379,7 @@ impl PreviewPane {
         // is exactly root_plate_gap — the same separator width as everywhere
         // else on the plate (it was a hardcoded 12+7=19px before).
         let details_top = cy + half_h + cce_ui::layout::root_plate_gap();
-        let icon = if self.is_dir { "📁" } else { "📄" };
+        let icon = if self.is_dir { "folder" } else { "file" };
 
         let details = [
             ("Path", &self.path_display),
@@ -414,7 +414,8 @@ impl PreviewPane {
         // TODO(style): the header's 6px drop, the 42/112 label columns and
         // the 20px row pitch are the details form's own rhythm.
         let header_y = details_content_start_y + 6.0;
-        pc.text(icon, cx + inset, header_y, 20.0, text_fg);
+        // A 20px glyph centred on the 16px name beside it.
+        pc.icon(icon, cx + inset, header_y + 4.0 + (16.0 * 1.2 - 20.0) * 0.5, 20.0, 20.0, text_fg);
 
         // Pixel-measured budgets against the section frame's inner right edge
         // (None-font text renders sans-serif — measure with the same family).

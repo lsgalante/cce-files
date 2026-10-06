@@ -40,7 +40,9 @@ pub struct ListColumn {
 #[derive(Debug, Clone)]
 pub struct Row {
     pub cells: Vec<String>,
-    pub icon: Option<String>,
+    /// The cce-icons glyph shown ahead of the first cell (`folder`,
+    /// `file-image`, …), drawn in the first cell's colour.
+    pub icon: Option<&'static str>,
     pub selected: bool,
 }
 
@@ -450,9 +452,12 @@ impl RowList {
             let y_secondary = cce_ui::layout::center_text_y(draw_y, self.item_height, secondary_size);
 
             let mut start_text_offset = 8.0;
-            if let Some(ref icon) = row.icon {
+            if let Some(icon) = row.icon {
                 if !col_bounds.is_empty() {
-                    push_text(pc, icon, x + col_bounds[0].0 + 12.0, y_primary, primary_size, row_fg, &font, clip);
+                    // A glyph the size of the name's text, centred on the row.
+                    let side = primary_size;
+                    let gy = draw_y + (self.item_height - side) * 0.5;
+                    pc.icon_bounded(icon, x + col_bounds[0].0 + 12.0, gy, side, side, row_fg, clip);
                     start_text_offset = 32.0;
                 }
             }
@@ -515,7 +520,7 @@ mod tests {
             ListColumn { name: "Size".into(), width: ColumnWidth::RightOffset(120.0), justification: Justification::Left },
         ];
         l.rows = (0..n)
-            .map(|i| Row { cells: vec![format!("f{i}"), "1 KiB".into()], icon: Some("D".into()), selected: false })
+            .map(|i| Row { cells: vec![format!("f{i}"), "1 KiB".into()], icon: Some("file"), selected: false })
             .collect();
         l.update_bounds_from_rows();
         l

@@ -178,18 +178,22 @@ pub fn read_directory(path: &Path) -> Vec<DirEntry> {
 
 use crate::util::{format_size, format_permissions};
 
+/// The cce-icons glyph a row wears for its entry, by kind and extension.
 fn entry_icon(is_dir: bool, name: &str) -> &'static str {
     if is_dir {
-        return "📁";
+        return "folder";
     }
-    match name.rsplit('.').next() {
-        Some("rs") | Some("toml") | Some("json") | Some("yaml") | Some("yml") => "📄",
-        Some("png") | Some("jpg") | Some("jpeg") | Some("svg") | Some("gif") => "🖼",
-        Some("mp3") | Some("wav") | Some("flac") | Some("ogg") => "🎵",
-        Some("mp4") | Some("mkv") | Some("avi") | Some("webm") => "🎬",
-        Some("zip") | Some("tar") | Some("gz") | Some("bz2") | Some("xz") => "📦",
-        Some("py") | Some("sh") | Some("bash") => "📜",
-        _ => "📄",
+    let ext = match name.rsplit_once('.') {
+        Some((_, ext)) => ext.to_ascii_lowercase(),
+        None => return "file",
+    };
+    match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "svg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" => "file-image",
+        "mp3" | "wav" | "flac" | "ogg" | "opus" | "m4a" | "aac" => "file-audio",
+        "mp4" | "mkv" | "avi" | "webm" | "mov" => "file-video",
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "tgz" => "file-archive",
+        "rs" | "py" | "sh" | "bash" | "zsh" | "c" | "h" | "cpp" | "hpp" | "js" | "ts" | "go" | "lua" | "wgsl" => "file-code",
+        _ => "file",
     }
 }
 
@@ -335,7 +339,7 @@ pub fn view(state: &mut BrowseState, view_dropdown: &mut cce_ui::widget::Adapted
 
         crate::row_list::Row {
             cells,
-            icon: Some(entry_icon(entry.is_dir, &entry.name).to_string()),
+            icon: Some(entry_icon(entry.is_dir, &entry.name)),
             selected: state.selected == Some(idx),
         }
     }).collect();
@@ -566,6 +570,24 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every row wears a cce-icons glyph by NAME — never a character — and
+    /// the kind decides which.
+    #[test]
+    fn entry_icon_names_a_glyph_by_kind() {
+        assert_eq!(entry_icon(true, "photos.png"), "folder");
+        assert_eq!(entry_icon(false, "Shot.PNG"), "file-image");
+        assert_eq!(entry_icon(false, "song.flac"), "file-audio");
+        assert_eq!(entry_icon(false, "clip.webm"), "file-video");
+        assert_eq!(entry_icon(false, "src.tar.gz"), "file-archive");
+        assert_eq!(entry_icon(false, "main.rs"), "file-code");
+        assert_eq!(entry_icon(false, "Cargo.toml"), "file");
+        assert_eq!(entry_icon(false, "README"), "file");
+        for (dir, name) in [(true, "a"), (false, "a.png"), (false, "a.mp3"), (false, "a.mp4"), (false, "a.zip"), (false, "a.py"), (false, "a")] {
+            let glyph = entry_icon(dir, name);
+            assert!(glyph.chars().all(|c| c.is_ascii_lowercase() || c == '-'), "{glyph:?} is not a glyph name");
+        }
+    }
 
     fn state_with_count(count: usize) -> BrowseState {
         BrowseState {

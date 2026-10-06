@@ -7,6 +7,10 @@ pub struct NetworkState {
     pub graph: Adapted<Graph>,
     pub breadcrumb: Adapted<Breadcrumb>,
     pub last_dir: PathBuf,
+    /// The cce-icons glyph each graph node wears, by node index (`folder` /
+    /// `file`) — drawn over the node body by `view`, since a `GraphNode`
+    /// carries a name and no glyph.
+    pub node_glyphs: Vec<&'static str>,
 }
 
 impl Default for NetworkState {
@@ -27,6 +31,7 @@ impl Default for NetworkState {
             graph,
             breadcrumb,
             last_dir: PathBuf::new(),
+            node_glyphs: Vec::new(),
         }
     }
 }
@@ -34,6 +39,7 @@ impl Default for NetworkState {
 impl NetworkState {
     pub fn populate_graph(&mut self, current_dir: &Path, entries: &[DirEntry]) {
         let mut nodes = Vec::new();
+        let mut glyphs = Vec::new();
 
         // 1. Parent directory (if any)
         let parent_node_name = if let Some(parent) = current_dir.parent() {
@@ -41,7 +47,8 @@ impl NetworkState {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "/".to_string());
-            let name = format!("📁 .. ({})", parent_name);
+            let name = format!(".. ({})", parent_name);
+            glyphs.push("folder");
             nodes.push(GraphNode {
                 id: String::new(),
                 name: name.clone(),
@@ -58,11 +65,11 @@ impl NetworkState {
         };
 
         // 2. Current directory node
-        let current_name = current_dir
+        let current_node_name = current_dir
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "/".to_string());
-        let current_node_name = format!("📁 {}", current_name);
+        glyphs.push("folder");
 
         let current_params = if let Some(ref p_name) = parent_node_name {
             vec![("input".to_string(), p_name.clone(), "string".to_string())]
@@ -83,8 +90,8 @@ impl NetworkState {
 
         // 3. Children nodes
         for (idx, entry) in entries.iter().enumerate() {
-            let icon = if entry.is_dir { "📁" } else { "📄" };
-            let node_name = format!("{} {}", icon, entry.name);
+            let node_name = entry.name.clone();
+            glyphs.push(if entry.is_dir { "folder" } else { "file" });
 
             // Spreading items in 7 columns starting at row 2
             let col = (idx % 7) as f32;
@@ -103,6 +110,7 @@ impl NetworkState {
         }
 
         self.graph.set_nodes(&nodes);
+        self.node_glyphs = glyphs;
         self.last_dir = current_dir.to_path_buf();
     }
 }
@@ -169,6 +177,19 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut 
     // Render the Graph widget into PageContent, shifted down by 28.0 to leave room for the breadcrumb
     cce_ui::layout::render_widget(&mut pc, &mut state.graph, cx, cy + 28.0, cw, ch - 28.0, ctx);
 
+    // Each node's glyph on the left of its body, mirroring the geometry
+    // toggle the graph draws on the right (`Graph::toggle_rect`): the same
+    // size, the same inset, scaled with the zoom. Cut to the graph's rect, as
+    // its labels are.
+    let canvas = [cx, cy + 28.0, cx + cw, cy + ch];
+    let glyph_color = [0xcc as f32 / 255.0, 0xcc as f32 / 255.0, 0xd4 as f32 / 255.0, 1.0];
+    for (idx, glyph) in state.node_glyphs.iter().enumerate() {
+        let Some((nx, ny, nw, nh)) = state.graph.node_rect(idx) else { continue };
+        let scale_f = nw / 80.0;
+        let side = (18.0 * scale_f).clamp(6.0, 50.0);
+        pc.icon_bounded(glyph, nx + 6.0 * scale_f, ny + (nh - side) / 2.0, side, side, glyph_color, Some(canvas));
+    }
+
     pc
 }
 
@@ -208,25 +229,28 @@ mod tests {
         assert_eq!(nodes.len(), 4);
 
         // Check node names
-        assert_eq!(nodes[0].name, "📁 .. (user)");
-        assert_eq!(nodes[1].name, "📁 project");
-        assert_eq!(nodes[2].name, "📄 file1.txt");
-        assert_eq!(nodes[3].name, "📁 subdir");
+        assert_eq!(nodes[0].name, ".. (user)");
+        assert_eq!(nodes[1].name, "project");
+        assert_eq!(nodes[2].name, "file1.txt");
+        assert_eq!(nodes[3].name, "subdir");
+
+        // The kind rides as a glyph, not as a character in the name.
+        assert_eq!(state.node_glyphs, vec!["folder", "folder", "file", "folder"]);
 
         // Check connection parameters
         // Current directory points to parent
         assert_eq!(nodes[1].parameters.len(), 1);
         assert_eq!(nodes[1].parameters[0].0, "input");
-        assert_eq!(nodes[1].parameters[0].1, "📁 .. (user)");
+        assert_eq!(nodes[1].parameters[0].1, ".. (user)");
 
         // Children point to current directory
         assert_eq!(nodes[2].parameters.len(), 1);
         assert_eq!(nodes[2].parameters[0].0, "input");
-        assert_eq!(nodes[2].parameters[0].1, "📁 project");
+        assert_eq!(nodes[2].parameters[0].1, "project");
 
         assert_eq!(nodes[3].parameters.len(), 1);
         assert_eq!(nodes[3].parameters[0].0, "input");
-        assert_eq!(nodes[3].parameters[0].1, "📁 project");
+        assert_eq!(nodes[3].parameters[0].1, "project");
     }
 
     #[test]
@@ -250,8 +274,9 @@ mod tests {
 
         // No parent, so 1 current + 1 child = 2 nodes
         assert_eq!(nodes.len(), 2);
-        assert_eq!(nodes[0].name, "📁 /");
-        assert_eq!(nodes[1].name, "📁 bin");
+        assert_eq!(nodes[0].name, "/");
+        assert_eq!(nodes[1].name, "bin");
+        assert_eq!(state.node_glyphs, vec!["folder", "folder"]);
 
         // Current has no parent parameter
         assert!(nodes[0].parameters.is_empty());
@@ -259,6 +284,6 @@ mod tests {
         // Child points to current
         assert_eq!(nodes[1].parameters.len(), 1);
         assert_eq!(nodes[1].parameters[0].0, "input");
-        assert_eq!(nodes[1].parameters[0].1, "📁 /");
+        assert_eq!(nodes[1].parameters[0].1, "/");
     }
 }

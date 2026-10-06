@@ -237,15 +237,11 @@ const SELECT_BAR_H: f32 = 48.0;
 #[derive(Clone, PartialEq)]
 enum WidgetFx {
     Flat,
-    /// A lit Bevel plate: the quad's own fill plus a rolled, lit lip (raised
-    /// buttons with an opaque face).
-    Bevel(f32),
     /// Edges-only raised plateau over whatever is painted below.
     Boss(f32),
     /// A lit plate: a rounded face in the quad's own color plus the rolled, lit
     /// perimeter, at full size. What the pane plates and the preview stub wear.
-    /// Distinct from [`WidgetFx::Bevel`], which insets its fill by the depth, and
-    /// from [`WidgetFx::Boss`], which is a rim with no face of its own.
+    /// Distinct from [`WidgetFx::Boss`], which is a rim with no face of its own.
     Plate(f32),
     /// Edges-only carve into whatever is painted below (recessed wells).
     Recess(f32),
@@ -1929,7 +1925,6 @@ impl Application for FilesystemApp {
             let rect = Rect { x: w.x, y: w.y, width: w.w, height: w.h };
             let radii = (w.radius, w.radius, w.radius, w.radius);
             match w.fx.clone() {
-                WidgetFx::Bevel(depth) => pc.bevel(rect, radii, &cce_ui::scene::Material::from_fill(w.color), depth),
                 WidgetFx::Plate(depth) => pc.plate(rect, radii, &cce_ui::scene::Material::from_fill(w.color), depth),
                 WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
                 WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),

@@ -38,8 +38,12 @@ impl Page {
     }
 }
 
-/// The breadcrumb's height on every page.
-pub const BREADCRUMB_H: f32 = 24.0;
+/// The breadcrumb's height on every page. Its segments are button plates, so
+/// it is one button tall: the toolkit's control height (as the widget's own
+/// `intrinsic_size` says), not a number of this crate's.
+pub fn breadcrumb_h() -> f32 {
+    cce_ui::layout::button_height()
+}
 
 /// Lay out, render and carve a page's breadcrumb: the pane's full width along
 /// its top edge, the same on every page, so switching views leaves it where it
@@ -56,10 +60,11 @@ pub fn breadcrumb_header(
     cw: f32,
     ctx: &mut cce_ui::context::UiContext,
 ) -> f32 {
-    cce_ui::layout::render_widget(pc, breadcrumb, cx, cy, cw, BREADCRUMB_H, ctx);
-    let rect = cce_ui::scene::layout::Rect { x: cx, y: cy, width: cw, height: BREADCRUMB_H };
+    let h = breadcrumb_h();
+    cce_ui::layout::render_widget(pc, breadcrumb, cx, cy, cw, h, ctx);
+    let rect = cce_ui::scene::layout::Rect { x: cx, y: cy, width: cw, height: h };
     breadcrumb_relief(pc, breadcrumb, rect);
-    cy + BREADCRUMB_H + cce_ui::layout::root_plate_gap()
+    cy + h + cce_ui::layout::root_plate_gap()
 }
 
 /// Mirror the breadcrumb's relief into a flat-path [`PageContent`]: the

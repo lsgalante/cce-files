@@ -13,7 +13,7 @@ use cce_files::pages::browse::is_project_dir;
 
 // ── Layout constants ────────────────────────────────────────────────
 
-const ROW_H: f32 = 24.0;        // context-menu / breadcrumb row height
+const ROW_H: f32 = 24.0;        // context-menu row height
 const DIALOG_W: f32 = 400.0;
 const DIALOG_H: f32 = 160.0;
 const MENU_MIN_W: f32 = 120.0;

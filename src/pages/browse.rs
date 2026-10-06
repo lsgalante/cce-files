@@ -229,7 +229,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let client_h = ch - 2.0 * margin;
     layout.init(client_x, client_y, client_w, client_h);
 
-    let breadcrumb_h = crate::pages::BREADCRUMB_H;
+    let breadcrumb_h = crate::pages::breadcrumb_h();
     let textbox_h = cce_ui::layout::textbox_height();
 
     // 1. Allocate and render the Breadcrumb, where every page puts it.
@@ -335,8 +335,9 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
 
     // Dissolved List (Phase 6z): scroll state, rows, and frame prims are app-owned.
     // When the search strip is open it reserves the bottom of the frame, exactly as
-    // the legacy List::set_rect carved its scroll frame.
-    let search_h = 26.0;
+    // the legacy List::set_rect carved its scroll frame. The search field is
+    // the toolkit's textbox height, like the chooser's name box below.
+    let search_h = textbox_h;
     // The strip stands off the well's rim (and the rows above it) by the
     // pane rung, on both axes.
     let search_pad = cce_ui::layout::plate_padding();

@@ -36,6 +36,13 @@ const MIN_TILE: f32 = 3.0;
 /// recursed into: below it the frame and padding would eat the children.
 const MIN_RECURSE: f32 = 20.0;
 
+/// A directory's entries smaller than this many px² are not laid out one by
+/// one but lumped into a single "N smaller items" block. Each alone would be
+/// culled under `MIN_TILE`, and a folder of thousands of them left a dark
+/// hole as big as all of them together — read, like an unfilled block, as
+/// empty space. Twice `MIN_TILE`² catches what squarify would cut to slivers.
+const REST_AREA: f32 = MIN_TILE * MIN_TILE * 2.0;
+
 /// Hard ceiling on emitted tiles, so a pathological tree cannot make a frame
 /// rebuild unbounded. Reached only when MIN_TILE culling has not already.
 const MAX_TILES: usize = 24_000;
@@ -260,6 +267,10 @@ pub struct Tile {
     /// inside it big enough to place: the kind that fills most of it. Painted
     /// in the frame colour, such a block read as empty space however full it was.
     pub aggregate: Option<Category>,
+    /// Nonzero on the block standing for that many of a directory's smallest
+    /// entries (see [`REST_AREA`]). It carries the directory's own path, so a
+    /// click selects and a double-click opens the directory they are in.
+    pub rest: usize,
 }
 
 impl Tile {
@@ -542,6 +553,7 @@ fn place(
         depth,
         rect,
         aggregate: None,
+        rest: 0,
     });
 
     if !node.is_dir {
@@ -590,11 +602,64 @@ fn place_children(
     if kids.is_empty() {
         return;
     }
-    let values: Vec<f64> = kids.iter().map(|c| c.size as f64).collect();
 
-    for (child, r) in kids.iter().zip(squarify(&values, inner)) {
-        place(child, &path.join(&child.name), r, depth + 1, dominant, out);
+    // Children are sorted largest first, so the ones under REST_AREA are a
+    // tail. Two or more of them become one block; a lone one is laid out as
+    // itself and stands or falls by MIN_TILE.
+    let total: f64 = kids.iter().map(|c| c.size as f64).sum();
+    let px_per_byte = (inner.2 * inner.3) as f64 / total;
+    let mut keep = kids
+        .iter()
+        .position(|c| (c.size as f64 * px_per_byte) < REST_AREA as f64)
+        .unwrap_or(kids.len());
+    if kids.len() - keep < 2 {
+        keep = kids.len();
     }
+    let (shown, rest) = kids.split_at(keep);
+
+    // squarify wants its values descending, and the lump may outweigh some
+    // of the entries shown alone, so it takes its place among them.
+    let rest_size: u64 = rest.iter().map(|c| c.size).sum();
+    let mut slots: Vec<(u64, Option<&TreeNode>)> = shown.iter().map(|c| (c.size, Some(*c))).collect();
+    if !rest.is_empty() {
+        let at = slots.partition_point(|&(size, _)| size >= rest_size);
+        slots.insert(at, (rest_size, None));
+    }
+    let values: Vec<f64> = slots.iter().map(|&(size, _)| size as f64).collect();
+
+    for (&(_, child), r) in slots.iter().zip(squarify(&values, inner)) {
+        match child {
+            Some(child) => place(child, &path.join(&child.name), r, depth + 1, dominant, out),
+            None => {
+                if r.2 < MIN_TILE || r.3 < MIN_TILE || out.len() >= MAX_TILES {
+                    continue;
+                }
+                out.push(Tile {
+                    path: path.to_path_buf(),
+                    name: format!("{} smaller items", group_digits(rest.len() as u64)),
+                    size: rest_size,
+                    is_dir: true,
+                    depth: depth + 1,
+                    rect: r,
+                    aggregate: rest_kind(rest, path, dominant),
+                    rest: rest.len(),
+                });
+            }
+        }
+    }
+}
+
+/// What fills a lump of small entries most, by bytes: a file by its own
+/// kind, a directory by its dominant one.
+fn rest_kind(rest: &[&TreeNode], path: &Path, dominant: &HashMap<PathBuf, Category>) -> Option<Category> {
+    let mut b = Breakdown::default();
+    for c in rest {
+        let kind = if c.is_dir { dominant.get(&path.join(&c.name)).copied() } else { Some(Category::of(&c.name)) };
+        if let Some(kind) = kind {
+            b.bytes[kind.index()] += c.size;
+        }
+    }
+    b.dominant()
 }
 
 // ── View ────────────────────────────────────────────────────────────
@@ -686,25 +751,25 @@ pub fn view(
             pc.rect(frame, tx, ty, tw, th);
             // One drawn as a block has no children over it: fill it, inside a
             // frame-coloured rim, in a dimmed copy of what fills it most.
+            // An opened directory's name sits on its frame-coloured strip; a
+            // block's sits on its fill.
+            let mut label = text_dim;
             if let Some(cat) = tile.aggregate {
+                let fill = mix(cat.color(), frame, AGGREGATE_DIM);
                 if tw > 2.0 && th > 2.0 {
-                    pc.rect(mix(cat.color(), frame, AGGREGATE_DIM), tx + 1.0, ty + 1.0, tw - 2.0, th - 2.0);
+                    pc.rect(fill, tx + 1.0, ty + 1.0, tw - 2.0, th - 2.0);
                 }
+                label = label_on(fill, text_fg, frame);
             }
             if th >= DIR_LABEL_MIN && tw >= FILE_LABEL_MIN_W {
-                pc.text(
-                    &elide(&tile.name, tw - 6.0),
-                    tx + 3.0,
-                    ty + 2.0,
-                    10.0,
-                    text_dim,
-                );
+                pc.text(&elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, label);
             }
         } else {
             let (fx, fy, fw, fh) = file_face(tile.rect);
-            pc.rect(Category::of(&tile.name).color(), fx, fy, fw, fh);
+            let fill = Category::of(&tile.name).color();
+            pc.rect(fill, fx, fy, fw, fh);
             if tw >= FILE_LABEL_MIN_W && th >= FILE_LABEL_MIN_H {
-                pc.text(&elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, text_fg);
+                pc.text(&elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, label_on(fill, text_fg, frame));
             }
         }
     }
@@ -789,11 +854,20 @@ fn file_face(rect: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
 /// for a block, what fills it.
 fn readout(t: &Tile, root: &Path, total: u64, avail: f32) -> String {
     let mut tail = format!("  —  {}  ·  {}", format_size(t.size), share(t.size, total));
+    if t.rest > 0 {
+        tail.insert_str(0, &format!("  ·  {}", t.name));
+    }
     if let Some(cat) = t.aggregate {
         tail.push_str(&format!("  ·  mostly {}", cat.label().to_lowercase()));
     }
-    let mut rel = t.path.strip_prefix(root).unwrap_or(&t.path).display().to_string();
-    if t.is_dir {
+    // A lump directly under the root has the root's own path: no relative
+    // part to show, so it names the root.
+    let mut rel = match t.path.strip_prefix(root) {
+        Ok(r) if r.as_os_str().is_empty() => root.display().to_string(),
+        Ok(r) => r.display().to_string(),
+        Err(_) => t.path.display().to_string(),
+    };
+    if t.is_dir && !rel.ends_with('/') {
         rel.push('/');
     }
     let tail_w = cce_ui::widget::display::measure_text_width(&tail, FOOTER_FAMILY, FOOTER_FONT);
@@ -840,6 +914,24 @@ fn group_digits(n: u64) -> String {
         out.push(ch);
     }
     out
+}
+
+/// Whichever of `light` and `dark` reads better on `bg`, by WCAG contrast
+/// ratio. Light text on every tile was 1.6:1 on Code's yellow and under 3:1 on
+/// most of the palette; the frame's near-black runs 3.8:1 (Binaries) to 7.9:1
+/// (Code), and Other's grey, where light still wins at 3.9:1, keeps it.
+fn label_on(bg: [f32; 4], light: [f32; 4], dark: [f32; 4]) -> [f32; 4] {
+    let l = luminance(bg);
+    let contrast = |c: [f32; 4]| {
+        let (a, b) = (luminance(c).max(l), luminance(c).min(l));
+        (a + 0.05) / (b + 0.05)
+    };
+    if contrast(dark) > contrast(light) { dark } else { light }
+}
+
+/// Relative luminance of a colour already in linear space.
+fn luminance(c: [f32; 4]) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
 /// `a` pulled toward `b` by `t` (0 = a, 1 = b). Both linear, so is the mix.
@@ -1100,6 +1192,42 @@ mod tests {
     }
 
     #[test]
+    fn a_folders_smallest_entries_become_one_block() {
+        // Ten thousand 1-byte files beside one big one, in 200 x 200: each
+        // alone is far under REST_AREA, together they are a tenth of the map.
+        let mut children = vec![file("huge.bin", 90_000)];
+        children.extend((0..10_000).map(|i| file(&format!("t{i}.png"), 1)));
+        let tree = TreeNode { name: "root".into(), size: 100_000, is_dir: true, children };
+        let mut tiles = Vec::new();
+        place(&tree, Path::new("/root"), (0.0, 0.0, 200.0, 200.0), 0, &HashMap::new(), &mut tiles);
+
+        assert_eq!(tiles.len(), 3, "root, huge.bin, and one lump: {:?}", tiles.iter().map(|t| &t.name).collect::<Vec<_>>());
+        let lump = &tiles[2];
+        assert_eq!(lump.rest, 10_000);
+        assert_eq!(lump.name, "10,000 smaller items");
+        assert_eq!(lump.size, 10_000);
+        assert_eq!(lump.path, PathBuf::from("/root"), "it opens the folder it is in");
+        assert!(lump.is_dir);
+        assert_eq!(lump.aggregate, Some(Category::Image));
+        // It gets the area of what it stands for, about a tenth of the map.
+        let share = lump.rect.2 * lump.rect.3 / (198.0 * 198.0);
+        assert!((share - 0.1).abs() < 0.02, "{share}");
+    }
+
+    #[test]
+    fn a_single_small_entry_is_not_lumped() {
+        let tree = TreeNode {
+            name: "root".into(),
+            size: 1_000_001,
+            is_dir: true,
+            children: vec![file("huge.bin", 1_000_000), file("tiny.txt", 1)],
+        };
+        let mut tiles = Vec::new();
+        place(&tree, Path::new("/root"), (0.0, 0.0, 200.0, 200.0), 0, &HashMap::new(), &mut tiles);
+        assert!(tiles.iter().all(|t| t.rest == 0));
+    }
+
+    #[test]
     fn top_folder_is_the_hovered_tiles_depth_one_ancestor() {
         let tree = TreeNode {
             name: "root".into(),
@@ -1143,6 +1271,17 @@ mod tests {
         assert!((b.0 - (a.0 + a.2) - FILE_GAP).abs() < 1e-4);
         // A sliver keeps its thin axis whole and loses the gap only along its length.
         assert_eq!(file_face((10.0, 10.0, 3.0, 40.0)), (10.0, 10.0 + FILE_GAP / 2.0, 3.0, 40.0 - FILE_GAP));
+    }
+
+    #[test]
+    fn labels_take_whichever_text_colour_reads_better() {
+        let light = cce_ui::color::TEXT_FG;
+        let dark = cce_ui::color::parse_hex_rgba_linear("#20242b").unwrap();
+        // Code's yellow, the worst case for light text, takes dark.
+        assert_eq!(label_on(Category::Code.color(), light, dark), dark);
+        // The frame itself, and a block's dimmed fill, keep light text.
+        assert_eq!(label_on(dark, light, dark), light);
+        assert_eq!(label_on(mix(Category::Video.color(), dark, AGGREGATE_DIM), light, dark), light);
     }
 
     #[test]

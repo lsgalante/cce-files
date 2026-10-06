@@ -18,8 +18,15 @@
 //! it look like the natural thing to do — would sort the bg back after them and
 //! reinstate the exact Phase 6v sandwich this note describes. It would also be silent:
 //! the bg is translucent, so the overlays wash out rather than disappear.
+//!
+//! The scrollbar leans on the same call order, twice (the DE's centre-line rule, see
+//! cce-ui's CLAUDE.md "Every scrollbar rides a centre line, behind the plate"): its
+//! IDLE copy goes out before the bg, so the translucent well dims it, and its FORE
+//! copy after the row overlays. Both are pills (rounded), so even a radius partition
+//! would keep the two copies either side of the rounded bg — but it would still sink
+//! the radius-0 row overlays under the bg, so the note above stands.
 
-use cce_ui::widget::{Bounds, Justification, MouseScrollDelta, ScrollMotion, LINE_PX};
+use cce_ui::widget::{Bounds, Justification, MouseScrollDelta, ScrollMotion, ScrollbarActivity, LINE_PX};
 
 /// Column sizing (moved here with the cce-ui `List` deletion — RowList is the only
 /// remaining consumer of the column model).
@@ -72,6 +79,9 @@ pub struct RowList {
     last_click_time: Option<std::time::Instant>,
     pub dragging: bool,
     drag_offset_y: f32,
+    /// The scrollbar's raise/sink latch and fade: it idles behind the well's
+    /// translucent bg and takes no press there, until a scroll raises it.
+    activity: ScrollbarActivity,
     /// Pointer focus (the app's well-focus tracking): the well renders as the
     /// tinted carve — accent ring replacing the relief lighting.
     pub focused: bool,
@@ -100,6 +110,7 @@ impl RowList {
             last_click_time: None,
             dragging: false,
             drag_offset_y: 0.0,
+            activity: ScrollbarActivity::new(),
             focused: false,
         }
     }
@@ -124,15 +135,36 @@ impl RowList {
         (self.content_h - self.viewport_h).max(0.0)
     }
 
-    /// Keep `selected_idx`'s row inside the viewport (the browse view's auto-scroll).
+    fn overflowing(&self) -> bool {
+        self.content_h > self.viewport_h
+    }
+
+    /// A scroll happened: refresh the hold and latch at once, so the bar is
+    /// up (and hittable) in the same frame rather than a tick later.
+    fn raise(&mut self) {
+        self.activity.bump();
+        self.activity.recompute(self.overflowing(), self.dragging);
+    }
+
+    /// Whether the scrollbar is raised in front of the rows and takes presses.
+    pub fn scrollbar_raised(&self) -> bool {
+        self.activity.raised()
+    }
+
+    /// Keep `selected_idx`'s row inside the viewport (the browse view's auto-scroll —
+    /// what keyboard navigation scrolls the list through). A move raises the bar.
     pub fn scroll_into_view(&mut self, selected_idx: usize) {
         let item_y = selected_idx as f32 * (self.item_height + self.item_gap) + 2.0;
+        let old = self.scroll_y;
         if self.viewport_h > 0.0 {
             if item_y < self.scroll_y {
                 self.scroll_y = item_y;
             } else if item_y + self.item_height > self.scroll_y + self.viewport_h {
                 self.scroll_y = item_y + self.item_height - self.viewport_h;
             }
+        }
+        if (self.scroll_y - old).abs() > 0.01 {
+            self.raise();
         }
     }
 
@@ -245,11 +277,13 @@ impl RowList {
         self.double_clicked_row.take()
     }
 
-    // ── Scrollbar (`ScrollBox` geometry, verbatim) ──
+    // ── Scrollbar: the DE's centre-line bar (cce-ui's sink-behind `ScrollRegion`) ──
 
+    /// (sb_x, track_y, sb_w, track_h, thumb_y, thumb_h): centred on the list's
+    /// width, over the rows — no column reserves a lane for it.
     fn scrollbar_geom(&self) -> (f32, f32, f32, f32, f32, f32) {
-        let sb_w = cce_ui::layout::scrollbar_width();
-        let sb_x = self.x + self.w - sb_w - 4.0;
+        let sb_w = cce_ui::layout::centred_scrollbar_width();
+        let sb_x = self.x + (self.w - sb_w) * 0.5;
         let track_h = self.viewport_h - 8.0;
         let track_y = self.y + 4.0;
         let visible_ratio = self.viewport_h / self.content_h.max(1.0);
@@ -259,8 +293,10 @@ impl RowList {
         (sb_x, track_y, sb_w, track_h, thumb_y, thumb_h)
     }
 
+    /// A press or hover on the bar. A SUNK bar is behind the well's bg and
+    /// is not hit: a press on its lane is a press on the row under it.
     fn hit_scrollbar(&self, px: f32, py: f32) -> bool {
-        if self.content_h <= self.viewport_h {
+        if !self.overflowing() || !self.activity.raised() {
             return false;
         }
         let (sb_x, track_y, sb_w, track_h, _, _) = self.scrollbar_geom();
@@ -272,6 +308,9 @@ impl RowList {
     /// Scrollbar drag + row hover (`List::on_cursor_moved` + `ScrollBox` drag).
     pub fn cursor_moved(&mut self, px: f32, py: f32) -> bool {
         let mut changed = false;
+        // Gated on raised (`hit_scrollbar`): hover holds a raised bar up and
+        // never raises a sunk one.
+        self.activity.set_hover(self.hit_scrollbar(px, py));
         if self.dragging {
             let (_, track_y, _, track_h, _, thumb_h) = self.scrollbar_geom();
             let target = py - self.drag_offset_y;
@@ -324,6 +363,10 @@ impl RowList {
             false
         } else {
             let was_dragging = std::mem::take(&mut self.dragging);
+            if was_dragging {
+                // The hold starts at the release, so the bar lingers.
+                self.activity.bump();
+            }
             let mut clicked = false;
             if let Some(idx) = self.row_at(px, py) {
                 if self.pressed_row == Some(idx) {
@@ -353,30 +396,79 @@ impl RowList {
         self.motion.reconcile(0.0, self.scroll_y);
         let moved = self.motion.apply(delta, (LINE_PX, LINE_PX), Bounds::max(0.0), Bounds::max(self.max_scroll()));
         self.scroll_y = self.motion.y.pos();
+        if moved {
+            self.raise();
+        }
         moved
     }
 
-    /// Advance the wheel glide / flick coast; true while the offset is
-    /// moving, so the host keeps frames coming until it settles.
+    /// Advance the wheel glide / flick coast and the scrollbar's raise/sink;
+    /// true while the offset is moving, the bar's hold is running or its fade
+    /// is moving, so the host keeps frames coming until all of it settles.
     pub fn tick(&mut self, dt: f32) -> bool {
         self.motion.reconcile(0.0, self.scroll_y);
-        if !self.motion.is_animating() {
-            return false;
+        let mut moved = false;
+        if self.motion.is_animating() {
+            moved = self.motion.tick(dt, Bounds::max(0.0), Bounds::max(self.max_scroll()));
+            self.scroll_y = self.motion.y.pos();
+            if moved {
+                // A glide or coast in motion is a scroll: it keeps the bar up.
+                self.activity.bump();
+            }
         }
-        let moved = self.motion.tick(dt, Bounds::max(0.0), Bounds::max(self.max_scroll()));
-        self.scroll_y = self.motion.y.pos();
-        moved || self.motion.is_animating()
+        let animating = self.motion.is_animating();
+        let holding = self.activity.holding();
+        let flipped = self.activity.tick(dt, self.overflowing(), self.dragging);
+        moved || animating || holding || flipped
+    }
+
+    /// The pill track and thumb at `alpha` (track/thumb colours scaled).
+    fn push_scrollbar(&self, pc: &mut crate::pages::PageContent, alpha: f32) {
+        use cce_ui::layout::RenderTarget;
+        let a = alpha.clamp(0.0, 1.0);
+        if !self.overflowing() || a <= 0.001 {
+            return;
+        }
+        let dim = |mut c: [f32; 4]| {
+            c[3] *= a;
+            c
+        };
+        let all = (true, true, true, true);
+        let (sb_x, track_y, sb_w, track_h, thumb_y, thumb_h) = self.scrollbar_geom();
+        pc.rect_with_radius_corners(
+            dim(cce_ui::color::scrollbar_track_color()),
+            sb_x,
+            track_y,
+            sb_w,
+            track_h,
+            sb_w.min(track_h) * 0.5,
+            all,
+        );
+        pc.rect_with_radius_corners(
+            dim(cce_ui::color::scrollbar_thumb_color()),
+            sb_x,
+            thumb_y,
+            sb_w,
+            thumb_h,
+            sb_w.min(thumb_h) * 0.5,
+            all,
+        );
     }
 
     // ── Paint ──
 
-    /// The legacy frame, single-drawn and in the right order: rounded bg (this list ran
-    /// with `show_border = false`), scrollbar, row overlays, then the row text — the
-    /// `List` column-branch cell layout (icon column, primary/secondary sizes and tints,
-    /// char-estimate truncation, viewport-inset clip bounds) verbatim.
+    /// The legacy frame, single-drawn and in the right order: the scrollbar's idle copy,
+    /// the rounded bg (this list ran with `show_border = false`), row overlays, the
+    /// scrollbar's fore copy, then the row text — the `List` column-branch cell layout
+    /// (icon column, primary/secondary sizes and tints, char-estimate truncation,
+    /// viewport-inset clip bounds) verbatim.
     pub fn push_prims(&self, pc: &mut crate::pages::PageContent) {
         use cce_ui::layout::RenderTarget;
         let (x, y, w, h) = (self.x, self.y, self.w, self.h);
+        // The idle copy, at full alpha and every frame, raised or not: the
+        // translucent bg over it is what sinks it, and the fore copy fades in
+        // over it, so dropping it at the latch would blink the bar.
+        self.push_scrollbar(pc, 1.0);
         pc.rect_with_radius_corners(
             cce_ui::color::list_bg_color(),
             x,
@@ -395,11 +487,6 @@ impl RowList {
             pc.relief_recessed(x, y, w, h, cce_ui::layout::list_corner_radius());
         }
 
-        if self.content_h > self.viewport_h {
-            let (sb_x, track_y, sb_w, track_h, thumb_y, thumb_h) = self.scrollbar_geom();
-            pc.rect(cce_ui::color::scrollbar_track_color(), sb_x, track_y, sb_w, track_h);
-            pc.rect(cce_ui::color::scrollbar_thumb_color(), sb_x, thumb_y, sb_w, thumb_h);
-        }
 
         let col_bounds = self.column_bounds();
         let (_, config_size) = cce_ui::layout::list_font_parsed();
@@ -487,6 +574,12 @@ impl RowList {
                 push_text(pc, &truncated, cell_draw_x, cell_y, cell_size, cell_color, &font, clip);
             }
         }
+
+        // The fore copy, after the row overlays, at the fade: it keeps drawing
+        // all the way out rather than stopping at the latch. (A part's icons and
+        // reliefs are emitted after all its rects, and text after everything,
+        // so the row glyphs, the well's wall and the labels still land over it.)
+        self.push_scrollbar(pc, self.activity.fade());
     }
 }
 
@@ -567,5 +660,82 @@ mod tests {
         l.scroll_into_view(49);
         let expect = 49.0 * (l.item_height + 2.0) + 2.0 + l.item_height - l.viewport_h;
         assert!((l.scroll_y - expect).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_scrollbar_rides_the_centre_and_sinks_until_scrolled() {
+        let mut l = list_with_rows(50);
+        let ih = l.item_height;
+        // Centred on the list's width (x 10, w 400), centred-bar thick.
+        let (sb_x, track_y, sb_w, _, _, _) = l.scrollbar_geom();
+        assert!((sb_x + sb_w * 0.5 - 210.0).abs() < 0.01);
+        assert!((sb_w - cce_ui::layout::centred_scrollbar_width()).abs() < 0.01);
+        let lane_x = sb_x + sb_w * 0.5;
+
+        // Sunk: a press on the lane is a press on the row under it.
+        assert!(!l.scrollbar_raised());
+        let row1_y = 20.0 + 1.0 * (ih + 2.0) + 2.0 + ih / 2.0;
+        assert!(l.mouse_input(true, lane_x, row1_y));
+        assert!(!l.dragging);
+        assert!(l.mouse_input(false, lane_x, row1_y));
+        assert_eq!(l.take_click(), Some(1));
+
+        // Sunk, the idle copy is drawn before the bg and the fore copy not
+        // at all (fade 0); both pills.
+        let mut pc = crate::pages::PageContent::new();
+        l.push_prims(&mut pc);
+        let bg = cce_ui::color::list_bg_color();
+        let bg_at = pc.rects.iter().position(|r| r.0 == bg && r.1 == l.x).expect("bg");
+        let bars: Vec<usize> = (0..pc.rects.len()).filter(|&i| pc.rects[i].1 == sb_x).collect();
+        assert_eq!(bars.len(), 2, "track and thumb, idle copy only");
+        assert!(bars.iter().all(|&i| i < bg_at && pc.rects[i].5 > 0.0));
+
+        // A wheel raises it; the fade brings the fore copy in after the rows.
+        assert!(l.wheel(&MouseScrollDelta::LineDelta(0.0, -2.0), 50.0, 50.0));
+        assert!(l.scrollbar_raised());
+        for _ in 0..30 {
+            l.tick(1.0 / 60.0);
+        }
+        assert!(l.activity.fade() > 0.99);
+        let mut pc = crate::pages::PageContent::new();
+        l.push_prims(&mut pc);
+        let bars: Vec<usize> = (0..pc.rects.len()).filter(|&i| pc.rects[i].1 == sb_x).collect();
+        assert_eq!(bars.len(), 4, "idle copy and fore copy");
+        assert_eq!(bars[2], pc.rects.len() - 2, "the fore copy is the last thing drawn");
+
+        // Raised, a press on the thumb grabs it, not the row under it.
+        let (_, _, _, _, thumb_y, thumb_h) = l.scrollbar_geom();
+        assert!(l.mouse_input(true, lane_x, thumb_y + thumb_h * 0.5));
+        assert!(l.dragging);
+        assert!(l.pressed_row.is_none());
+        l.mouse_input(false, lane_x, thumb_y + thumb_h * 0.5);
+        assert!(!l.dragging);
+
+        // A pointer over the raised bar holds it up past the hold…
+        l.cursor_moved(lane_x, track_y + 10.0);
+        for _ in 0..180 {
+            l.tick(1.0 / 60.0);
+        }
+        assert!(l.scrollbar_raised(), "hover holds a raised bar");
+
+        // …and once it leaves, the bar sinks and its fore copy fades out.
+        l.cursor_moved(50.0, 50.0);
+        let mut ticked_while_sinking = false;
+        for _ in 0..180 {
+            ticked_while_sinking |= l.tick(1.0 / 60.0);
+        }
+        assert!(ticked_while_sinking, "the hold and the fade keep frames coming");
+        assert!(!l.scrollbar_raised());
+        assert_eq!(l.activity.fade(), 0.0);
+        assert!(!l.tick(1.0 / 60.0), "settled: no more frames");
+
+        // Hover never raises a sunk bar.
+        l.cursor_moved(lane_x, track_y + 10.0);
+        l.tick(1.0 / 60.0);
+        assert!(!l.scrollbar_raised());
+
+        // A programmatic scroll (keyboard navigation's scroll_into_view) raises it.
+        l.scroll_into_view(49);
+        assert!(l.scrollbar_raised());
     }
 }

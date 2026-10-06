@@ -69,6 +69,13 @@ const SWATCH: f32 = 8.0;
 const SWATCH_GAP: f32 = 4.0;
 const LEGEND_GAP: f32 = 14.0;
 
+/// The dark seam left between neighbouring file tiles, half off each side.
+/// Without it, files of one kind side by side fused into one slab: ten
+/// films read as one, three thousand object files as a single file. A tile
+/// narrower than `FILE_GAP_MIN` keeps its full width, since the gap would eat it.
+const FILE_GAP: f32 = 1.0;
+const FILE_GAP_MIN: f32 = 4.0;
+
 /// How far a directory drawn as one block is pulled from its kind's colour
 /// toward the frame: dim enough that it never reads as one big file of that
 /// kind, bright enough that it never reads as empty.
@@ -690,7 +697,8 @@ pub fn view(
                 );
             }
         } else {
-            pc.rect(Category::of(&tile.name).color(), tx, ty, tw, th);
+            let (fx, fy, fw, fh) = file_face(tile.rect);
+            pc.rect(Category::of(&tile.name).color(), fx, fy, fw, fh);
             if tw >= FILE_LABEL_MIN_W && th >= FILE_LABEL_MIN_H {
                 pc.text(&elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, text_fg);
             }
@@ -741,6 +749,18 @@ pub fn view(
     }
 
     pc
+}
+
+/// The part of a file tile its colour fills: the tile less half of
+/// [`FILE_GAP`] on every side, so the frame behind shows as a seam between
+/// neighbours. Each axis on its own, so a sliver keeps its length.
+fn file_face(rect: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    let (x, y, w, h) = rect;
+    let (gx, gy) = (
+        if w >= FILE_GAP_MIN { FILE_GAP / 2.0 } else { 0.0 },
+        if h >= FILE_GAP_MIN { FILE_GAP / 2.0 } else { 0.0 },
+    );
+    (x + gx, y + gy, w - gx * 2.0, h - gy * 2.0)
 }
 
 /// The hovered tile, for the footer: its path under the scanned directory
@@ -1056,6 +1076,16 @@ mod tests {
         assert!(!state.tiles.iter().any(|t| t.name == "x.mp3"), "its children are not placed");
         // An opened directory, and any file, is not an aggregate.
         assert!(state.tiles.iter().filter(|t| t.name != "sub").all(|t| t.aggregate.is_none()));
+    }
+
+    #[test]
+    fn neighbouring_files_are_parted_by_a_seam() {
+        // Two tiles sharing an edge at x = 50 leave FILE_GAP between faces.
+        let a = file_face((0.0, 0.0, 50.0, 40.0));
+        let b = file_face((50.0, 0.0, 50.0, 40.0));
+        assert!((b.0 - (a.0 + a.2) - FILE_GAP).abs() < 1e-4);
+        // A sliver keeps its thin axis whole and loses the gap only along its length.
+        assert_eq!(file_face((10.0, 10.0, 3.0, 40.0)), (10.0, 10.0 + FILE_GAP / 2.0, 3.0, 40.0 - FILE_GAP));
     }
 
     #[test]

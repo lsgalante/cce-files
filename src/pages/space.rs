@@ -14,6 +14,7 @@
 //! The scan itself is `services::scan`, driven from `main.rs` — this module is
 //! given a finished tree.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +24,7 @@ use cce_ui::widget::{Adapted, Breadcrumb, PathController};
 use crate::pages::PageContent;
 use crate::pages::browse::BrowseState;
 use crate::services::scan::TreeNode;
-use crate::util::format_size;
+use crate::util::{format_size, truncate_px};
 
 /// Below this, in either dimension, a tile is too small to read and is not
 /// emitted at all — its bytes stay accounted for in the parent's area, which
@@ -54,8 +55,24 @@ const DIR_LABEL_MIN: f32 = 46.0;
 const FILE_LABEL_MIN_W: f32 = 44.0;
 const FILE_LABEL_MIN_H: f32 = 15.0;
 
-/// Rows reserved at the bottom of the pane for the hover/summary readout.
-const FOOTER_H: f32 = 18.0;
+/// Rows reserved at the bottom of the pane: the hover/summary readout, then
+/// the colour legend under it.
+const FOOTER_H: f32 = 34.0;
+const FOOTER_LINE: f32 = 15.0;
+const FOOTER_FONT: f32 = 10.0;
+/// The face `pc.text` falls back to, which the footer measures in — the
+/// preview pane's convention.
+const FOOTER_FAMILY: &str = "sans-serif";
+
+/// A legend swatch's side, its gap to its label, and the gap between entries.
+const SWATCH: f32 = 8.0;
+const SWATCH_GAP: f32 = 4.0;
+const LEGEND_GAP: f32 = 14.0;
+
+/// How far a directory drawn as one block is pulled from its kind's colour
+/// toward the frame: dim enough that it never reads as one big file of that
+/// kind, bright enough that it never reads as empty.
+const AGGREGATE_DIM: f32 = 0.6;
 
 // ── File-type colors ────────────────────────────────────────────────
 
@@ -105,6 +122,11 @@ impl Category {
         }
     }
 
+    /// Position in [`CATEGORIES`], which lists them in declaration order.
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Category::Image => "Images",
@@ -147,6 +169,69 @@ pub const CATEGORIES: [Category; 8] = [
     Category::Other,
 ];
 
+/// What a subtree holds, by kind. The root's is the legend; every
+/// directory's names the colour it wears when drawn as one block.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Breakdown {
+    /// Bytes per [`Category`], indexed by [`Category::index`].
+    pub bytes: [u64; 8],
+    pub files: u64,
+}
+
+impl Breakdown {
+    /// The kind holding the most bytes; `None` when nothing has any.
+    pub fn dominant(&self) -> Option<Category> {
+        let mut best = None;
+        let mut most = 0;
+        for c in CATEGORIES {
+            if self.bytes[c.index()] > most {
+                most = self.bytes[c.index()];
+                best = Some(c);
+            }
+        }
+        best
+    }
+
+    /// The kinds present, largest first — the legend's order.
+    pub fn legend(&self) -> Vec<(Category, u64)> {
+        let mut out: Vec<(Category, u64)> = CATEGORIES
+            .into_iter()
+            .map(|c| (c, self.bytes[c.index()]))
+            .filter(|&(_, b)| b > 0)
+            .collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1));
+        out
+    }
+}
+
+/// Sum `node` by kind, recording every directory's dominant kind under its
+/// path along the way. One pass when a scan lands, so a relayout (every frame
+/// of a resize) only looks a block's colour up.
+fn tally(node: &TreeNode, path: &Path, dominant: &mut HashMap<PathBuf, Category>) -> Breakdown {
+    let mut b = Breakdown::default();
+    if !node.is_dir {
+        b.bytes[Category::of(&node.name).index()] += node.size;
+        b.files = 1;
+        return b;
+    }
+    for child in &node.children {
+        if child.is_dir {
+            let sub = tally(child, &path.join(&child.name), dominant);
+            for (acc, n) in b.bytes.iter_mut().zip(sub.bytes) {
+                *acc += n;
+            }
+            b.files += sub.files;
+        } else {
+            b.bytes[Category::of(&child.name).index()] += child.size;
+            b.files += 1;
+        }
+    }
+    if let Some(c) = b.dominant() {
+        dominant.insert(path.to_path_buf(), c);
+    }
+    b
+}
+
 // ── Tiles ───────────────────────────────────────────────────────────
 
 /// One laid-out rectangle. Directories come before their children in the list,
@@ -160,6 +245,10 @@ pub struct Tile {
     pub depth: u32,
     /// (x, y, w, h) in window coordinates.
     pub rect: (f32, f32, f32, f32),
+    /// Set on a directory drawn as one block — too small to open, or nothing
+    /// inside it big enough to place: the kind that fills most of it. Painted
+    /// in the frame colour, such a block read as empty space however full it was.
+    pub aggregate: Option<Category>,
 }
 
 impl Tile {
@@ -313,6 +402,11 @@ pub struct SpaceState {
     /// Raised to abandon the in-flight scan when a newer one supersedes it.
     pub cancel: Arc<AtomicBool>,
     pub error: Option<String>,
+    /// The scanned tree by kind: the legend, and the file count.
+    pub breakdown: Breakdown,
+    /// Every directory's dominant kind, by path — what a directory drawn as
+    /// one block is coloured by. Filled with `breakdown`, once per scan.
+    dominant: HashMap<PathBuf, Category>,
     /// Pointer focus (the app's well-focus tracking): the map well renders as
     /// the tinted carve — accent ring replacing the relief lighting.
     pub focused: bool,
@@ -336,6 +430,8 @@ impl Default for SpaceState {
             scan_bytes: 0,
             cancel: Arc::new(AtomicBool::new(false)),
             error: None,
+            breakdown: Breakdown::default(),
+            dominant: HashMap::new(),
             focused: false,
         }
     }
@@ -359,6 +455,8 @@ impl SpaceState {
         self.error = None;
         self.tree = None;
         self.tiles.clear();
+        self.breakdown = Breakdown::default();
+        self.dominant.clear();
         self.hovered = None;
         self.scanned_dir = dir.to_path_buf();
         self.laid_out = (0.0, 0.0, 0.0, 0.0);
@@ -367,6 +465,8 @@ impl SpaceState {
 
     pub fn scan_finished(&mut self, dir: PathBuf, tree: TreeNode) {
         self.scanning = false;
+        self.dominant.clear();
+        self.breakdown = tally(&tree, &dir, &mut self.dominant);
         self.scanned_dir = dir;
         self.tree = Some(tree);
         self.tiles.clear();
@@ -378,6 +478,8 @@ impl SpaceState {
         self.scanning = false;
         self.tree = None;
         self.tiles.clear();
+        self.breakdown = Breakdown::default();
+        self.dominant.clear();
         self.error = Some(err);
     }
 
@@ -395,7 +497,7 @@ impl SpaceState {
         self.laid_out = rect;
         let Some(tree) = self.tree.take() else { return };
         let root = self.scanned_dir.clone();
-        place(&tree, &root, rect, 0, &mut self.tiles);
+        place(&tree, &root, rect, 0, &self.dominant, &mut self.tiles);
         self.tree = Some(tree);
         // A relayout renumbers everything; the stale hover index would point
         // at an unrelated tile.
@@ -405,12 +507,22 @@ impl SpaceState {
 
 /// Recursively lay `node` into `rect`, appending tiles. The node's own tile is
 /// pushed before its children so a reverse hit-test finds the deepest first.
-fn place(node: &TreeNode, path: &Path, rect: (f32, f32, f32, f32), depth: u32, out: &mut Vec<Tile>) {
-    let (x, y, w, h) = rect;
+/// A directory none of whose children got a tile is marked an aggregate, in
+/// the colour `dominant` gives its path.
+fn place(
+    node: &TreeNode,
+    path: &Path,
+    rect: (f32, f32, f32, f32),
+    depth: u32,
+    dominant: &HashMap<PathBuf, Category>,
+    out: &mut Vec<Tile>,
+) {
+    let (w, h) = (rect.2, rect.3);
     if w < MIN_TILE || h < MIN_TILE || out.len() >= MAX_TILES {
         return;
     }
 
+    let idx = out.len();
     out.push(Tile {
         path: path.to_path_buf(),
         name: node.name.clone(),
@@ -418,9 +530,29 @@ fn place(node: &TreeNode, path: &Path, rect: (f32, f32, f32, f32), depth: u32, o
         is_dir: node.is_dir,
         depth,
         rect,
+        aggregate: None,
     });
 
-    if !node.is_dir || node.children.is_empty() {
+    if !node.is_dir {
+        return;
+    }
+    place_children(node, path, rect, depth, dominant, out);
+    if out.len() == idx + 1 {
+        out[idx].aggregate = dominant.get(path).copied();
+    }
+}
+
+/// Lay a directory's children inside its frame, when it is big enough to.
+fn place_children(
+    node: &TreeNode,
+    path: &Path,
+    rect: (f32, f32, f32, f32),
+    depth: u32,
+    dominant: &HashMap<PathBuf, Category>,
+    out: &mut Vec<Tile>,
+) {
+    let (x, y, w, h) = rect;
+    if node.children.is_empty() {
         return;
     }
     // Too small to subdivide usefully: it stays one aggregate block.
@@ -450,7 +582,7 @@ fn place(node: &TreeNode, path: &Path, rect: (f32, f32, f32, f32), depth: u32, o
     let values: Vec<f64> = kids.iter().map(|c| c.size as f64).collect();
 
     for (child, r) in kids.iter().zip(squarify(&values, inner)) {
-        place(child, &path.join(&child.name), r, depth + 1, out);
+        place(child, &path.join(&child.name), r, depth + 1, dominant, out);
     }
 }
 
@@ -527,8 +659,10 @@ pub fn view(
     // Inset one pixel so tiles do not sit on top of the well's rim.
     state.relayout((map.0 + 1.0, map.1 + 1.0, (map.2 - 2.0).max(0.0), (map.3 - 2.0).max(0.0)));
 
-    if state.tiles.is_empty() {
-        pc.text("Nothing to show — the directory is empty.", map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
+    // A root of zero bytes still gets a tile — an empty, dark map that read as
+    // a scan that had not finished.
+    if state.tiles.is_empty() || state.tree.as_ref().is_none_or(|t| t.size == 0) {
+        pc.text("Nothing to show — nothing here takes up any space.", map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
         return pc;
     }
 
@@ -539,6 +673,13 @@ pub fn view(
             // A directory paints only its frame — its children cover the
             // inside, and where they do not, the gap reads as slack space.
             pc.rect(frame, tx, ty, tw, th);
+            // One drawn as a block has no children over it: fill it, inside a
+            // frame-coloured rim, in a dimmed copy of what fills it most.
+            if let Some(cat) = tile.aggregate {
+                if tw > 2.0 && th > 2.0 {
+                    pc.rect(mix(cat.color(), frame, AGGREGATE_DIM), tx + 1.0, ty + 1.0, tw - 2.0, th - 2.0);
+                }
+            }
             if th >= DIR_LABEL_MIN && tw >= FILE_LABEL_MIN_W {
                 pc.text(
                     &elide(&tile.name, tw - 6.0),
@@ -568,18 +709,106 @@ pub fn view(
         }
     }
 
-    // Footer: whatever the cursor is over, else the total.
-    let footer_y = map.1 + map.3 + 3.0;
-    let footer = match state.hovered.and_then(|i| state.tiles.get(i)) {
-        Some(t) => format!("{}  —  {}", t.path.display(), format_size(t.size)),
-        None => {
-            let total = state.tree.as_ref().map(|t| t.size).unwrap_or(0);
-            format!("{} in {} tiles", format_size(total), state.tiles.len())
-        }
+    // Footer, line one: whatever the cursor is over, else the summary. The
+    // root tile covers the whole map, so "over the root" (a frame gap) counts
+    // as over nothing.
+    let left = cx + 8.0;
+    let avail = (cw - 16.0).max(0.0);
+    let line1 = map.1 + map.3 + 3.0;
+    let total = state.tree.as_ref().map_or(0, |t| t.size);
+    let hovered = state.hovered.and_then(|i| state.tiles.get(i)).filter(|t| t.depth > 0);
+    let readout = match hovered {
+        Some(t) => readout(t, &state.scanned_dir, total, avail),
+        None => summary(total, state.breakdown.files, avail),
     };
-    pc.text(&elide(&footer, cw - 16.0), cx + 8.0, footer_y, 10.0, text_dim);
+    pc.text(&readout, left, line1, FOOTER_FONT, text_dim);
+
+    // Line two: the legend, largest kind first, as many as fit. The hovered
+    // tile's kind is lit, so the key answers "what colour is this?" in place.
+    let lit = hovered.and_then(|t| if t.is_dir { t.aggregate } else { Some(Category::of(&t.name)) });
+    let line2 = line1 + FOOTER_LINE;
+    let mut x = left;
+    for (cat, bytes) in state.breakdown.legend() {
+        let label = format!("{} {}", cat.label(), format_size(bytes));
+        let w = SWATCH + SWATCH_GAP + cce_ui::widget::display::measure_text_width(&label, FOOTER_FAMILY, FOOTER_FONT);
+        if x + w > left + avail {
+            break;
+        }
+        pc.rect(cat.color(), x, line2 + (FOOTER_LINE - 2.0 - SWATCH) / 2.0, SWATCH, SWATCH);
+        let color = if lit == Some(cat) { text_fg } else { text_dim };
+        pc.text(&label, x + SWATCH + SWATCH_GAP, line2, FOOTER_FONT, color);
+        x += w + LEGEND_GAP;
+    }
 
     pc
+}
+
+/// The hovered tile, for the footer: its path under the scanned directory
+/// (cut from the FRONT, so the name survives), size, share of the whole, and
+/// for a block, what fills it.
+fn readout(t: &Tile, root: &Path, total: u64, avail: f32) -> String {
+    let mut tail = format!("  —  {}  ·  {}", format_size(t.size), share(t.size, total));
+    if let Some(cat) = t.aggregate {
+        tail.push_str(&format!("  ·  mostly {}", cat.label().to_lowercase()));
+    }
+    let mut rel = t.path.strip_prefix(root).unwrap_or(&t.path).display().to_string();
+    if t.is_dir {
+        rel.push('/');
+    }
+    let tail_w = cce_ui::widget::display::measure_text_width(&tail, FOOTER_FAMILY, FOOTER_FONT);
+    let rel = truncate_px(&rel, FOOTER_FAMILY, FOOTER_FONT, (avail - tail_w).max(0.0), true);
+    rel + &tail
+}
+
+/// The whole scan, for the footer when nothing is hovered — with the one
+/// gesture the map has, dropped first when the line is short.
+fn summary(total: u64, files: u64, avail: f32) -> String {
+    let noun = if files == 1 { "file" } else { "files" };
+    let line = format!("{} in {} {noun}", format_size(total), group_digits(files));
+    let hinted = format!("{line}  ·  double-click a block to zoom in");
+    if cce_ui::widget::display::measure_text_width(&hinted, FOOTER_FAMILY, FOOTER_FONT) <= avail {
+        return hinted;
+    }
+    truncate_px(&line, FOOTER_FAMILY, FOOTER_FONT, avail, false)
+}
+
+/// `part` as a share of `total`: whole percent from 10 up, one decimal below,
+/// and a floor so a sliver never reads as "0%".
+fn share(part: u64, total: u64) -> String {
+    if total == 0 {
+        return "—".to_string();
+    }
+    let p = part as f64 / total as f64 * 100.0;
+    if p >= 9.95 {
+        format!("{p:.0}%")
+    } else if p >= 0.1 {
+        format!("{p:.1}%")
+    } else {
+        "<0.1%".to_string()
+    }
+}
+
+/// `12408` → `12,408`.
+fn group_digits(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// `a` pulled toward `b` by `t` (0 = a, 1 = b). Both linear, so is the mix.
+fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3],
+    ]
 }
 
 /// Four thin rects making a border — `PageContent` has no stroke primitive.
@@ -697,7 +926,7 @@ mod tests {
         };
 
         let mut tiles = Vec::new();
-        place(&tree, Path::new("/root"), (0.0, 0.0, 400.0, 400.0), 0, &mut tiles);
+        place(&tree, Path::new("/root"), (0.0, 0.0, 400.0, 400.0), 0, &HashMap::new(), &mut tiles);
 
         // Root, sub, big.bin, small.txt.
         assert_eq!(tiles.len(), 4);
@@ -728,7 +957,7 @@ mod tests {
         let tree = TreeNode { name: "root".into(), size: 10_001_000, is_dir: true, children };
 
         let mut tiles = Vec::new();
-        place(&tree, Path::new("/root"), (0.0, 0.0, 100.0, 100.0), 0, &mut tiles);
+        place(&tree, Path::new("/root"), (0.0, 0.0, 100.0, 100.0), 0, &HashMap::new(), &mut tiles);
 
         assert!(tiles.len() < 50, "expected culling, got {} tiles", tiles.len());
         assert!(tiles.iter().any(|t| t.name == "huge.bin"));
@@ -771,6 +1000,74 @@ mod tests {
         assert_eq!(Category::of(".bashrc"), Category::Other);
         // A dotfile that really does carry one is still classified.
         assert_eq!(Category::of(".config.toml"), Category::Document);
+    }
+
+    #[test]
+    fn tally_sums_kinds_and_names_each_directory_by_its_largest() {
+        let tree = TreeNode {
+            name: "root".into(),
+            size: 1300,
+            is_dir: true,
+            children: vec![
+                TreeNode {
+                    name: "films".into(),
+                    size: 1000,
+                    is_dir: true,
+                    children: vec![file("a.mkv", 900), file("notes.txt", 100)],
+                },
+                file("b.png", 200),
+                file("c.png", 100),
+            ],
+        };
+        let mut dominant = HashMap::new();
+        let b = tally(&tree, Path::new("/root"), &mut dominant);
+
+        assert_eq!(b.files, 4);
+        assert_eq!(b.bytes[Category::Video.index()], 900);
+        assert_eq!(b.bytes[Category::Image.index()], 300);
+        assert_eq!(b.bytes[Category::Document.index()], 100);
+        assert_eq!(
+            b.legend(),
+            vec![(Category::Video, 900), (Category::Image, 300), (Category::Document, 100)],
+            "only the kinds present, largest first"
+        );
+        assert_eq!(dominant.get(Path::new("/root/films")), Some(&Category::Video));
+        assert_eq!(dominant.get(Path::new("/root")), Some(&Category::Video));
+        assert_eq!(Breakdown::default().dominant(), None);
+    }
+
+    #[test]
+    fn a_directory_drawn_as_one_block_wears_its_dominant_kind() {
+        // `sub` gets far less than MIN_RECURSE across, so it is not opened.
+        let mut children = vec![file("huge.bin", 1_000_000)];
+        children.push(TreeNode {
+            name: "sub".into(),
+            size: 20_000,
+            is_dir: true,
+            children: vec![file("x.mp3", 15_000), file("y.txt", 5_000)],
+        });
+        let tree = TreeNode { name: "root".into(), size: 1_020_000, is_dir: true, children };
+        let mut state = SpaceState::default();
+        state.scan_finished(PathBuf::from("/root"), tree);
+        state.relayout((0.0, 0.0, 200.0, 200.0));
+
+        let sub = state.tiles.iter().find(|t| t.name == "sub").expect("sub is big enough to show");
+        assert_eq!(sub.aggregate, Some(Category::Audio));
+        assert!(!state.tiles.iter().any(|t| t.name == "x.mp3"), "its children are not placed");
+        // An opened directory, and any file, is not an aggregate.
+        assert!(state.tiles.iter().filter(|t| t.name != "sub").all(|t| t.aggregate.is_none()));
+    }
+
+    #[test]
+    fn share_and_digit_grouping() {
+        assert_eq!(share(18, 100), "18%");
+        assert_eq!(share(42, 1000), "4.2%");
+        assert_eq!(share(1, 1_000_000), "<0.1%");
+        assert_eq!(share(5, 0), "—");
+        assert_eq!(group_digits(7), "7");
+        assert_eq!(group_digits(1000), "1,000");
+        assert_eq!(group_digits(12408), "12,408");
+        assert_eq!(group_digits(1234567), "1,234,567");
     }
 
     #[test]

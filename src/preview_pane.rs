@@ -14,37 +14,9 @@ use std::path::PathBuf;
 use cce_ui::layout::SectionContext;
 use cce_ui::scene::layout::{fit_rect, FitMode, Rect};
 use cce_ui::widget::display::{measure_text_width, truncate_tail};
-use cce_ui::widget::{Bounds, MouseScrollDelta, ScrollMotion};
 
-/// Truncate `s` to fit `avail` px, measured for real (resvg-backed, cached per
-/// string+size — the handful of details strings re-measure only on selection
-/// change). `head` replaces the front ("...ail/of/path"), else the back
-/// ("name..."). Binary search on kept chars: ~7 probes for a long path.
-fn truncate_px(s: &str, family: &str, size: f32, avail: f32, head: bool) -> String {
-    if measure_text_width(s, family, size) <= avail {
-        return s.to_string();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let build = |keep: usize| -> String {
-        if head {
-            let tail: String = chars[chars.len() - keep..].iter().collect();
-            format!("...{tail}")
-        } else {
-            let kept: String = chars[..keep].iter().collect();
-            format!("{kept}...")
-        }
-    };
-    let (mut lo, mut hi) = (0usize, chars.len().saturating_sub(1));
-    while lo < hi {
-        let mid = (lo + hi + 1) / 2;
-        if measure_text_width(&build(mid), family, size) <= avail {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    build(lo)
-}
+use crate::util::truncate_px;
+use cce_ui::widget::{Bounds, MouseScrollDelta, ScrollMotion};
 
 use crate::pages::PageContent;
 

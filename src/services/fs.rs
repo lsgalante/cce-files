@@ -32,7 +32,11 @@ pub struct PreviewData {
 pub enum FsRequest {
     ReadDirectory(PathBuf),
     RefreshDirectory(PathBuf),
-    ReadPreview(PathBuf),
+    /// Read a selection's preview. The number is the request's generation
+    /// (`FsService::preview_latest` holds the newest): a read that has been
+    /// superseded before it starts is skipped, and its result, should it
+    /// finish anyway, is dropped by the app.
+    ReadPreview(PathBuf, u64),
     /// Move to the freedesktop trash (the default Delete).
     TrashPath(PathBuf),
     /// Unrecoverable delete — the trash's own rows, and "Delete Permanently".
@@ -54,11 +58,15 @@ pub enum FsRequest {
 
 pub struct FsService {
     pub sender: mpsc::Sender<FsRequest>,
+    /// Generation of the newest preview request.
+    pub preview_latest: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl FsService {
     pub fn new(app_sender: calloop::channel::Sender<crate::Message>) -> Self {
         let (tx, mut rx) = mpsc::channel::<FsRequest>(100);
+        let preview_latest = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let latest = preview_latest.clone();
 
         tokio::spawn(async move {
             while let Some(req) = rx.recv().await {
@@ -80,11 +88,23 @@ impl FsService {
                             ));
                         });
                     }
-                    FsRequest::ReadPreview(path) => {
-                        tokio::spawn(async move {
+                    FsRequest::ReadPreview(path, generation) => {
+                        // A full image decode plus two `xdg-mime` spawns:
+                        // blocking work, so the blocking pool. Arrowing down a
+                        // folder of photos queues one per row; the ones passed
+                        // over before their turn are never decoded.
+                        let latest = latest.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if latest.load(std::sync::atomic::Ordering::Relaxed) != generation {
+                                return;
+                            }
                             let preview_data = load_preview_data_internal(&path);
                             let _ = app_sender.send(crate::Message::Preview(
-                                crate::pages::preview::PreviewMessage::PreviewLoaded { path, data: preview_data },
+                                crate::pages::preview::PreviewMessage::PreviewLoaded {
+                                    path,
+                                    generation,
+                                    data: preview_data,
+                                },
                             ));
                         });
                     }
@@ -201,7 +221,7 @@ impl FsService {
             }
         });
 
-        Self { sender: tx }
+        Self { sender: tx, preview_latest }
     }
 
     pub fn send(&self, req: FsRequest) {

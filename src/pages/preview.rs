@@ -8,7 +8,9 @@ use crate::preview_pane::PreviewPane;
 pub enum PreviewMessage {
     SetPath { path: PathBuf },
     Clear,
-    PreviewLoaded { path: PathBuf, data: crate::services::fs::PreviewData },
+    /// `generation` is the request's (`FsRequest::ReadPreview`); the app
+    /// drops any but the newest before it gets here.
+    PreviewLoaded { path: PathBuf, generation: u64, data: crate::services::fs::PreviewData },
 }
 
 // ── Update ──────────────────────────────────────────────────────────
@@ -24,7 +26,7 @@ pub fn update(state: &mut PreviewPane, msg: PreviewMessage) {
         PreviewMessage::SetPath { path: _ } => {
             // Deprecated direct SetPath, as we now load previews via the FsService.
         }
-        PreviewMessage::PreviewLoaded { path, data } => {
+        PreviewMessage::PreviewLoaded { path, data, .. } => {
             state.path_display = path.to_string_lossy().to_string();
             state.path = Some(path);
             state.name = data.name;

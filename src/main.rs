@@ -335,6 +335,26 @@ fn breadcrumb_menu_rows(path: String, current: Page) -> (Vec<String>, Vec<Option
 /// the container copies just coincided (the Phase 0 double-paint) — and (b) own the
 /// divider: its quad, hover tint, and proportion drag. This is (b), app-side, with the
 /// `SplitBox` two-child horizontal math verbatim.
+/// A file as `stat` sees it: what decides whether a preview already read
+/// is still the file's. The link itself and, through it, its target — a
+/// symlink to a file being rewritten keeps its own stamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreviewStamp {
+    link: Option<(u64, u64, std::time::SystemTime)>,
+    target: Option<(u64, u64, std::time::SystemTime)>,
+}
+
+impl PreviewStamp {
+    fn of(path: &std::path::Path) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        let key = |m: std::fs::Metadata| (m.ino(), m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH));
+        Self {
+            link: std::fs::symlink_metadata(path).ok().map(key),
+            target: std::fs::metadata(path).ok().map(key),
+        }
+    }
+}
+
 /// Width of the preview pane's column while collapsed to its title stub:
 /// room for the label and the corner control that restores it.
 const PREVIEW_STUB_W: f32 = 170.0;
@@ -500,6 +520,16 @@ struct FilesystemApp {
     network: pages::network::NetworkState,
     space: pages::space::SpaceState,
     preview: cce_files::preview_pane::PreviewPane,
+    /// What the preview was last asked for: the path, and the file as it
+    /// stood then. Every browse message — a watcher refresh, a search
+    /// keystroke — used to ask again, and each ask decodes and resizes an
+    /// image and spawns `xdg-mime` twice; with a download growing beside a
+    /// selected photo that was a full decode per refresh. Now a request goes
+    /// out only when this changes.
+    preview_requested: Option<(std::path::PathBuf, PreviewStamp)>,
+    /// Generation of the newest preview request; a `PreviewLoaded` from any
+    /// other is a selection the user has already moved past.
+    preview_generation: u64,
     /// See [`FocusedWell`]; drives the per-well `focused` flags each rebuild.
     focused_well: FocusedWell,
 
@@ -586,6 +616,40 @@ impl FilesystemApp {
     fn open_context_menu(&mut self, x: f32, y: f32, options: Vec<(String, Option<Message>)>) {
         let (w, h) = context_menu_size(&options);
         self.context_menu = ContextMenu { visible: true, x, y, w, h, options, hovered: None };
+    }
+
+    /// Ask for `path`'s preview unless that is what was last asked for and
+    /// the file has not changed since. `force` asks regardless (the texture
+    /// was lost with its renderer).
+    fn request_preview(&mut self, path: std::path::PathBuf, force: bool) {
+        let stamp = PreviewStamp::of(&path);
+        if !force
+            && self
+                .preview_requested
+                .as_ref()
+                .is_some_and(|(p, st)| *p == path && *st == stamp)
+        {
+            return;
+        }
+        self.preview_requested = Some((path.clone(), stamp));
+        let generation = self.next_preview_generation();
+        self.fs_service.send(services::fs::FsRequest::ReadPreview(path, generation));
+    }
+
+    /// Empty the preview pane. Also retires whatever request is in flight,
+    /// so a slow read cannot fill the pane back in after it was cleared.
+    fn clear_preview(&mut self) {
+        self.preview_requested = None;
+        self.next_preview_generation();
+        pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
+    }
+
+    fn next_preview_generation(&mut self) -> u64 {
+        self.preview_generation += 1;
+        self.fs_service
+            .preview_latest
+            .store(self.preview_generation, std::sync::atomic::Ordering::Relaxed);
+        self.preview_generation
     }
 
     fn start_watching(&mut self, path: std::path::PathBuf) {
@@ -1436,6 +1500,8 @@ impl Application for FilesystemApp {
             network: pages::network::NetworkState::default(),
             space: pages::space::SpaceState::default(),
             preview: Default::default(),
+            preview_requested: None,
+            preview_generation: 0,
             focused_well: FocusedWell::Content,
             preview_dock: Default::default(),
             preview_prior_fracs: None,
@@ -1572,12 +1638,13 @@ impl Application for FilesystemApp {
                     self.ensure_space_scan();
                 }
 
-                // If NavigateTo or SelectEntry happened, update Preview path
+                // Whatever the message, the preview follows the selection —
+                // and only re-reads when it, or the selected file, changed.
                 let selected_path = self.browse.selected_path();
                 if let Some(path) = selected_path {
-                    self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
+                    self.request_preview(path, false);
                 } else {
-                    pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
+                    self.clear_preview();
                 }
 
                 if let Some(idx) = self.browse.selected {
@@ -1606,6 +1673,13 @@ impl Application for FilesystemApp {
                 }
             }
             Message::Preview(msg) => {
+                if let pages::preview::PreviewMessage::PreviewLoaded { generation, .. } = &msg {
+                    // A read the selection has moved past: a slow decode
+                    // must not paint over the file now selected.
+                    if *generation != self.preview_generation {
+                        return;
+                    }
+                }
                 pages::preview::update(&mut self.preview, msg);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
@@ -1803,7 +1877,7 @@ impl Application for FilesystemApp {
                     "[preview] renderer replaced; re-reading the preview of {}",
                     path.display()
                 );
-                self.fs_service.send(services::fs::FsRequest::ReadPreview(path));
+                self.request_preview(path, true);
             }
         }
         self.needs_rebuild = true;
@@ -2583,21 +2657,22 @@ impl Application for FilesystemApp {
                                     self.browse.save_name_box.edit_buffer = entry.name.clone();
                                 }
                             }
-                            self.fs_service.send(services::fs::FsRequest::ReadPreview(entry.path.clone()));
+                            let path = entry.path.clone();
+                            self.request_preview(path, false);
                         }
                         changed = true;
                     }
                 } else {
                     if self.browse.selected.is_some() {
                         self.browse.selected = None;
-                        pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
+                        self.clear_preview();
                         changed = true;
                     }
                 }
             } else {
                 if self.browse.selected.is_some() {
                     self.browse.selected = None;
-                    pages::preview::update(&mut self.preview, pages::preview::PreviewMessage::Clear);
+                    self.clear_preview();
                     changed = true;
                 }
             }
@@ -2665,7 +2740,7 @@ impl Application for FilesystemApp {
                         }
                     } else {
                         self.space.selected_path = Some(tile_path.clone());
-                        self.fs_service.send(services::fs::FsRequest::ReadPreview(tile_path));
+                        self.request_preview(tile_path, false);
                     }
                     changed = true;
                 }

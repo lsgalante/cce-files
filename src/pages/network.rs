@@ -201,21 +201,18 @@ impl NetworkState {
     }
 }
 
-pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut cce_ui::widget::Adapted<cce_ui::widget::Dropdown>, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
+pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
     let mut pc = PageContent::new();
 
-    // Render the Breadcrumb and Dropdown next to it
-    let dropdown_w = 120.0;
+    // Render the Breadcrumb, full width (the view switch is in its context menu).
     // TODO(style): the 4/6/16 offsets are a leftover inset from the pane rect
-    // that browse.rs has already dropped; the gap to the dropdown is the rung.
-    let gap = cce_ui::layout::root_plate_gap();
-    let breadcrumb_w = cw - 16.0 - dropdown_w - gap;
+    // that browse.rs has already dropped.
+    let breadcrumb_w = cw - 16.0;
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
     {
         let rect = cce_ui::scene::layout::Rect { x: cx + 4.0, y: cy + 6.0, width: breadcrumb_w, height: 24.0 };
         crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
     }
-    cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + gap, cy + 6.0, dropdown_w, 24.0, ctx);
 
     // The pane the graph is laid out in, under the breadcrumb.
     let pane = (cx, cy + 28.0, cw, (ch - 28.0).max(0.0));

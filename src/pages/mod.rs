@@ -26,6 +26,16 @@ impl Page {
             Page::Space => "Space",
         }
     }
+
+    /// The page's row in the breadcrumb's view menu. These name the
+    /// visualization rather than the page, so they are not [`Self::label`].
+    pub fn view_label(self) -> &'static str {
+        match self {
+            Page::Browse => "List",
+            Page::Network => "Graph",
+            Page::Space => "Space",
+        }
+    }
 }
 
 /// Mirror the breadcrumb's relief into a flat-path [`PageContent`]: the
@@ -37,8 +47,10 @@ impl Page {
 /// in one place, since all three pages want it identically.
 ///
 /// **Audited against `Breadcrumb::paint` and deliberately left page-side** —
-/// it does NOT need [`dropdown_relief`]'s treatment, for two reasons that are
-/// easy to assume away:
+/// it does NOT need the treatment the view dropdown's ring needed (carved into
+/// `window_pc` after the pages had laid it out; the dropdown is gone since
+/// 2026-10-06, its List/Graph/Space rows moved into this breadcrumb's context
+/// menu), for two reasons that are easy to assume away:
 ///
 /// - *The depths already agree.* Each `relief_*`/`groove` helper derives depth
 ///   from the height it is handed, and all three here are handed what the
@@ -50,8 +62,8 @@ impl Page {
 ///   laying the breadcrumb out, rather than reading it back off the widget, so
 ///   there is no previous-frame rect to pick up.
 ///
-/// Nor does the `window_pc`-vs-`pc` split matter here, though `dropdown_relief`
-/// warns loudly about it. `display_list` emits ALL of a `PageContent`'s rects
+/// Nor does the `window_pc`-vs-`pc` split matter here, though it did for the
+/// dropdown's ring. `display_list` emits ALL of a `PageContent`'s rects
 /// before ALL of its reliefs, so the call order within `pc` is irrelevant; only
 /// a different PageContent could reorder these. The only quad the breadcrumb
 /// puts under the carve is the hover tint, and that is inset to the seam's
@@ -73,9 +85,9 @@ pub fn breadcrumb_relief(
     // the dropdown's configured fill: `render_widget` offers that fill for a
     // Dropdown through a per-type hook (layout.rs) but has no Breadcrumb arm,
     // so a run carved here with no face would keep showing the window plate
-    // while the dropdown beside it went opaque. Both controls read
-    // `dropdown_background_color` now, so they match under any config —
-    // transparent leaves the plate as the face for both.
+    // while the DE's dropdowns went opaque. It reads
+    // `dropdown_background_color` too, so they match under any config —
+    // transparent leaves the plate as the face.
     let radius = r.min(rh * 0.5);
     let depth = cce_ui::layout::bevel_width().min(rh * 0.2);
     let raw = cce_ui::color::dropdown_background_color();
@@ -90,48 +102,6 @@ pub fn breadcrumb_relief(
     for (a, b) in breadcrumb.seams(rect) {
         pc.groove(a, b, cce_ui::widget::Breadcrumb::SEAM_WIDTH, run);
     }
-}
-
-/// Mirror the view dropdown's flush inset plate into a flat-path
-/// [`PageContent`]: the groove ring sunk around the control, and the control's
-/// own edge rolling back up out of it — face level with the window plate, so
-/// the seam is the only thing saying it is a separate part.
-///
-/// `Dropdown::paint` emits this as one `ctx.inset_plate`; `render_widget` keeps
-/// only quads and text, so the carve is app-side — the same story as
-/// [`breadcrumb_relief`], which is the well-and-plate this pairs with.
-///
-/// It reaches the SAME `inset_plate` call the widget makes, via
-/// [`PageContent::relief_inset`] → `WidgetFx::Inset`. It used to hand-roll the
-/// pair `inset_plate` expands to (`relief_recessed` over an expanded rect, then
-/// `relief_raised`) — which got the ring's depth wrong, because
-/// `relief_recessed` derives depth from the height it is HANDED, and that was
-/// the already-expanded one: a 5.76px wall against a 4.8px lip, so the
-/// descending wall over-ran the lip instead of meeting it in the tight V-groove
-/// with no flat floor that `inset_plate` documents.
-///
-/// **Carve it into `window_pc`, AFTER the page's `view()` has run.** Two
-/// constraints pin it there, and they pull in opposite directions:
-///
-/// - *After the pages* — because the pages are what lay the dropdown out. Read
-///   `view_dropdown.rect()` before they run and you get the rect they assigned
-///   on the PREVIOUS frame, so the ring trails the control by a frame through a
-///   resize (and on the very first frame it carves a 0×0 rect).
-/// - *Into `window_pc`, not the page's own `pc`* — because these are overlay
-///   carves, shaded against whatever is already beneath them. Emitting them
-///   page-side puts them after the dropdown's own background quad instead of
-///   before it, which visibly thins the lit top rim. Same rect, different
-///   material. (Verified by pixel-diffing the two orders; `CCE_PLATE_DEBUG=1`
-///   shows both as overlay fallback, so this is compositing order, not
-///   plate grouping.)
-pub fn dropdown_relief(pc: &mut PageContent, rect: cce_ui::scene::layout::Rect) {
-    pc.relief_inset(
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        cce_ui::layout::dropdown_corner_radius(),
-    );
 }
 
 pub const RELIEF_RECESSED: u8 = 0;
@@ -511,8 +481,8 @@ impl RenderTarget for PageContent {
     /// The flat-path bridge for a widget's flush inset plate — the Dropdown's
     /// OPEN popover, which is its trigger surface grown over the unified box.
     /// Without this override the default degrades it to a plain rounded fill,
-    /// so the menu lost the groove ring and lip the closed trigger has (the
-    /// `dropdown_relief` carve) the moment it expanded.
+    /// so the menu lost the groove ring and lip the closed trigger has the
+    /// moment it expanded.
     ///
     /// The face and the walls go to different vecs on purpose — `reliefs` are
     /// edges-only, drawn over the faces `rects` own — and `display_list` emits
@@ -523,8 +493,7 @@ impl RenderTarget for PageContent {
     /// widget computes it from the TRIGGER's height; the box handed here is the
     /// trigger plus the revealed menu, several times taller. `relief_inset`
     /// would recompute `bevel_width().min(h * 0.2)` off that expanded height
-    /// and thicken the ring as the menu grows — the same mistake
-    /// [`dropdown_relief`] documents. A ring that swells during the open
+    /// and thicken the ring as the menu grows. A ring that swells during the open
     /// animation is exactly the artifact this override exists to avoid.
     fn inset_plate(&mut self, color: [f32; 4], x: f32, y: f32, w: f32, h: f32, radius: f32, depth: f32) {
         self.rects.push((color, x, y, w, h, radius, (true, true, true, true)));

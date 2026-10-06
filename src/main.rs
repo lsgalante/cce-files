@@ -299,6 +299,36 @@ struct ContextMenu {
     hovered: Option<usize>,
 }
 
+/// A row of the breadcrumb's context menu that the app runs itself.
+#[derive(Clone, Debug, PartialEq)]
+enum BreadcrumbRow {
+    CopyPath(String),
+    View(Page),
+}
+
+/// The breadcrumb's context menu while it is open: which show of the shared
+/// menu it is (`context_menu::generation`), so a stale one never runs, and
+/// what each row does (`None` for the header and the separator).
+struct BreadcrumbMenu {
+    generation: u64,
+    rows: Vec<Option<BreadcrumbRow>>,
+}
+
+/// The breadcrumb menu below its header: Copy Path, then the view switch —
+/// a dropdown beside the breadcrumb until 2026-10-06 — offering the views
+/// other than the one showing. Not all three with the current one marked:
+/// the menu face has no radio or check glyph (a "●" drew as a blank), and
+/// the page itself says which view it is.
+fn breadcrumb_menu_rows(path: String, current: Page) -> (Vec<String>, Vec<Option<BreadcrumbRow>>) {
+    let mut labels = vec!["Copy Path".to_string(), "-".to_string()];
+    let mut rows = vec![Some(BreadcrumbRow::CopyPath(path)), None];
+    for page in Page::ALL.into_iter().filter(|&p| p != current) {
+        labels.push(page.view_label().to_string());
+        rows.push(Some(BreadcrumbRow::View(page)));
+    }
+    (labels, rows)
+}
+
 /// App-owned two-pane horizontal split, replacing the dissolved `SplitBox` +
 /// `BrowseContainer`/`NetworkContainer` shims (Phase 6y). Those existed to (a) position
 /// pane content — but the pages already lay out and render everything from the pane rect,
@@ -498,7 +528,6 @@ struct FilesystemApp {
     cursor_x: f32,
     cursor_y: f32,
     paginator: cce_ui::widget::Adapted<Paginator>,
-    view_dropdown: cce_ui::widget::Adapted<cce_ui::widget::Dropdown>,
     just_initialized: bool,
     ui_context: cce_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
@@ -521,6 +550,9 @@ struct FilesystemApp {
     /// Rows of the OPEN plate-dock corner menu (empty = not ours); routed
     /// before the generic context-menu dispatch.
     plate_menu_actions: Vec<cce_ui::widget::plate_dock::PlateDockAction>,
+    /// The breadcrumb's context menu when it is the one open; routed, like
+    /// the plate-dock rows, before the generic context-menu dispatch.
+    breadcrumb_menu: Option<BreadcrumbMenu>,
     // Space's double-click is tracked by path, not row index: its tiles are
     // renumbered by every relayout, so an index would not survive a resize.
     last_space_click_time: std::time::Instant,
@@ -674,7 +706,6 @@ impl FilesystemApp {
 
         // Clear all widgets' hierarchy links
         self.paginator.clear_children(&mut self.ui_context); self.paginator.set_parent(None, &mut self.ui_context);
-        self.view_dropdown.clear_children(&mut self.ui_context); self.view_dropdown.set_parent(None, &mut self.ui_context);
 
 
         self.browse.save_name_box.clear_children(&mut self.ui_context); self.browse.save_name_box.set_parent(None, &mut self.ui_context);
@@ -711,8 +742,6 @@ impl FilesystemApp {
                     self.ui_context.register_widget((*self_ptr).paginator.base().id(), (*self_ptr).paginator.as_ptr_mut());
                     (*self_ptr).paginator.set_parent(None, &mut self.ui_context);
                 }
-                self.ui_context.register_widget((*self_ptr).view_dropdown.base().id(), (*self_ptr).view_dropdown.as_ptr_mut());
-                (*self_ptr).view_dropdown.set_parent(None, &mut self.ui_context);
             }
         }
 
@@ -757,10 +786,6 @@ impl FilesystemApp {
             let self_ptr = self as *mut Self;
             unsafe {
                 let mut plain_pc = pages::PageContent::new();
-                // NOT the view dropdown: every page's `view()` already renders
-                // it, so a copy here was a second draw of the same widget — at
-                // the previous frame's rect, and compositing its label's
-                // antialiased edges twice into a faux-bold.
                 // The dissolved splitter's paint: its divider quad, then the preview
                 // pane (the only pane content the pages don't render themselves). The
                 // left pane's container copy is gone — the legacy aggregate painted it
@@ -800,10 +825,6 @@ impl FilesystemApp {
                 window_pc.rects.extend(plain);
                 window_pc.rects.extend(rounded);
                 window_pc.absorb(plain_pc);
-
-                // The view dropdown's flush inset plate is carved below, once
-                // the pages have laid the dropdown out — carving it here would
-                // read the previous frame's rect (`pages::dropdown_relief`).
             }
         }
 
@@ -812,34 +833,22 @@ impl FilesystemApp {
         match self.current_page {
             Page::Browse => {
                 let (bx, by, bw, bh) = self.browse_split.left_rect();
-                let browse_pc = pages::browse::view(&mut self.browse, &mut self.view_dropdown, bx, by, bw, bh, self.select_mode, &mut self.ui_context);
+                let browse_pc = pages::browse::view(&mut self.browse, bx, by, bw, bh, self.select_mode, &mut self.ui_context);
 
                 pc.absorb(browse_pc);
             }
             Page::Network => {
                 let (nx, ny, nw, nh) = self.network_split.left_rect();
-                let network_pc = pages::network::view(&mut self.network, &self.browse, &mut self.view_dropdown, nx, ny, nw, nh, &mut self.ui_context);
+                let network_pc = pages::network::view(&mut self.network, &self.browse, nx, ny, nw, nh, &mut self.ui_context);
 
                 pc.absorb(network_pc);
             }
             Page::Space => {
                 let (sx, sy, sw, sh) = self.space_split.left_rect();
-                let space_pc = pages::space::view(&mut self.space, &self.browse, &mut self.view_dropdown, sx, sy, sw, sh, &mut self.ui_context);
+                let space_pc = pages::space::view(&mut self.space, &self.browse, sx, sy, sw, sh, &mut self.ui_context);
 
                 pc.absorb(space_pc);
             }
-        }
-
-        // The view dropdown's flush inset plate (control_relief) lives in its
-        // modern paint(); the flat view loses it, so carve it here — from the
-        // rect the page above just laid the dropdown out at, NOT the one it
-        // held when this method started.
-        {
-            let (dx, dy, dw, dh) = self.view_dropdown.rect();
-            pages::dropdown_relief(
-                &mut window_pc,
-                cce_ui::scene::layout::Rect { x: dx, y: dy, width: dw, height: dh },
-            );
         }
 
         // Draw bottom selection bar if select_mode is enabled. It lives below the
@@ -1330,7 +1339,7 @@ impl Application for FilesystemApp {
     }
 
     // The engine ticks the exposed context each loop — this is what drives the
-    // dropdown expand/contract animation frames.
+    // registered widgets' animation frames.
     fn ui_context_mut(&mut self) -> Option<&mut cce_ui::context::UiContext> {
         Some(&mut self.ui_context)
     }
@@ -1418,14 +1427,6 @@ impl Application for FilesystemApp {
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
         let paginator = cce_ui::widget::Paginator::new(pages_names);
-        // These name the visualization rather than the page, so they are not
-        // Page::label(). Order MUST track Page::ALL — the selected index is
-        // indexed straight into it when the dropdown changes.
-        let view_dropdown = cce_ui::widget::Dropdown::new(
-            vec!["List".to_string(), "Graph".to_string(), "Space".to_string()],
-            0,
-        ).with_font_family(&cce_ui::layout::list_font_parsed().0);
-
         let fs_service = services::fs::FsService::new(sender.clone());
         let initial_w = if select_mode { 900 } else { 1200 };
         let initial_h = if select_mode { 500 } else { 720 };
@@ -1439,6 +1440,7 @@ impl Application for FilesystemApp {
             preview_dock: Default::default(),
             preview_prior_fracs: None,
             plate_menu_actions: Vec::new(),
+            breadcrumb_menu: None,
             select_mode,
             select_directory,
             save_mode,
@@ -1455,7 +1457,6 @@ impl Application for FilesystemApp {
             cursor_x: 0.0,
             cursor_y: 0.0,
             paginator,
-            view_dropdown,
             just_initialized: true,
             ui_context: cce_ui::context::UiContext::new(),
             watcher: None,
@@ -1535,7 +1536,6 @@ impl Application for FilesystemApp {
                 self.current_page = page;
                 let page_idx = Page::ALL.iter().position(|&p| p == page).unwrap_or(0);
                 self.paginator.set_selected_page(page_idx);
-                self.view_dropdown.selected = page_idx;
                 // Switching to Space is what triggers the first scan — it is
                 // far too expensive to run for a page nobody is looking at.
                 self.ensure_space_scan();
@@ -1737,9 +1737,8 @@ impl Application for FilesystemApp {
 
     fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
         // Pump the widget tick walk (the cce-data-editor pattern): animating
-        // widgets — the view dropdown's expand/contract menu — register as
-        // tick receivers and report changed until their transition lands;
-        // without this the close animation freezes at fully open.
+        // widgets register as tick receivers and report changed until their
+        // transition lands; without this an animation freezes mid-way.
         if self.ui_context.tick(dt) {
             *needs_rebuild = true;
             self.needs_rebuild = true;
@@ -2047,13 +2046,6 @@ impl Application for FilesystemApp {
             }
         }
 
-        {
-            let root = self.view_dropdown.id();
-            if self.ui_context.propagate_event(&mv, root) {
-                changed = true;
-            }
-        }
-
         if self.current_page == Page::Browse {
             if self.select_mode {
                 let root = self.browse.save_name_box.id();
@@ -2157,6 +2149,37 @@ impl Application for FilesystemApp {
             *needs_rebuild = true;
             self.needs_rebuild = true;
             return None;
+        }
+
+        // The breadcrumb's menu rows run here too, ahead of the toolkit's
+        // dispatch — it would run Copy Path but has no notion of the view
+        // rows. On the press as well as the release: the toolkit runs a row
+        // on the PRESS when one reaches it, so whichever arrives first wins,
+        // and the hide it does leaves nothing for the other.
+        if button == MouseButton::Left {
+            use cce_ui::widget::context_menu as cm;
+            let live = self.breadcrumb_menu.as_ref().is_some_and(|m| cm::is_visible() && m.generation == cm::generation());
+            if !live {
+                self.breadcrumb_menu = None;
+            } else if cm::hit_test(pos.x as f32, pos.y as f32) {
+                let picked = cm::row_at(pos.x as f32, pos.y as f32)
+                    .and_then(|row| self.breadcrumb_menu.as_ref()?.rows.get(row).cloned().flatten());
+                // A press on the header or the separator leaves the menu up.
+                if let Some(row) = picked {
+                    cm::hide();
+                    self.breadcrumb_menu = None;
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return match row {
+                        BreadcrumbRow::CopyPath(path) => {
+                            cce_ui::widget::clipboard::copy_to_clipboard(&path);
+                            None
+                        }
+                        BreadcrumbRow::View(page) => Some(Message::SwitchPage(page)),
+                    };
+                }
+                return None;
+            }
         }
 
         // A left RELEASE on the preview pane's corner control opens its menu
@@ -2291,9 +2314,20 @@ impl Application for FilesystemApp {
                 let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
                 let root = breadcrumb.id();
                 // The breadcrumb opens the toolkit's shared context menu itself
-                // (open_context_menu → segment header + Copy Path); the app just
-                // routes the event and redraws — no app-side menu duplicate.
+                // (open_context_menu → segment header + Copy Path), recording
+                // the segment pressed. The app then shows that menu again,
+                // where it stands and under the same header, with the view
+                // switch added: the toolkit builds a breadcrumb's rows by type
+                // name and takes none from the app.
                 if self.ui_context.propagate_event(&ev, root) {
+                    use cce_ui::widget::context_menu as cm;
+                    let seg = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
+                    let (labels, actions) = breadcrumb_menu_rows(breadcrumb.path_to_seg(seg), self.current_page);
+                    let header = cm::options().into_iter().next().unwrap_or_default();
+                    let options: Vec<String> = std::iter::once(header).chain(labels).collect();
+                    let rows = std::iter::once(None).chain(actions).collect();
+                    cm::show(cm::x(), cm::y(), options, 1, root);
+                    self.breadcrumb_menu = Some(BreadcrumbMenu { generation: cm::generation(), rows });
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                     return None;
@@ -2400,22 +2434,6 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if { let root = self.view_dropdown.id(); self.ui_context.propagate_event(&ev, root) } {
-            *needs_rebuild = true;
-            self.needs_rebuild = true;
-            if self.view_dropdown.take_change() {
-                // Indexed off Page::ALL rather than hand-mapped: the old
-                // `== 0 { Browse } else { Network }` silently sent every
-                // entry past the first to Network.
-                let new_page = Page::ALL
-                    .get(self.view_dropdown.selected)
-                    .copied()
-                    .unwrap_or(Page::Browse);
-                return Some(Message::SwitchPage(new_page));
-            }
-            return None;
-        }
-
         // The dissolved splitter's divider: a left press grabs it (stealing keyboard
         // focus like the legacy ctx.set_focused_ptr / release's clear_focus pair did),
         // a release ends the drag. A collapsed preview owns its column width;
@@ -2444,7 +2462,7 @@ impl Application for FilesystemApp {
         // plate-dock control above: the routed-widget path consumes left
         // PRESSES before this hook, so only releases reliably arrive here.
         // Every overlay above the page (plate-dock menu, context menu, dialog,
-        // dropdown, divider grab) has already returned, so a release reaching
+        // divider grab) has already returned, so a release reaching
         // here is on page content: move the accent ring to the well it landed
         // in, then let the release do its normal work. Releases outside any
         // well (toolbar, plate) change nothing.
@@ -2785,28 +2803,6 @@ impl Application for FilesystemApp {
             }
         }
 
-        // An open view dropdown takes the keyboard — Escape closes it, arrows
-        // move the hover, Enter selects — routed to the widget exactly like
-        // its mouse events are (see handle_mouse_input). Gated on `open`:
-        // this app routes keys per feature rather than to a whole tree, and
-        // the dropdown was simply never on the list, which left its own
-        // Escape handling unreachable.
-        if self.view_dropdown.open {
-            let kev = cce_ui::widget::Event::KeyInput(event.clone());
-            if { let root = self.view_dropdown.id(); self.ui_context.propagate_event(&kev, root) } {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                if self.view_dropdown.take_change() {
-                    let new_page = Page::ALL
-                        .get(self.view_dropdown.selected)
-                        .copied()
-                        .unwrap_or(Page::Browse);
-                    return Some(Message::SwitchPage(new_page));
-                }
-                return None;
-            }
-        }
-
         // The dissolved List's search keys, app-side: the open shortcut shows the strip
         // and focuses the box; the close shortcut hides it and clears the filter (the
         // legacy List set just_changed after clearing, which surfaced as an empty
@@ -3018,5 +3014,22 @@ mod tests {
         let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[&left]).unwrap();
         assert_eq!(b[0], 80.0);
         assert_eq!(b[2], WIN[2]);
+    }
+
+    #[test]
+    fn the_breadcrumb_menu_offers_the_other_views() {
+        let (labels, rows) = breadcrumb_menu_rows("/home/me".to_string(), Page::Network);
+        assert_eq!(labels, ["Copy Path", "-", "List", "Space"]);
+        assert_eq!(rows, [
+            Some(BreadcrumbRow::CopyPath("/home/me".to_string())),
+            None,
+            Some(BreadcrumbRow::View(Page::Browse)),
+            Some(BreadcrumbRow::View(Page::Space)),
+        ]);
+        for page in Page::ALL {
+            let (labels, rows) = breadcrumb_menu_rows(String::new(), page);
+            assert_eq!(labels.len(), rows.len(), "a row for every label");
+            assert!(!rows.contains(&Some(BreadcrumbRow::View(page))), "{page:?} offers itself");
+        }
     }
 }

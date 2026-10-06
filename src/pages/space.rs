@@ -459,7 +459,6 @@ fn place(node: &TreeNode, path: &Path, rect: (f32, f32, f32, f32), depth: u32, o
 pub fn view(
     state: &mut SpaceState,
     browse: &BrowseState,
-    view_dropdown: &mut Adapted<cce_ui::widget::Dropdown>,
     cx: f32,
     cy: f32,
     cw: f32,
@@ -468,19 +467,16 @@ pub fn view(
 ) -> PageContent {
     let mut pc = PageContent::new();
 
-    // Breadcrumb + view dropdown, mirroring the Network page's header so the
-    // two views line up when you switch between them.
-    let dropdown_w = 120.0;
+    // The breadcrumb, mirroring the Network page's header so the two views
+    // line up when you switch between them.
     // TODO(style): the 4/6/16 offsets are a leftover inset from the pane rect
-    // that browse.rs has already dropped; the gap to the dropdown is the rung.
-    let gap = cce_ui::layout::root_plate_gap();
-    let breadcrumb_w = cw - 16.0 - dropdown_w - gap;
+    // that browse.rs has already dropped.
+    let breadcrumb_w = cw - 16.0;
     cce_ui::layout::render_widget(&mut pc, &mut state.breadcrumb, cx + 4.0, cy + 6.0, breadcrumb_w, 24.0, ctx);
     {
         let rect = cce_ui::scene::layout::Rect { x: cx + 4.0, y: cy + 6.0, width: breadcrumb_w, height: 24.0 };
         crate::pages::breadcrumb_relief(&mut pc, &state.breadcrumb, rect);
     }
-    cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + gap, cy + 6.0, dropdown_w, 24.0, ctx);
 
     let mut segments = Vec::new();
     for component in browse.current_dir.components() {

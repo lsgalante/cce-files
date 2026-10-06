@@ -7,6 +7,12 @@ pub struct NetworkState {
     pub graph: Adapted<Graph>,
     pub breadcrumb: Adapted<Breadcrumb>,
     pub last_dir: PathBuf,
+    /// The graph pane `(x, y, w, h)` the nodes were last laid out for: a
+    /// pane of another size is laid out again (`view`), so the columns fit
+    /// it. Panning moves the lattice's origin and is kept until then.
+    pub laid_out_for: (f32, f32, f32, f32),
+    /// The configured pitch at 100% — the floor a column's width starts from.
+    base_pitch: (f32, f32),
     /// The cce-icons glyph each graph node wears, by node index (`folder` /
     /// `file`) — drawn over the node body by `view`, since a `GraphNode`
     /// carries a name and no glyph.
@@ -15,14 +21,19 @@ pub struct NetworkState {
 
 impl Default for NetworkState {
     fn default() -> Self {
+        // The configured lattice and node body (`style.surface.graph`), as
+        // the designer's network uses them: a node is CENTRED on a lattice
+        // crossing and its name hangs off its right side. The pitch across is
+        // widened per directory to hold the names (`layout`); the origin is
+        // set from the pane. Until 2026-10-06 this set the retired cell model
+        // (140 x 70 cells, 35 px gaps, origin 60, 60), which under the
+        // lattice put column 0 left of the pane, ran seven columns past its
+        // right edge and left names 35 px to sit in.
         let mut graph = Graph::new();
-        // Configure grid settings
         graph.set_show_network_grid(true);
-        graph.set_grid_sizes(140.0, 70.0);
-        graph.set_skipped_sizes(35.0, 35.0);
-        graph.set_grid_origin(60.0, 60.0);
         graph.set_grid_snap_enabled(true);
         graph.set_network_opacity(0.95);
+        let base_pitch = graph.inner().grid_pitch();
 
         let mut breadcrumb = Breadcrumb::new();
         breadcrumb.set_network_opacity(0.95);
@@ -32,12 +43,80 @@ impl Default for NetworkState {
             breadcrumb,
             last_dir: PathBuf::new(),
             node_glyphs: Vec::new(),
+            laid_out_for: (0.0, 0.0, 0.0, 0.0),
+            base_pitch,
         }
     }
 }
 
+/// Margin between the pane's edge and the nearest node or name.
+const MARGIN: f32 = 16.0;
+/// The most a column gives a name, at 100%: a longer one is cut with an
+/// ellipsis (`fit_name`), so one long file name cannot widen every column.
+const NAME_MAX: f32 = 180.0;
+
+/// A node name's font size and its gap from the body, for a body `node_w`
+/// wide — `Graph::node_labels`' rule, which this has to agree with.
+fn label_metrics(node_w: f32) -> (f32, f32) {
+    let k = node_w / 80.0;
+    ((14.0 * k).clamp(6.0, 48.0), 8.0 * k)
+}
+
+/// `name`, cut with an ellipsis to `max` px at `font_size`.
+fn fit_name(name: &str, font_size: f32, max: f32) -> String {
+    use cce_ui::widget::display::TextLabel;
+    if TextLabel::estimate_width(name, font_size) <= max {
+        return name.to_string();
+    }
+    let mut out = String::new();
+    for c in name.chars() {
+        let next = format!("{out}{c}\u{2026}");
+        if TextLabel::estimate_width(&next, font_size) > max {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('\u{2026}');
+    out
+}
+
+/// Where a directory's nodes go in a pane `(x, y, w, h)`: the pitch across
+/// (a body, its name's gap and the widest name the column holds, or the
+/// configured pitch if that is wider), how many columns fit, and the lattice
+/// origin that puts column 0 and row 0 a margin inside the pane — a node is
+/// centred on its crossing.
+fn layout(pane: (f32, f32, f32, f32), node: (f32, f32), base_pitch: (f32, f32), names: &[String]) -> ((f32, f32), usize, (f32, f32)) {
+    use cce_ui::widget::display::TextLabel;
+    let (px, py, pw, _) = pane;
+    let (nw, nh) = node;
+    let (font, gap) = label_metrics(nw);
+    let widest = names.iter().map(|n| TextLabel::estimate_width(n, font)).fold(0.0f32, f32::max);
+    let pitch_x = (nw + gap + widest.min(NAME_MAX) + MARGIN).max(base_pitch.0);
+    let cols = (((pw - 2.0 * MARGIN) - (nw + gap + widest.min(NAME_MAX))) / pitch_x).floor().max(0.0) as usize + 1;
+    let origin = (px + MARGIN + nw * 0.5, py + MARGIN + nh * 0.5);
+    ((pitch_x, base_pitch.1), cols, origin)
+}
+
 impl NetworkState {
-    pub fn populate_graph(&mut self, current_dir: &Path, entries: &[DirEntry]) {
+    /// Lay the directory out for the pane `pane` and fill the graph — see
+    /// [`layout`]. The parent and the directory stand over the middle column,
+    /// its entries in rows below them.
+    pub fn lay_out(&mut self, pane: (f32, f32, f32, f32), current_dir: &Path, entries: &[DirEntry]) {
+        let node = self.graph.inner().node_size();
+        let (font, _) = label_metrics(node.0);
+        let names: Vec<String> = entries.iter().map(|e| fit_name(&e.name, font, NAME_MAX)).collect();
+        let ((pitch_x, pitch_y), cols, origin) = layout(pane, node, self.base_pitch, &names);
+        self.graph.set_grid_pitch(pitch_x, pitch_y);
+        self.graph.set_grid_origin(origin.0, origin.1);
+        self.populate_graph(current_dir, entries, cols, &names);
+        self.laid_out_for = pane;
+    }
+
+    /// Fill the graph: the parent at row 0 and the directory at row 1 over
+    /// column `cols / 2`, then `entries` (shown as `names`) `cols` to a row.
+    pub fn populate_graph(&mut self, current_dir: &Path, entries: &[DirEntry], cols: usize, names: &[String]) {
+        let cols = cols.max(1);
+        let mid = ((cols - 1) / 2) as f32;
         let mut nodes = Vec::new();
         let mut glyphs = Vec::new();
 
@@ -52,7 +131,7 @@ impl NetworkState {
             nodes.push(GraphNode {
                 id: String::new(),
                 name: name.clone(),
-                position: (3.0, 0.0),
+                position: (mid, 0.0),
                 parameters: Vec::new(),
                 geom_visible: true,
                 node_type: String::new(),
@@ -80,7 +159,7 @@ impl NetworkState {
         nodes.push(GraphNode {
             id: String::new(),
             name: current_node_name.clone(),
-            position: (3.0, 1.0),
+            position: (mid, 1.0),
             parameters: current_params,
             geom_visible: true,
             node_type: String::new(),
@@ -90,12 +169,12 @@ impl NetworkState {
 
         // 3. Children nodes
         for (idx, entry) in entries.iter().enumerate() {
-            let node_name = entry.name.clone();
+            let node_name = names.get(idx).cloned().unwrap_or_else(|| entry.name.clone());
             glyphs.push(if entry.is_dir { "folder" } else { "file" });
 
-            // Spreading items in 7 columns starting at row 2
-            let col = (idx % 7) as f32;
-            let row = 2.0 + (idx / 7) as f32;
+            // `cols` to a row, from row 2.
+            let col = (idx % cols) as f32;
+            let row = 2.0 + (idx / cols) as f32;
 
             nodes.push(GraphNode {
                 id: String::new(),
@@ -131,9 +210,16 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut 
     }
     cce_ui::layout::render_widget(&mut pc, view_dropdown, cx + 4.0 + breadcrumb_w + gap, cy + 6.0, dropdown_w, 24.0, ctx);
 
+    // The pane the graph is laid out in, under the breadcrumb.
+    let pane = (cx, cy + 28.0, cw, (ch - 28.0).max(0.0));
+    let moved = (pane.0 - state.laid_out_for.0).abs() > 0.5
+        || (pane.1 - state.laid_out_for.1).abs() > 0.5
+        || (pane.2 - state.laid_out_for.2).abs() > 0.5
+        || (pane.3 - state.laid_out_for.3).abs() > 0.5;
+
     // Check if directory changed, or if last_dir is empty, and repopulate
     if state.last_dir != browse.current_dir || state.graph.get_nodes().is_empty() {
-        state.populate_graph(&browse.current_dir, &browse.entries);
+        state.lay_out(pane, &browse.current_dir, &browse.entries);
 
         // Update breadcrumb path
         let mut segments = Vec::new();
@@ -154,6 +240,12 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut 
             state.graph.set_selected_node(None);
         }
     } else {
+        // A pane of another size: the same nodes, laid out to fit it.
+        if moved {
+            let selected = state.graph.selected_node();
+            state.lay_out(pane, &browse.current_dir, &browse.entries);
+            state.graph.set_selected_node(selected);
+        }
         // Sync graph selection with browse selection when they are in sync
         let has_parent = browse.current_dir.parent().is_some();
         let offset = if has_parent { 2 } else { 1 };
@@ -174,8 +266,12 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, view_dropdown: &mut 
         }
     }
 
-    // Render the Graph widget into PageContent, shifted down by 28.0 to leave room for the breadcrumb
-    cce_ui::layout::render_widget(&mut pc, &mut state.graph, cx, cy + 28.0, cw, ch - 28.0, ctx);
+    // Render the Graph widget into PageContent, shifted down by 28.0 to leave
+    // room for the breadcrumb — cut to its pane, since a graph panned or
+    // zoomed past its edge would otherwise draw over the preview beside it.
+    let mut graph_pc = PageContent::new();
+    cce_ui::layout::render_widget(&mut graph_pc, &mut state.graph, cx, cy + 28.0, cw, ch - 28.0, ctx);
+    pc.absorb(graph_pc.clipped_to([cx, cy + 28.0, cx + cw, cy + ch]));
 
     // Each node's glyph on the left of its body, mirroring the geometry
     // toggle the graph draws on the right (`Graph::toggle_rect`): the same
@@ -222,7 +318,7 @@ mod tests {
             },
         ];
 
-        state.populate_graph(current_dir, &entries);
+        state.lay_out((0.0, 0.0, 800.0, 600.0), current_dir, &entries);
         let nodes = state.graph.get_nodes();
 
         // 1 parent + 1 current + 2 children = 4 nodes
@@ -253,6 +349,41 @@ mod tests {
         assert_eq!(nodes[3].parameters[0].1, "project");
     }
 
+    /// The page fits its pane: column 0 starts a margin inside the left
+    /// edge, the rightmost column's body AND its name end inside the right
+    /// edge, a name never reaches the next column's body, and a name too long
+    /// for a column is cut with an ellipsis. Under the retired cell model
+    /// (cce-ui's lattice centring nodes on crossings) column 0 started left
+    /// of the pane, seven columns ran past its right edge and every name lay
+    /// across its neighbour.
+    #[test]
+    fn the_graph_fits_its_pane_and_its_names_fit_their_columns() {
+        use cce_ui::widget::display::TextLabel;
+        let mut state = NetworkState::default();
+        let names = ["Adwaita", "AdwaitaMono-BoldItalic.ttf", "a-really-quite-extraordinarily-long-font-family-name.otf", "x", "gnu-free", "noto-cjk", "liberation", "spleen", "xscreensaver"];
+        let entries: Vec<DirEntry> = names
+            .iter()
+            .map(|n| DirEntry { name: n.to_string(), path: PathBuf::from(format!("/f/{n}")), is_dir: false, size: 1, permissions: 0o644, modified: String::new(), origin: None })
+            .collect();
+        let pane = (20.0, 60.0, 600.0, 640.0);
+        state.lay_out(pane, Path::new("/usr/share/fonts"), &entries);
+        let g = state.graph.inner();
+        let (nw, _) = g.node_size();
+        let (font, gap) = label_metrics(nw);
+        let (pitch_x, _) = g.grid_pitch();
+        let nodes = state.graph.get_nodes();
+        for (i, node) in nodes.iter().enumerate() {
+            let (x, _, w, _) = g.node_rect(i).unwrap();
+            let label_w = TextLabel::estimate_width(&node.name, font);
+            assert!(x >= pane.0 + MARGIN - 0.01, "{:?} starts left of the pane: {x}", node.name);
+            assert!(x + w + gap + label_w <= pane.0 + pane.2 + 0.01, "{:?} runs past the pane", node.name);
+            assert!(w + gap + label_w < pitch_x, "{:?}'s name reaches the next column", node.name);
+            assert!(label_w <= NAME_MAX + 0.01, "{:?} is not cut to a column", node.name);
+        }
+        assert!(nodes.iter().any(|n| n.name.ends_with('\u{2026}')), "the long name is cut with an ellipsis");
+        assert!(nodes.iter().skip(2).any(|n| n.position.0 > 0.0), "more than one column fits 600 px");
+    }
+
     #[test]
     fn test_populate_graph_root_no_parent() {
         let mut state = NetworkState::default();
@@ -269,7 +400,7 @@ mod tests {
             },
         ];
 
-        state.populate_graph(current_dir, &entries);
+        state.lay_out((0.0, 0.0, 800.0, 600.0), current_dir, &entries);
         let nodes = state.graph.get_nodes();
 
         // No parent, so 1 current + 1 child = 2 nodes

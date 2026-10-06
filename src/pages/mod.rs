@@ -215,6 +215,38 @@ impl PageContent {
         self.plates.extend(plates);
     }
 
+    /// This content cut to `[l, t, r, b]`: fills intersected with it (a
+    /// fill wholly outside is dropped), and the bounds of every label and
+    /// glyph narrowed to it. For a widget that paints past the rect it was
+    /// given — the graph, panned — since a flat host has no clip stack.
+    /// Parts with no clip of their own (buttons, reliefs, grooves, images,
+    /// plates) pass through as they are.
+    pub fn clipped_to(mut self, clip: [f32; 4]) -> Self {
+        let [l, t, r, b] = clip;
+        self.rects.retain_mut(|(_, x, y, w, h, _, _)| {
+            let (x0, y0) = (x.max(l), y.max(t));
+            let (x1, y1) = ((*x + *w).min(r), (*y + *h).min(b));
+            if x1 <= x0 || y1 <= y0 {
+                return false;
+            }
+            (*x, *y, *w, *h) = (x0, y0, x1 - x0, y1 - y0);
+            true
+        });
+        let narrow = |bounds: Option<[f32; 4]>| -> Option<[f32; 4]> {
+            Some(match bounds {
+                Some([bl, bt, br, bb]) => [bl.max(l), bt.max(t), br.min(r), bb.min(b)],
+                None => clip,
+            })
+        };
+        for t in &mut self.texts {
+            t.6 = narrow(t.6);
+        }
+        for i in &mut self.icons {
+            i.6 = narrow(i.6);
+        }
+        self
+    }
+
     /// A GPU-textured quad (id from `cce_ui::vk::upload_rgba`).
     pub fn image(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32, alpha: f32) {
         self.images.push((id, x, y, w, h, alpha));

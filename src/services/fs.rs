@@ -606,15 +606,35 @@ pub fn save_last_dir_in(config_dir: &Path, dir: &Path) {
     let _ = fs::write(path, dir.to_string_lossy().as_bytes());
 }
 
+/// Types decided by extension alone, ahead of `xdg-mime`. On this machine
+/// `xdg-mime query filetype` falls back to `file --mime-type`, which sniffs
+/// content: .gltf reads as application/json, .obj as text/plain, binary .stl
+/// and .ply as application/octet-stream, so Open never reached cce-model.
+/// shared-mime-info registers no PLY type; model/x-ply is the one
+/// cce-model.desktop claims. `ext` must already be lowercase.
+fn mime_for_extension(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "kdl" => "application/x-kdl",
+        "stl" => "model/stl",
+        "obj" => "model/obj",
+        "gltf" => "model/gltf+json",
+        "glb" => "model/gltf-binary",
+        "ply" => "model/x-ply",
+        _ => return None,
+    })
+}
+
 pub fn get_mime_type(path: &Path) -> Option<String> {
     // Matches `browse::is_project_dir`: a designer project is a dir holding a state.json.
     if path.is_dir() && path.join("state.json").exists() {
         return Some("application/x-cce-project".to_string());
     }
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        if ext.eq_ignore_ascii_case("kdl") {
-            return Some("application/x-kdl".to_string());
-        }
+    if let Some(mime) = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .and_then(|ext| mime_for_extension(&ext.to_ascii_lowercase()))
+    {
+        return Some(mime.to_string());
     }
     let output = std::process::Command::new("xdg-mime")
         .args(&["query", "filetype"])
@@ -673,6 +693,24 @@ pub fn load_kdl_associations_in(config_dir: &Path) -> Option<std::collections::H
     }
 }
 
+/// Where `.desktop` files live, in XDG precedence order: `$XDG_DATA_HOME`
+/// (else `~/.local/share`), then `$XDG_DATA_DIRS` (else /usr/local/share and
+/// /usr/share), each with `applications` appended. It has to match the dirs
+/// `xdg-mime query default` searched, or a handler it names is not found
+/// here. Unset or relative values are skipped, per the spec.
+fn applications_dirs() -> Vec<PathBuf> {
+    let var = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty());
+    let data_home = var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| Some(PathBuf::from(var("HOME")?).join(".local/share")));
+    let data_dirs: Vec<PathBuf> = var("XDG_DATA_DIRS")
+        .map(|v| std::env::split_paths(&v).filter(|p| p.is_absolute()).collect())
+        .filter(|dirs: &Vec<PathBuf>| !dirs.is_empty())
+        .unwrap_or_else(|| vec!["/usr/local/share".into(), "/usr/share".into()]);
+    data_home.into_iter().chain(data_dirs).map(|d| d.join("applications")).collect()
+}
+
 pub fn get_default_application(mime: &str) -> Option<(String, String)> {
     // 1. Check KDL configuration file override
     if let Some(associations) = load_kdl_associations() {
@@ -694,18 +732,8 @@ pub fn get_default_application(mime: &str) -> Option<(String, String)> {
         return None;
     }
 
-    // Search for .desktop file in common directories. Skip the user-local path
-    // entirely when HOME is unset rather than emitting a bogus relative path.
-    let mut search_paths = vec![
-        PathBuf::from("/usr/share/applications"),
-        PathBuf::from("/usr/local/share/applications"),
-    ];
-    if let Ok(home) = std::env::var("HOME") {
-        search_paths.insert(0, PathBuf::from(home).join(".local/share/applications"));
-    }
-
     let mut desktop_path = None;
-    for dir in search_paths {
+    for dir in applications_dirs() {
         let path = dir.join(&desktop_filename);
         if path.exists() {
             desktop_path = Some(path);
@@ -857,6 +885,39 @@ mod tests {
             assoc.and_then(|m| m.get("text/plain").cloned()).as_deref(),
             Some("cce-text-editor")
         );
+    }
+
+    #[test]
+    fn test_model_mime_by_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "cce_test_model_mime_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        // Content that content-sniffing reads as the wrong type, so a pass
+        // shows the extension decided it.
+        let cases: [(&str, &[u8], &str); 7] = [
+            ("part.stl", &[0u8; 84], "model/stl"),
+            ("PART.STL", &[0u8; 84], "model/stl"),
+            ("mesh.obj", b"v 0 0 0\n", "model/obj"),
+            ("scene.gltf", b"{\"asset\":{\"version\":\"2.0\"}}", "model/gltf+json"),
+            ("scene.Glb", b"glTF\x02\0\0\0", "model/gltf-binary"),
+            ("scan.ply", b"ply\nformat binary_little_endian 1.0\n\0\xff", "model/x-ply"),
+            ("config.KDL", b"node 1\n", "application/x-kdl"),
+        ];
+        let got: Vec<_> = cases
+            .iter()
+            .map(|(name, bytes, _)| {
+                let path = dir.join(name);
+                fs::write(&path, bytes).unwrap();
+                get_mime_type(&path)
+            })
+            .collect();
+        let _ = fs::remove_dir_all(&dir);
+
+        for ((name, _, want), got) in cases.iter().zip(got) {
+            assert_eq!(got.as_deref(), Some(*want), "{name}");
+        }
     }
 }
 

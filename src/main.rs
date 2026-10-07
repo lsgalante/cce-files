@@ -850,7 +850,7 @@ impl FilesystemApp {
             let self_ptr = self as *mut Self;
             unsafe {
                 if has_sidebar {
-                    self.ui_context.register_widget((*self_ptr).paginator.base().id(), (*self_ptr).paginator.as_ptr_mut());
+                    self.ui_context.register_host(&mut self.paginator);
                     (*self_ptr).paginator.set_parent(None, &mut self.ui_context);
                 }
             }
@@ -876,7 +876,7 @@ impl FilesystemApp {
         }
 
         if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
-            self.ui_context.register_widget(textbox.base().id(), textbox.as_ptr_mut());
+            self.ui_context.register_host(textbox);
             textbox.set_parent(None, &mut self.ui_context);
         }
 

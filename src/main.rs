@@ -325,24 +325,15 @@ fn breadcrumb_menu_rows(path: String, current: Page) -> (Vec<String>, Vec<Option
     (labels, rows)
 }
 
-/// The Space map's context menu for `tile`, header first. A directory opens
-/// by re-rooting the map, as a double-click does; the root tile is the map's
-/// own directory, so it offers nothing to open. A "smaller items" block
-/// carries its directory's path, so its rows name the folder they act on.
-fn space_tile_menu(tile: &pages::space::Tile) -> Vec<(String, Option<Message>)> {
-    let path = tile.path.clone();
+/// The context menu for one path — a Space tile or a graph node — header
+/// first. A directory opens by navigating to it, as a double-click does;
+/// `openable` false leaves Open out (the directory already showing).
+fn path_menu(name: &str, path: std::path::PathBuf, is_dir: bool, openable: bool) -> Vec<(String, Option<Message>)> {
+    let kind = if is_dir { "Directory" } else { "File" };
+    let mut options = vec![(format!("[{kind}] {name}"), None)];
     let copy = Some(Message::CopyPath(path.to_string_lossy().into_owned()));
-    if tile.rest > 0 {
-        return vec![
-            (tile.name.clone(), None),
-            ("Open Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(path)))),
-            ("Copy Folder Path".to_string(), copy),
-        ];
-    }
-    let kind = if tile.is_dir { "Directory" } else { "File" };
-    let mut options = vec![(format!("[{kind}] {}", tile.name), None)];
-    if tile.is_dir {
-        if tile.depth > 0 {
+    if is_dir {
+        if openable {
             options.push(("Open".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(path)))));
         }
     } else {
@@ -351,6 +342,38 @@ fn space_tile_menu(tile: &pages::space::Tile) -> Vec<(String, Option<Message>)> 
     }
     options.push(("Copy Path".to_string(), copy));
     options
+}
+
+/// The Space map's context menu for `tile`. The root tile is the map's own
+/// directory, so it offers nothing to open. A "smaller items" block carries
+/// its directory's path, so its rows name the folder they act on.
+fn space_tile_menu(tile: &pages::space::Tile) -> Vec<(String, Option<Message>)> {
+    if tile.rest > 0 {
+        let path = tile.path.clone();
+        return vec![
+            (tile.name.clone(), None),
+            ("Open Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(path.clone())))),
+            ("Copy Folder Path".to_string(), Some(Message::CopyPath(path.to_string_lossy().into_owned()))),
+        ];
+    }
+    path_menu(&tile.name, tile.path.clone(), tile.is_dir, tile.depth > 0)
+}
+
+/// The graph's context menu for node `idx`: the parent (when there is one),
+/// then the directory showing, then `entries` in order — the order
+/// `NetworkState::populate_graph` lays them in.
+fn graph_node_menu(idx: usize, current_dir: &std::path::Path, entries: &[pages::browse::DirEntry]) -> Option<Vec<(String, Option<Message>)>> {
+    let dir_name = |p: &std::path::Path| p.file_name().map_or_else(|| "/".to_string(), |n| n.to_string_lossy().into_owned());
+    let parent = current_dir.parent();
+    let offset = if parent.is_some() { 2 } else { 1 };
+    match (parent, idx) {
+        (Some(parent), 0) => Some(path_menu(&dir_name(parent), parent.to_path_buf(), true, true)),
+        _ if idx + 1 == offset => Some(path_menu(&dir_name(current_dir), current_dir.to_path_buf(), true, false)),
+        _ => {
+            let entry = entries.get(idx.checked_sub(offset)?)?;
+            Some(path_menu(&entry.name, entry.path.clone(), entry.is_dir, true))
+        }
+    }
 }
 
 /// App-owned two-pane horizontal split, replacing the dissolved `SplitBox` +
@@ -2500,6 +2523,21 @@ impl Application for FilesystemApp {
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                     return None;
+                } else if let Some(options) = (self.current_page == Page::Network)
+                    .then(|| {
+                        // Only a node inside the pane: a panned graph's nodes
+                        // run on under the breadcrumb and the preview.
+                        let (x, y, w, h) = self.network.laid_out_for;
+                        let inside = pos.x >= x && pos.x < x + w && pos.y >= y && pos.y < y + h;
+                        inside.then(|| self.network.graph.inner().node_at(pos.x, pos.y)).flatten()
+                    })
+                    .flatten()
+                    .and_then(|idx| graph_node_menu(idx, &self.browse.current_dir, &self.browse.entries))
+                {
+                    self.open_context_menu(pos.x, pos.y, options);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
                 } else if self.current_page == Page::Browse
                     && self.browse.list.hit(pos.x, pos.y)
                     && pos.y <= self.browse.list.y + self.browse.list.viewport_h
@@ -3165,5 +3203,33 @@ mod tests {
         let menu = space_tile_menu(&tile("a.txt", false, 2, 0));
         assert!(menu[0].1.is_none(), "the header does nothing");
         assert!(matches!(&menu.last().unwrap().1, Some(Message::CopyPath(p)) if p == "/root/a.txt"));
+    }
+
+    #[test]
+    fn a_graph_node_menu_follows_the_node_order() {
+        let entry = |name: &str, is_dir| pages::browse::DirEntry {
+            name: name.to_string(),
+            path: std::path::PathBuf::from("/home/me").join(name),
+            is_dir,
+            size: 0,
+            permissions: 0,
+            modified: String::new(),
+            origin: None,
+        };
+        let entries = [entry("docs", true), entry("a.txt", false)];
+        let dir = std::path::Path::new("/home/me");
+        let labels = |idx| graph_node_menu(idx, dir, &entries).map(|m| m.into_iter().map(|(l, _)| l).collect::<Vec<_>>());
+        assert_eq!(labels(0).unwrap(), ["[Directory] home", "Open", "Copy Path"]);
+        assert_eq!(labels(1).unwrap(), ["[Directory] me", "Copy Path"]);
+        assert_eq!(labels(2).unwrap(), ["[Directory] docs", "Open", "Copy Path"]);
+        assert_eq!(labels(3).unwrap(), ["[File] a.txt", "Open", "Open with...", "Copy Path"]);
+        assert!(labels(4).is_none());
+
+        let menu = graph_node_menu(3, dir, &entries).unwrap();
+        assert!(matches!(&menu.last().unwrap().1, Some(Message::CopyPath(p)) if p == "/home/me/a.txt"));
+        // At the root there is no parent node: node 0 is the root itself.
+        let root = graph_node_menu(0, std::path::Path::new("/"), &[]).unwrap();
+        assert_eq!(root[0].0, "[Directory] /");
+        assert_eq!(root.len(), 2);
     }
 }

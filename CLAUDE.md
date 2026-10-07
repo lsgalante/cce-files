@@ -64,6 +64,7 @@ Unlike the other two pages, Space needs data no other page has: the recursive si
 Two things to know when touching it:
 - Tiles are flattened **parents-before-children**, so the hit-test is `rposition` (last match = deepest tile). The same order finds the faint frame drawn round the hovered tile's top-level folder: `top_folder` takes the nearest depth-1 tile *before* it, which in a depth-first list is its ancestor.
 - Selection is held as a `PathBuf`, not an index, because a relayout renumbers every tile. Same reason `last_space_path` (not a row index) drives Space's double-click detection.
+- Right-clicking a tile opens the app's own context menu (`space_tile_menu`, routed beside the Browse row menu in `handle_mouse_input`): a header, then Open / Open with... for a file, Open for a directory (re-roots the map, as a double-click does; the root tile offers none), and Copy Path. A "smaller items" block acts on the directory it carries, so its rows say Folder.
 
 ## Domain specifics
 

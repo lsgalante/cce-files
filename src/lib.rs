@@ -19,4 +19,6 @@ pub enum Message {
     PromptSubmit,
     PromptCancel,
     CopyPath(String),
+    /// Open a file with its default handler.
+    OpenFile(std::path::PathBuf),
 }

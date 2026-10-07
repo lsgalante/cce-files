@@ -325,6 +325,34 @@ fn breadcrumb_menu_rows(path: String, current: Page) -> (Vec<String>, Vec<Option
     (labels, rows)
 }
 
+/// The Space map's context menu for `tile`, header first. A directory opens
+/// by re-rooting the map, as a double-click does; the root tile is the map's
+/// own directory, so it offers nothing to open. A "smaller items" block
+/// carries its directory's path, so its rows name the folder they act on.
+fn space_tile_menu(tile: &pages::space::Tile) -> Vec<(String, Option<Message>)> {
+    let path = tile.path.clone();
+    let copy = Some(Message::CopyPath(path.to_string_lossy().into_owned()));
+    if tile.rest > 0 {
+        return vec![
+            (tile.name.clone(), None),
+            ("Open Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(path)))),
+            ("Copy Folder Path".to_string(), copy),
+        ];
+    }
+    let kind = if tile.is_dir { "Directory" } else { "File" };
+    let mut options = vec![(format!("[{kind}] {}", tile.name), None)];
+    if tile.is_dir {
+        if tile.depth > 0 {
+            options.push(("Open".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(path)))));
+        }
+    } else {
+        options.push(("Open".to_string(), Some(Message::OpenFile(path.clone()))));
+        options.push(("Open with...".to_string(), Some(Message::PromptOpenWith(path))));
+    }
+    options.push(("Copy Path".to_string(), copy));
+    options
+}
+
 /// App-owned two-pane horizontal split, replacing the dissolved `SplitBox` +
 /// `BrowseContainer`/`NetworkContainer` shims (Phase 6y). Those existed to (a) position
 /// pane content — but the pages already lay out and render everything from the pane rect,
@@ -1802,6 +1830,9 @@ impl Application for FilesystemApp {
             Message::CopyPath(path) => {
                 cce_ui::widget::clipboard::copy_to_clipboard(&path);
             }
+            Message::OpenFile(path) => {
+                services::fs::open_file(&path);
+            }
         }
     }
 
@@ -2459,6 +2490,16 @@ impl Application for FilesystemApp {
                         self.needs_rebuild = true;
                         return None;
                     }
+                } else if let Some(tile) = (self.current_page == Page::Space)
+                    .then(|| self.space.tile_at(pos.x, pos.y))
+                    .flatten()
+                    .and_then(|idx| self.space.tiles.get(idx))
+                {
+                    let options = space_tile_menu(tile);
+                    self.open_context_menu(pos.x, pos.y, options);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
                 } else if self.current_page == Page::Browse
                     && self.browse.list.hit(pos.x, pos.y)
                     && pos.y <= self.browse.list.y + self.browse.list.viewport_h
@@ -3101,5 +3142,28 @@ mod tests {
             assert_eq!(labels.len(), rows.len(), "a row for every label");
             assert!(!rows.contains(&Some(BreadcrumbRow::View(page))), "{page:?} offers itself");
         }
+    }
+
+    #[test]
+    fn a_space_tile_menu_copies_its_path() {
+        let tile = |name: &str, is_dir, depth, rest| pages::space::Tile {
+            path: std::path::PathBuf::from("/root").join(name),
+            name: name.to_string(),
+            size: 1,
+            is_dir,
+            depth,
+            rect: (0.0, 0.0, 10.0, 10.0),
+            aggregate: None,
+            rest,
+        };
+        let labels = |t| space_tile_menu(&t).into_iter().map(|(l, _)| l).collect::<Vec<_>>();
+        assert_eq!(labels(tile("a.txt", false, 2, 0)), ["[File] a.txt", "Open", "Open with...", "Copy Path"]);
+        assert_eq!(labels(tile("sub", true, 1, 0)), ["[Directory] sub", "Open", "Copy Path"]);
+        assert_eq!(labels(tile("here", true, 0, 0)), ["[Directory] here", "Copy Path"]);
+        assert_eq!(labels(tile("3 smaller items", true, 2, 3)), ["3 smaller items", "Open Folder", "Copy Folder Path"]);
+
+        let menu = space_tile_menu(&tile("a.txt", false, 2, 0));
+        assert!(menu[0].1.is_none(), "the header does nothing");
+        assert!(matches!(&menu.last().unwrap().1, Some(Message::CopyPath(p)) if p == "/root/a.txt"));
     }
 }

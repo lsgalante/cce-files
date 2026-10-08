@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use crate::pages::PageContent;
 use cce_ui::widget::Owned;
 use cce_ui::widget::{Adapted, WidgetHost, Breadcrumb, PathController};
-use cce_ui::layout::{ColumnLayout, LayoutStrategy};
+use cce_ui::scene::arena::Arena;
+use cce_ui::scene::layout::{compute_layout, CrossAlign, LayoutBox, Length, Size, Style};
 
 // ── Data ────────────────────────────────────────────────────────────
 
@@ -221,30 +222,36 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     // The pane rect already sits root_plate_inset off the window edge — no
     // second inset here, or the list lands 16+12 from the edge while apps
     // that place content at the pane rect (cce-data-editor's tree) sit at 16.
-    let gap = cce_ui::layout::root_plate_gap();
-    let margin = 0.0;
-    let mut layout = ColumnLayout::new(gap);
-    let client_x = cx + margin;
-    let client_y = cy + margin;
-    let client_w = cw - 2.0 * margin;
-    let client_h = ch - 2.0 * margin;
-    layout.init(client_x, client_y, client_w, client_h);
-
+    // The page is a column on the root plate: the breadcrumb, the list taking what is
+    // left, and in select mode the name box under it, a root gap between each.
     let breadcrumb_h = crate::pages::breadcrumb_h();
     let textbox_h = cce_ui::layout::textbox_height();
+    let mut arena: Arena<LayoutBox> = Arena::new();
+    let column = arena.insert(LayoutBox::container(
+        Style::column().gap(cce_ui::layout::root_plate_gap()).cross_align(CrossAlign::Stretch),
+    ));
+    let fixed = |h: f32| LayoutBox::leaf(Style { height: Length::Fixed(h), ..Style::default() }, Size::new(0.0, h));
+    let crumb = arena.insert(fixed(breadcrumb_h));
+    let list = arena.insert(LayoutBox::leaf(Style::default().grow(1.0), Size::ZERO));
+    arena.append_child(column, crumb);
+    arena.append_child(column, list);
+    let name_box = select_mode.then(|| {
+        let b = arena.insert(fixed(textbox_h));
+        arena.append_child(column, b);
+        b
+    });
+    compute_layout(&mut arena, column, Size::new(cw, ch));
+    let at = |id| {
+        let r = arena.value(id).expect("laid out").rect;
+        (cx + r.x, cy + r.y, r.width, r.height)
+    };
 
-    // 1. Allocate and render the Breadcrumb, where every page puts it.
-    let (bx, by, bw, _) = layout.allocate(client_w, breadcrumb_h);
+    // 1. The Breadcrumb, where every page puts it.
+    let (bx, by, bw, _) = at(crumb);
     crate::pages::breadcrumb_header(&mut pc, &mut state.breadcrumb, bx, by, bw, ctx);
 
-    // 2. Allocate and render List (ScrollBox)
-    // The scrolling list height occupies the remaining vertical space:
-    let list_h_val = if select_mode {
-        client_h - breadcrumb_h - textbox_h - 2.0 * gap
-    } else {
-        client_h - breadcrumb_h - gap
-    };
-    let (list_x, list_y, list_w, list_h) = layout.allocate(client_w, list_h_val);
+    // 2. The list (ScrollBox).
+    let (list_x, list_y, list_w, list_h) = at(list);
 
     // Update List columns dynamically based on list width
     let in_trash = crate::services::trash::is_trash_files_dir(&state.current_dir);
@@ -385,8 +392,8 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     pc.text(&count_str, count_x, count_y, 11.0, text_dim);
 
     // 3. Allocate and render Textbox(es)
-    if select_mode {
-        let (tx, ty, tw, th) = layout.allocate(client_w, textbox_h);
+    if let Some(name_box) = name_box {
+        let (tx, ty, tw, th) = at(name_box);
         state.save_name_box.set_row_rect(tx, tw);
         cce_ui::layout::render_widget(&mut pc, &mut state.save_name_box, tx, ty, tw, th, ctx);
         pc.relief_recessed(tx, ty, tw, th, cce_ui::layout::textbox_corner_radius());

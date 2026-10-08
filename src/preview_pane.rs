@@ -1,5 +1,6 @@
 //! The file-preview pane — Preview (text lines / image pixels) over Details
-//! (name + metadata rows), drawn in cce-ui `SectionContext` titled frames.
+//! (name + metadata rows), each in its own well (a 1px outline
+//! with control relief off).
 //!
 //! Moved in-crate from cce-ui's `PreviewState` (its only consumer was this app)
 //! and flattened to the RowList idiom: a plain struct whose `push_prims` emits
@@ -11,7 +12,6 @@
 
 use std::path::PathBuf;
 
-use cce_ui::layout::SectionContext;
 use cce_ui::scene::layout::{fit_rect, FitMode, Rect};
 use cce_ui::widget::display::{measure_text_width, truncate_tail};
 
@@ -266,30 +266,18 @@ impl PreviewPane {
         let pad = cce_ui::layout::section_padding();
         // Inside each well the content stands off the rim by the pane rung.
         let inset = cce_ui::layout::plate_padding();
-        // Under control_relief the section frames are recessed wells carved
-        // into the plate (the list's treatment); the SectionContext 1px line
-        // frame is the flat fallback. Titles come from SectionContext::new
-        // either way. Frame geometry mirrors SectionContext::finish: the well
-        // spans top+7 down to content_y + pad + 12.
+        // Under control_relief each well is recessed into the plate (the
+        // list's treatment); with it off, the well is its 1px outline
+        // (`well_outline`).
         let relief = cce_ui::layout::control_relief();
         let radius = cce_ui::layout::list_corner_radius();
 
-        // 1. Top pane: File Preview Section. The section frame spans the FULL
-        // pane rect (left = cx - pad cancels SectionContext's inner pad), so
-        // the well edge sits at the pane edge like the list across the split —
-        // the visible split gap is exactly root_plate_gap on both sides.
-        // The well's top edge sits AT the pane top, aligned with the
-        // breadcrumb across the split (finish() draws from top+7, so the
-        // fallback frame gets top-7 to land on the same edge).
-        {
-            // style: deliberate — the 7 and 12 mirror SectionContext::finish's
-            // own frame geometry (top+7 down to content_y+pad+12), so the flat
-            // fallback frame lands on the well's edges.
-            let mut preview_sec = SectionContext::new(pc, cx - pad, cy - 7.0, cw + 2.0 * pad, "", false, false);
-            preview_sec.content_y = cy + half_h - pad - 12.0;
-            if !relief {
-                preview_sec.finish();
-            }
+        // 1. Top pane: File Preview. The well spans the FULL pane rect, so
+        // its edge sits at the pane edge like the list across the split — the
+        // visible split gap is exactly root_plate_gap on both sides — and its
+        // top edge at the pane top, aligned with the breadcrumb.
+        if !relief {
+            well_outline(pc, cx, cy, cw, half_h);
         }
         if relief {
             if self.focused_well == Some(PreviewWell::Top) {
@@ -365,15 +353,9 @@ impl PreviewPane {
 
         // The well's bottom edge sits AT the pane bottom, aligned with the
         // list across the split (content-sized before; short panes just show
-        // empty well below the rows). finish() draws from top+7, so the
-        // fallback frame gets top-7 to land on the same edge.
-        {
-            // style: deliberate — SectionContext::finish's frame geometry, as above.
-            let mut details_sec = SectionContext::new(pc, cx - pad, details_top - 7.0, cw + 2.0 * pad, "", false, false);
-            details_sec.content_y = cy + ch - pad - 12.0;
-            if !relief {
-                details_sec.finish();
-            }
+        // empty well below the rows).
+        if !relief {
+            well_outline(pc, cx, details_top, cw, (cy + ch) - details_top);
         }
         if relief {
             if self.focused_well == Some(PreviewWell::Bottom) {
@@ -414,4 +396,14 @@ impl PreviewPane {
             pc.text(&target_str, cx + 112.0, y, 12.0, text_dim);
         }
     }
+}
+
+/// A well's frame with control relief off: a 1px outline round its rect, in
+/// the section border colour.
+fn well_outline(pc: &mut PageContent, x: f32, y: f32, w: f32, h: f32) {
+    const BORDER: [f32; 4] = [0.25, 0.25, 0.35, 1.0];
+    pc.rect(BORDER, x, y, w, 1.0);
+    pc.rect(BORDER, x, y + h, w, 1.0);
+    pc.rect(BORDER, x, y, 1.0, h);
+    pc.rect(BORDER, x + w - 1.0, y, 1.0, h);
 }

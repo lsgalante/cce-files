@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
+use cce_ui::widget::Owned;
 use cce_ui::widget::{Adapted, WidgetHost, Breadcrumb, PathController};
 use cce_ui::layout::{ColumnLayout, LayoutStrategy};
 
@@ -27,7 +28,7 @@ pub struct BrowseState {
     pub show_hidden: bool,
     pub list: crate::row_list::RowList,
     pub search_visible: bool,
-    pub search_box: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
+    pub search_box: Owned<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
     pub selected: Option<usize>,
     /// The selection the list was last auto-scrolled to. The layout pass runs
     /// every frame, and an unconditional scroll_into_view there UNDID every
@@ -37,8 +38,8 @@ pub struct BrowseState {
     pub autoscrolled_to: Option<usize>,
     /// A just-created folder to select once a refresh lists it.
     pub pending_select: Option<PathBuf>,
-    pub breadcrumb: Adapted<Breadcrumb>,
-    pub save_name_box: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
+    pub breadcrumb: Owned<Adapted<Breadcrumb>>,
+    pub save_name_box: Owned<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
 }
 
 impl Default for BrowseState {
@@ -54,14 +55,14 @@ impl Default for BrowseState {
             show_hidden: false,
             list: crate::row_list::RowList::new(cce_ui::layout::button_height(), 2.0),
             search_visible: false,
-            search_box: cce_ui::widget::TextBox::new(String::new())
+            search_box: Owned::new(cce_ui::widget::TextBox::new(String::new())
                 .with_placeholder("Search...")
-                .with_update_on_type(true),
+                .with_update_on_type(true)),
             selected: None,
             autoscrolled_to: None,
             pending_select: None,
-            breadcrumb,
-            save_name_box: cce_ui::widget::TextBox::new(String::new()).with_max_width(None),
+            breadcrumb: Owned::new(breadcrumb),
+            save_name_box: Owned::new(cce_ui::widget::TextBox::new(String::new()).with_max_width(None)),
         };
         state.update_breadcrumb();
         state

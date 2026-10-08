@@ -1,4 +1,5 @@
 use wayland_client::QueueHandle;
+use cce_ui::widget::Owned;
 use cce_ui::cosmic_text::FontSystem;
 
 use cce_ui::engine::{Application, LogicalPosition, LogicalSize, WindowSettings};
@@ -83,7 +84,7 @@ impl PromptKind {
 struct PromptDialog {
     kind: PromptKind,
     path: std::path::PathBuf,
-    textbox: cce_ui::widget::Adapted<cce_ui::widget::TextBox>,
+    textbox: Owned<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
 }
 
 fn prompt_rects(win_w: f32, win_h: f32) -> PromptRects {
@@ -600,11 +601,11 @@ struct FilesystemApp {
     width: u32,
     height: u32,
     scale_factor: f64,
-    page_buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, Message)>,
+    page_buttons: Vec<(Owned<cce_ui::widget::Adapted<cce_ui::widget::Button>>, Message)>,
     hovered_button: Option<usize>,
     cursor_x: f32,
     cursor_y: f32,
-    paginator: cce_ui::widget::Adapted<Paginator>,
+    paginator: Owned<cce_ui::widget::Adapted<Paginator>>,
     just_initialized: bool,
     ui_context: cce_ui::context::UiContext,
     watcher: Option<notify::RecommendedWatcher>,
@@ -1569,7 +1570,7 @@ impl Application for FilesystemApp {
             hovered_button: None,
             cursor_x: 0.0,
             cursor_y: 0.0,
-            paginator,
+            paginator: Owned::new(paginator),
             just_initialized: true,
             ui_context: cce_ui::context::UiContext::new(),
             watcher: None,
@@ -1796,7 +1797,7 @@ impl Application for FilesystemApp {
                     .with_placeholder("Program/Command");
                 tb.focus();
                 self.ui_context.set_focused(&mut tb);
-                self.prompt_dialog = Some(PromptDialog { kind: PromptKind::OpenWith, path, textbox: tb });
+                self.prompt_dialog = Some(PromptDialog { kind: PromptKind::OpenWith, path, textbox: Owned::new(tb) });
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1816,7 +1817,7 @@ impl Application for FilesystemApp {
                 tb.all_selected = false;
                 tb.sync_editor_state();
                 self.ui_context.set_focused(&mut tb);
-                self.prompt_dialog = Some(PromptDialog { kind: PromptKind::Rename, path, textbox: tb });
+                self.prompt_dialog = Some(PromptDialog { kind: PromptKind::Rename, path, textbox: Owned::new(tb) });
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }

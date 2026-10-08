@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use cce_ui::widget::Owned;
 use cce_ui::widget::{Adapted, Breadcrumb, PathController};
 
 use crate::pages::PageContent;
@@ -405,7 +406,7 @@ pub fn update(state: &mut SpaceState, msg: SpaceMessage) {
 // ── Page state ──────────────────────────────────────────────────────
 
 pub struct SpaceState {
-    pub breadcrumb: Adapted<Breadcrumb>,
+    pub breadcrumb: Owned<Adapted<Breadcrumb>>,
     /// The directory the current `tree` describes. Empty until a scan lands.
     pub scanned_dir: PathBuf,
     pub tree: Option<TreeNode>,
@@ -439,7 +440,7 @@ impl Default for SpaceState {
         let mut breadcrumb = Breadcrumb::new();
         breadcrumb.set_network_opacity(0.95);
         Self {
-            breadcrumb,
+            breadcrumb: Owned::new(breadcrumb),
             scanned_dir: PathBuf::new(),
             tree: None,
             tiles: Vec::new(),

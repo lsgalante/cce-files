@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 use crate::pages::PageContent;
 use crate::pages::browse::{BrowseState, DirEntry};
+use cce_ui::widget::Owned;
 use cce_ui::widget::{Adapted, Graph, GraphNode, Breadcrumb, GraphController, PathController};
 
 pub struct NetworkState {
-    pub graph: Adapted<Graph>,
-    pub breadcrumb: Adapted<Breadcrumb>,
+    pub graph: Owned<Adapted<Graph>>,
+    pub breadcrumb: Owned<Adapted<Breadcrumb>>,
     pub last_dir: PathBuf,
     /// The graph pane `(x, y, w, h)` the nodes were last laid out for: a
     /// pane of another size is laid out again (`view`), so the columns fit
@@ -41,8 +42,8 @@ impl Default for NetworkState {
         breadcrumb.set_network_opacity(0.95);
 
         Self {
-            graph,
-            breadcrumb,
+            graph: Owned::new(graph),
+            breadcrumb: Owned::new(breadcrumb),
             last_dir: PathBuf::new(),
             node_glyphs: Vec::new(),
             laid_out_for: (0.0, 0.0, 0.0, 0.0),

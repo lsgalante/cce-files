@@ -1873,7 +1873,7 @@ impl Application for FilesystemApp {
         if self.just_initialized {
             self.just_initialized = false;
             if self.save_mode {
-                self.browse.save_name_box.focus();
+                self.ui_context.focus_widget(&mut self.browse.save_name_box);
                 self.ui_context.set_focused(&mut self.browse.save_name_box);
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
@@ -2831,10 +2831,10 @@ impl Application for FilesystemApp {
             let clicked_search = self.current_page == Page::Browse && self.browse.search_visible && self.browse.search_box.hit_test(pos.x, pos.y, &self.ui_context);
             let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.browse.save_name_box.hit_test(pos.x, pos.y, &self.ui_context);
             if !clicked_search {
-                self.browse.search_box.unfocus();
+                self.ui_context.unfocus_widget(&mut self.browse.search_box);
             }
             if !clicked_save_name {
-                self.browse.save_name_box.unfocus();
+                self.ui_context.unfocus_widget(&mut self.browse.save_name_box);
             }
             if !clicked_search && !clicked_save_name {
                 self.ui_context.clear_focus();
@@ -2963,7 +2963,7 @@ impl Application for FilesystemApp {
                 let open_key = cce_ui::color::list_open_search_key();
                 if cce_ui::widget::match_key_shortcut(event, &open_key) {
                     self.browse.search_visible = true;
-                    self.browse.search_box.focus();
+                    self.ui_context.focus_widget(&mut self.browse.search_box);
                     self.ui_context.set_focused(&mut self.browse.search_box);
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
@@ -2973,7 +2973,7 @@ impl Application for FilesystemApp {
                 let close_key = cce_ui::color::list_close_search_key();
                 if cce_ui::widget::match_key_shortcut(event, &close_key) {
                     self.browse.search_visible = false;
-                    self.browse.search_box.unfocus();
+                    self.ui_context.unfocus_widget(&mut self.browse.search_box);
                     self.ui_context.clear_focus();
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
@@ -2998,7 +2998,7 @@ impl Application for FilesystemApp {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
-                    self.browse.save_name_box.unfocus();
+                    self.ui_context.unfocus_widget(&mut self.browse.save_name_box);
                     self.ui_context.clear_focus();
                     return Some(Message::SelectOpen);
                 }

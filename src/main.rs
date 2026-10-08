@@ -1,4 +1,3 @@
-use wayland_client::QueueHandle;
 use cce_ui::widget::Owned;
 use cce_ui::cosmic_text::FontSystem;
 
@@ -1511,7 +1510,9 @@ impl Application for FilesystemApp {
         self.ui_context.drag_allowed_at(px, py)
     }
 
-    fn new(_qh: &QueueHandle<cce_ui::engine::EngineState<Self>>, sender: calloop::channel::Sender<Self::Message>) -> Self {
+    fn create(sender: cce_ui::engine::AppSender<Self::Message>) -> Self {
+        // The app keeps calloop's sender; `AppSender` converts into it.
+        let sender: calloop::channel::Sender<Self::Message> = sender.into();
         // Parse command line arguments
         let args: Vec<String> = std::env::args().collect();
         let select_directory = args.iter().any(|arg| arg == "--select-dir");

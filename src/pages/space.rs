@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cce_ui::widget::Owned;
+use cce_ui::context::UiContext;
+use cce_ui::widget::Handle;
 use cce_ui::widget::{Adapted, Breadcrumb, PathController};
 
 use crate::pages::PageContent;
@@ -406,7 +407,7 @@ pub fn update(state: &mut SpaceState, msg: SpaceMessage) {
 // ── Page state ──────────────────────────────────────────────────────
 
 pub struct SpaceState {
-    pub breadcrumb: Owned<Adapted<Breadcrumb>>,
+    pub breadcrumb: Handle<Adapted<Breadcrumb>>,
     /// The directory the current `tree` describes. Empty until a scan lands.
     pub scanned_dir: PathBuf,
     pub tree: Option<TreeNode>,
@@ -435,12 +436,13 @@ pub struct SpaceState {
     pub focused: bool,
 }
 
-impl Default for SpaceState {
-    fn default() -> Self {
+impl SpaceState {
+    /// The page's state, its breadcrumb inserted into `ctx`.
+    pub fn new(ctx: &mut UiContext) -> Self {
         let mut breadcrumb = Breadcrumb::new();
         breadcrumb.set_network_opacity(0.95);
         Self {
-            breadcrumb: Owned::new(breadcrumb),
+            breadcrumb: ctx.insert(breadcrumb),
             scanned_dir: PathBuf::new(),
             tree: None,
             tiles: Vec::new(),
@@ -676,7 +678,7 @@ pub fn view(
 ) -> PageContent {
     let mut pc = PageContent::new();
 
-    let top = crate::pages::breadcrumb_header(&mut pc, &mut state.breadcrumb, cx, cy, cw, ctx);
+    let top = crate::pages::breadcrumb_header(&mut pc, state.breadcrumb, cx, cy, cw, ctx);
 
     let mut segments = Vec::new();
     for component in browse.current_dir.components() {
@@ -685,7 +687,7 @@ pub fn view(
             segments.push(s);
         }
     }
-    state.breadcrumb.set_path(&segments);
+    ctx[state.breadcrumb].set_path(&segments);
 
     // The map occupies everything below the header, less the footer readout.
     let map = (cx, top, cw, (cy + ch - top - FOOTER_H).max(0.0));
@@ -1099,6 +1101,7 @@ mod tests {
 
     #[test]
     fn hit_test_finds_the_deepest_tile() {
+        let mut ui = UiContext::new();
         let tree = TreeNode {
             name: "root".into(),
             size: 1000,
@@ -1110,7 +1113,7 @@ mod tests {
                 children: vec![file("leaf.bin", 1000)],
             }],
         };
-        let mut state = SpaceState::default();
+        let mut state = SpaceState::new(&mut ui);
         state.scanned_dir = PathBuf::from("/root");
         state.tree = Some(tree);
         state.relayout((0.0, 0.0, 400.0, 400.0));
@@ -1172,6 +1175,7 @@ mod tests {
 
     #[test]
     fn a_directory_drawn_as_one_block_wears_its_dominant_kind() {
+        let mut ui = UiContext::new();
         // `sub` gets far less than MIN_RECURSE across, so it is not opened.
         let mut children = vec![file("huge.bin", 1_000_000)];
         children.push(TreeNode {
@@ -1181,7 +1185,7 @@ mod tests {
             children: vec![file("x.mp3", 15_000), file("y.txt", 5_000)],
         });
         let tree = TreeNode { name: "root".into(), size: 1_020_000, is_dir: true, children };
-        let mut state = SpaceState::default();
+        let mut state = SpaceState::new(&mut ui);
         state.scan_finished(PathBuf::from("/root"), tree);
         state.relayout((0.0, 0.0, 200.0, 200.0));
 

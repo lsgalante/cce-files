@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::pages::PageContent;
-use cce_ui::widget::Owned;
+use cce_ui::context::UiContext;
+use cce_ui::widget::Handle;
 use cce_ui::widget::{Adapted, WidgetHost, Breadcrumb, PathController};
 use cce_ui::scene::arena::Arena;
 use cce_ui::scene::layout::{compute_layout, CrossAlign, LayoutBox, Length, Size, Style};
@@ -21,7 +22,7 @@ pub struct DirEntry {
     pub origin: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BrowseState {
     pub current_dir: PathBuf,
     pub all_entries: Vec<DirEntry>,
@@ -29,7 +30,7 @@ pub struct BrowseState {
     pub show_hidden: bool,
     pub list: crate::row_list::RowList,
     pub search_visible: bool,
-    pub search_box: Owned<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
+    pub search_box: Handle<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
     pub selected: Option<usize>,
     /// The selection the list was last auto-scrolled to. The layout pass runs
     /// every frame, and an unconditional scroll_into_view there UNDID every
@@ -39,12 +40,13 @@ pub struct BrowseState {
     pub autoscrolled_to: Option<usize>,
     /// A just-created folder to select once a refresh lists it.
     pub pending_select: Option<PathBuf>,
-    pub breadcrumb: Owned<Adapted<Breadcrumb>>,
-    pub save_name_box: Owned<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
+    pub breadcrumb: Handle<Adapted<Breadcrumb>>,
+    pub save_name_box: Handle<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
 }
 
-impl Default for BrowseState {
-    fn default() -> Self {
+impl BrowseState {
+    /// The page's state, its widgets inserted into `ctx`.
+    pub fn new(ctx: &mut UiContext) -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
         let initial_dir = PathBuf::from(home);
         let mut breadcrumb = Breadcrumb::new();
@@ -56,16 +58,16 @@ impl Default for BrowseState {
             show_hidden: false,
             list: crate::row_list::RowList::new(cce_ui::layout::button_height(), 2.0),
             search_visible: false,
-            search_box: Owned::new(cce_ui::widget::TextBox::new(String::new())
+            search_box: ctx.insert(cce_ui::widget::TextBox::new(String::new())
                 .with_placeholder("Search...")
                 .with_update_on_type(true)),
             selected: None,
             autoscrolled_to: None,
             pending_select: None,
-            breadcrumb: Owned::new(breadcrumb),
-            save_name_box: Owned::new(cce_ui::widget::TextBox::new(String::new()).with_max_width(None)),
+            breadcrumb: ctx.insert(breadcrumb),
+            save_name_box: ctx.insert(cce_ui::widget::TextBox::new(String::new()).with_max_width(None)),
         };
-        state.update_breadcrumb();
+        state.update_breadcrumb(ctx);
         state
     }
 }
@@ -76,7 +78,7 @@ impl BrowseState {
         self.selected.and_then(|idx| self.entries.get(idx).map(|e| e.path.clone()))
     }
 
-    pub fn update_breadcrumb(&mut self) {
+    pub fn update_breadcrumb(&mut self, ctx: &mut UiContext) {
         let mut segments = Vec::new();
         for component in self.current_dir.components() {
             let s = component.as_os_str().to_string_lossy().to_string();
@@ -84,7 +86,7 @@ impl BrowseState {
                 segments.push(s);
             }
         }
-        self.breadcrumb.set_path(&segments);
+        ctx[self.breadcrumb].set_path(&segments);
     }
 }
 
@@ -248,7 +250,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
 
     // 1. The Breadcrumb, where every page puts it.
     let (bx, by, bw, _) = at(crumb);
-    crate::pages::breadcrumb_header(&mut pc, &mut state.breadcrumb, bx, by, bw, ctx);
+    crate::pages::breadcrumb_header(&mut pc, state.breadcrumb, bx, by, bw, ctx);
 
     // 2. The list (ScrollBox).
     let (list_x, list_y, list_w, list_h) = at(list);
@@ -372,7 +374,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
             list_w - 2.0 * search_pad,
             search_h,
         );
-        cce_ui::layout::render_widget(&mut pc, &mut state.search_box, sx, sy, sw, sh, ctx);
+        cce_ui::layout::render_widget_h(&mut pc, state.search_box, sx, sy, sw, sh, ctx);
         // The TextBox's recessed well lives in its modern paint(); the flat view
         // this host renders through loses it, so carve it here.
         pc.relief_recessed(sx, sy, sw, sh, cce_ui::layout::textbox_corner_radius());
@@ -394,8 +396,8 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     // 3. Allocate and render Textbox(es)
     if let Some(name_box) = name_box {
         let (tx, ty, tw, th) = at(name_box);
-        state.save_name_box.set_row_rect(tx, tw);
-        cce_ui::layout::render_widget(&mut pc, &mut state.save_name_box, tx, ty, tw, th, ctx);
+        ctx[state.save_name_box].set_row_rect(tx, tw);
+        cce_ui::layout::render_widget_h(&mut pc, state.save_name_box, tx, ty, tw, th, ctx);
         pc.relief_recessed(tx, ty, tw, th, cce_ui::layout::textbox_corner_radius());
     }
 
@@ -404,11 +406,12 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
 
 // ── Update ──────────────────────────────────────────────────────────
 
-fn apply_filters(state: &mut BrowseState) {
-    let search_query = if state.search_box.editing {
-        state.search_box.edit_buffer.to_lowercase()
+fn apply_filters(state: &mut BrowseState, ctx: &UiContext) {
+    let search_box = &ctx[state.search_box];
+    let search_query = if search_box.editing {
+        search_box.edit_buffer.to_lowercase()
     } else {
-        state.search_box.text.to_lowercase()
+        search_box.text.to_lowercase()
     };
     state.entries = state
         .all_entries
@@ -425,11 +428,11 @@ fn apply_filters(state: &mut BrowseState) {
     state.selected = if state.entries.is_empty() { None } else { Some(0) };
 }
 
-pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::services::fs::FsRequest> {
+pub fn update(state: &mut BrowseState, msg: BrowseMessage, ctx: &mut UiContext) -> Option<crate::services::fs::FsRequest> {
     match msg {
         BrowseMessage::SearchChanged(q) => {
-            state.search_box.text = q;
-            apply_filters(state);
+            ctx[state.search_box].text = q;
+            apply_filters(state, ctx);
             None
         }
         BrowseMessage::SelectEntry(i) => {
@@ -451,11 +454,11 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
             state.current_dir = path.clone();
             state.all_entries = entries;
             state.pending_select = None;
-            state.search_box.text.clear();
-            state.search_box.edit_buffer.clear();
+            ctx[state.search_box].text.clear();
+            ctx[state.search_box].edit_buffer.clear();
             state.search_visible = false;
-            apply_filters(state);
-            state.update_breadcrumb();
+            apply_filters(state, ctx);
+            state.update_breadcrumb(ctx);
             Some(crate::services::fs::FsRequest::SaveLastDir(path))
         }
         BrowseMessage::DirectoryRefreshed(path, entries) => {
@@ -465,7 +468,7 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
                     .take()
                     .or_else(|| state.selected.and_then(|idx| state.entries.get(idx).map(|e| e.path.clone())));
                 state.all_entries = entries;
-                apply_filters(state);
+                apply_filters(state, ctx);
                 if let Some(path) = selected_path {
                     state.selected = state.entries.iter().position(|e| e.path == path);
                 }
@@ -474,7 +477,7 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage) -> Option<crate::serv
         }
         BrowseMessage::ToggleHidden => {
             state.show_hidden = !state.show_hidden;
-            apply_filters(state);
+            apply_filters(state, ctx);
             None
         }
         BrowseMessage::DeleteEntry(idx) => {
@@ -573,6 +576,7 @@ mod tests {
     /// the kind decides which.
     #[test]
     fn entry_icon_names_a_glyph_by_kind() {
+        let mut ui = UiContext::new();
         assert_eq!(entry_icon(true, "photos.png"), "folder");
         assert_eq!(entry_icon(false, "Shot.PNG"), "file-image");
         assert_eq!(entry_icon(false, "song.flac"), "file-audio");
@@ -587,7 +591,7 @@ mod tests {
         }
     }
 
-    fn state_with_count(count: usize) -> BrowseState {
+    fn state_with_count(ui: &mut UiContext, count: usize) -> BrowseState {
         BrowseState {
             entries: (0..count)
                 .map(|i| DirEntry {
@@ -600,25 +604,28 @@ mod tests {
                     origin: None,
                 })
                 .collect(),
-            ..BrowseState::default()
+            ..BrowseState::new(ui)
         }
     }
 
     #[test]
     fn down_from_none_selects_first_entry() {
-        let state = state_with_count(3);
+        let mut ui = UiContext::new();
+        let state = state_with_count(&mut ui, 3);
         assert_eq!(next_selection_index(&state, BrowseNavigation::Down), Some(0));
     }
 
     #[test]
     fn up_from_none_selects_last_entry() {
-        let state = state_with_count(3);
+        let mut ui = UiContext::new();
+        let state = state_with_count(&mut ui, 3);
         assert_eq!(next_selection_index(&state, BrowseNavigation::Up), Some(2));
     }
 
     #[test]
     fn navigation_stays_in_bounds() {
-        let mut state = state_with_count(3);
+        let mut ui = UiContext::new();
+        let mut state = state_with_count(&mut ui, 3);
 
         state.selected = Some(0);
         assert_eq!(next_selection_index(&state, BrowseNavigation::Up), Some(0));
@@ -629,26 +636,28 @@ mod tests {
 
     #[test]
     fn apply_filters_hides_dotfiles() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         state.all_entries = vec![
             DirEntry { name: ".hidden".into(), path: PathBuf::from("/a/.hidden"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
             DirEntry { name: "visible".into(), path: PathBuf::from("/a/visible"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
         ];
         state.show_hidden = false;
-        apply_filters(&mut state);
+        apply_filters(&mut state, &ui);
         assert_eq!(state.entries.len(), 1);
         assert_eq!(state.entries[0].name, "visible");
     }
 
     #[test]
     fn apply_filters_shows_dotfiles_when_enabled() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         state.all_entries = vec![
             DirEntry { name: ".hidden".into(), path: PathBuf::from("/a/.hidden"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
             DirEntry { name: "visible".into(), path: PathBuf::from("/a/visible"), is_dir: false, size: 0, permissions: 0o644, modified: String::new(), origin: None },
         ];
         state.show_hidden = true;
-        apply_filters(&mut state);
+        apply_filters(&mut state, &ui);
         assert_eq!(state.entries.len(), 2);
     }
 
@@ -666,9 +675,10 @@ mod tests {
 
     #[test]
     fn search_changed_filters_entries() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         state.all_entries = vec![entry("apple", "/a/apple", false), entry("banana", "/a/banana", false)];
-        let req = update(&mut state, BrowseMessage::SearchChanged("ban".to_string()));
+        let req = update(&mut state, BrowseMessage::SearchChanged("ban".to_string()), &mut ui);
         assert!(req.is_none());
         assert_eq!(state.entries.len(), 1);
         assert_eq!(state.entries[0].name, "banana");
@@ -677,47 +687,52 @@ mod tests {
 
     #[test]
     fn navigate_to_path_reads_directory() {
-        let mut state = BrowseState::default();
-        let req = update(&mut state, BrowseMessage::NavigateToPath(PathBuf::from("/tmp")));
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
+        let req = update(&mut state, BrowseMessage::NavigateToPath(PathBuf::from("/tmp")), &mut ui);
         assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == PathBuf::from("/tmp")));
     }
 
     #[test]
     fn navigate_to_plain_directory_reads_it() {
+        let mut ui = UiContext::new();
         let dir = std::env::temp_dir().join(format!("cce_nav_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut state = BrowseState::default();
+        let mut state = BrowseState::new(&mut ui);
         state.entries = vec![entry("sub", dir.to_str().unwrap(), true)];
-        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        let req = update(&mut state, BrowseMessage::NavigateTo(0), &mut ui);
         assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(_))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn navigate_to_project_directory_does_not_enter() {
+        let mut ui = UiContext::new();
         let dir = std::env::temp_dir().join(format!("cce_proj_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), "{}").unwrap();
-        let mut state = BrowseState::default();
+        let mut state = BrowseState::new(&mut ui);
         state.entries = vec![entry("proj", dir.to_str().unwrap(), true)];
-        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        let req = update(&mut state, BrowseMessage::NavigateTo(0), &mut ui);
         assert!(req.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn navigate_to_file_does_nothing() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         state.entries = vec![entry("f.txt", "/a/f.txt", false)];
-        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        let req = update(&mut state, BrowseMessage::NavigateTo(0), &mut ui);
         assert!(req.is_none());
     }
 
     #[test]
     fn directory_loaded_populates_and_saves() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         let entries = vec![entry("x", "/d/x", false), entry("y", "/d/y", true)];
-        let req = update(&mut state, BrowseMessage::DirectoryLoaded(PathBuf::from("/d"), entries));
+        let req = update(&mut state, BrowseMessage::DirectoryLoaded(PathBuf::from("/d"), entries), &mut ui);
         assert_eq!(state.current_dir, PathBuf::from("/d"));
         assert_eq!(state.entries.len(), 2);
         assert!(matches!(req, Some(crate::services::fs::FsRequest::SaveLastDir(p)) if p == PathBuf::from("/d")));
@@ -725,13 +740,14 @@ mod tests {
 
     #[test]
     fn directory_refreshed_preserves_selection_by_path() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         state.current_dir = PathBuf::from("/d");
         state.all_entries = vec![entry("a", "/d/a", false), entry("b", "/d/b", false)];
-        apply_filters(&mut state);
+        apply_filters(&mut state, &ui);
         state.selected = Some(1); // "b"
         let new_entries = vec![entry("b", "/d/b", false), entry("a", "/d/a", false), entry("c", "/d/c", false)];
-        let req = update(&mut state, BrowseMessage::DirectoryRefreshed(PathBuf::from("/d"), new_entries));
+        let req = update(&mut state, BrowseMessage::DirectoryRefreshed(PathBuf::from("/d"), new_entries), &mut ui);
         assert!(req.is_none());
         assert_eq!(
             state.selected.and_then(|i| state.entries.get(i)).map(|e| e.name.as_str()),
@@ -741,11 +757,12 @@ mod tests {
 
     #[test]
     fn directory_refreshed_ignores_other_dir() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         state.current_dir = PathBuf::from("/d");
         state.all_entries = vec![entry("a", "/d/a", false)];
-        apply_filters(&mut state);
-        let req = update(&mut state, BrowseMessage::DirectoryRefreshed(PathBuf::from("/other"), vec![entry("z", "/other/z", false)]));
+        apply_filters(&mut state, &ui);
+        let req = update(&mut state, BrowseMessage::DirectoryRefreshed(PathBuf::from("/other"), vec![entry("z", "/other/z", false)]), &mut ui);
         assert!(req.is_none());
         assert_eq!(state.entries.len(), 1);
         assert_eq!(state.entries[0].name, "a");
@@ -753,11 +770,12 @@ mod tests {
 
     #[test]
     fn toggle_hidden_shows_dotfiles() {
-        let mut state = BrowseState::default();
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
         state.all_entries = vec![entry(".hidden", "/a/.hidden", false), entry("visible", "/a/visible", false)];
-        apply_filters(&mut state);
+        apply_filters(&mut state, &ui);
         assert_eq!(state.entries.len(), 1);
-        let req = update(&mut state, BrowseMessage::ToggleHidden);
+        let req = update(&mut state, BrowseMessage::ToggleHidden, &mut ui);
         assert!(req.is_none());
         assert!(state.show_hidden);
         assert_eq!(state.entries.len(), 2);
@@ -765,6 +783,7 @@ mod tests {
 
     #[test]
     fn navigate_enters_a_dir_holding_a_settings_state_kdl() {
+        let mut ui = UiContext::new();
         // The shape of ~/.config/cce/cce-designer: a plain directory whose only content is
         // the designer's own state.kdl. Treating that as a project made it un-enterable.
         let dir = std::env::temp_dir().join(format!(
@@ -774,10 +793,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.kdl"), "graph {\n    grid_size_x (f64)71.0\n}").unwrap();
 
-        let mut state = BrowseState::default();
+        let mut state = BrowseState::new(&mut ui);
         state.all_entries = vec![entry("cce-designer", dir.to_str().unwrap(), true)];
-        apply_filters(&mut state);
-        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        apply_filters(&mut state, &ui);
+        let req = update(&mut state, BrowseMessage::NavigateTo(0), &mut ui);
         assert!(
             matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(ref p)) if *p == dir),
             "navigating into it should read the directory, got {req:?}",
@@ -785,7 +804,7 @@ mod tests {
 
         // A real project (state.json) still opens instead of being entered.
         std::fs::write(dir.join("state.json"), "{}").unwrap();
-        let req = update(&mut state, BrowseMessage::NavigateTo(0));
+        let req = update(&mut state, BrowseMessage::NavigateTo(0), &mut ui);
         assert!(req.is_none(), "a project dir is not navigable");
 
         let _ = std::fs::remove_file(dir.join("state.kdl"));
@@ -795,15 +814,17 @@ mod tests {
 
     #[test]
     fn last_dir_loaded_some_reads_that_dir() {
-        let mut state = BrowseState::default();
-        let req = update(&mut state, BrowseMessage::LastDirLoaded(Some(PathBuf::from("/some/dir"))));
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
+        let req = update(&mut state, BrowseMessage::LastDirLoaded(Some(PathBuf::from("/some/dir"))), &mut ui);
         assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == PathBuf::from("/some/dir")));
     }
 
     #[test]
     fn last_dir_loaded_none_falls_back() {
-        let mut state = BrowseState::default();
-        let req = update(&mut state, BrowseMessage::LastDirLoaded(None));
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
+        let req = update(&mut state, BrowseMessage::LastDirLoaded(None), &mut ui);
         assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(_))));
     }
 
@@ -843,6 +864,7 @@ mod tests {
 
     #[test]
     fn test_directory_persistence() {
+        let mut ui = UiContext::new();
         let root = std::env::temp_dir().join(format!(
             "cce_test_persist_{}",
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
@@ -860,6 +882,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_entry() {
+        let mut ui = UiContext::new();
         let temp_dir = std::env::temp_dir();
         let test_subdir = temp_dir.join(format!("cce_test_delete_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)));
         std::fs::create_dir_all(&test_subdir).unwrap();
@@ -893,7 +916,7 @@ mod tests {
                 }
             ],
             selected: Some(0),
-            ..BrowseState::default()
+            ..BrowseState::new(&mut ui)
         };
 
         // Assert file exists before deletion
@@ -901,9 +924,9 @@ mod tests {
 
         // DeleteEntry outside the trash routes to TrashPath (recoverable);
         // DeleteEntryPermanent is the unrecoverable path.
-        let req = update(&mut state, BrowseMessage::DeleteEntry(0));
+        let req = update(&mut state, BrowseMessage::DeleteEntry(0), &mut ui);
         assert!(matches!(req, Some(crate::services::fs::FsRequest::TrashPath(_))));
-        let req_perm = update(&mut state, BrowseMessage::DeleteEntryPermanent(0));
+        let req_perm = update(&mut state, BrowseMessage::DeleteEntryPermanent(0), &mut ui);
         assert!(matches!(req_perm, Some(crate::services::fs::FsRequest::DeletePath(_, _))));
 
         // Directly delete the file to simulate the FsService action
@@ -911,7 +934,7 @@ mod tests {
         assert!(!file_path.exists());
 
         // Perform update call for Deleted response
-        let req2 = update(&mut state, BrowseMessage::Deleted(file_path.clone(), Ok(())));
+        let req2 = update(&mut state, BrowseMessage::Deleted(file_path.clone(), Ok(())), &mut ui);
         assert!(matches!(req2, Some(crate::services::fs::FsRequest::ReadDirectory(_))));
 
         // Check if state entries are updated

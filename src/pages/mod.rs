@@ -3,7 +3,7 @@ pub mod preview;
 pub mod network;
 pub mod space;
 
-use cce_ui::widget::Owned;
+use cce_ui::widget::Handle;
 use cce_ui::layout::RenderTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,16 +55,16 @@ pub fn breadcrumb_h() -> f32 {
 /// started their content 28px and 34px down against Browse's 24 + gap.
 pub fn breadcrumb_header(
     pc: &mut PageContent,
-    breadcrumb: &mut Owned<cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>>,
+    breadcrumb: Handle<cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>>,
     cx: f32,
     cy: f32,
     cw: f32,
     ctx: &mut cce_ui::context::UiContext,
 ) -> f32 {
     let h = breadcrumb_h();
-    cce_ui::layout::render_widget(pc, breadcrumb, cx, cy, cw, h, ctx);
+    cce_ui::layout::render_widget_h(pc, breadcrumb, cx, cy, cw, h, ctx);
     let rect = cce_ui::scene::layout::Rect { x: cx, y: cy, width: cw, height: h };
-    breadcrumb_relief(pc, breadcrumb, rect);
+    breadcrumb_relief(pc, &ctx[breadcrumb], rect);
     cy + h + cce_ui::layout::root_plate_gap()
 }
 
@@ -101,7 +101,7 @@ pub fn breadcrumb_header(
 /// this carve to `window_pc` would buy nothing.
 pub fn breadcrumb_relief(
     pc: &mut PageContent,
-    breadcrumb: &Owned<cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>>,
+    breadcrumb: &cce_ui::widget::Adapted<cce_ui::widget::Breadcrumb>,
     rect: cce_ui::scene::layout::Rect,
 ) {
     let r = cce_ui::layout::dropdown_corner_radius();
@@ -173,7 +173,7 @@ impl Stroke {
 pub struct PageContent {
     pub rects: Vec<([f32; 4], f32, f32, f32, f32, f32, (bool, bool, bool, bool))>,
     pub texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
-    pub buttons: Vec<(Owned<cce_ui::widget::Adapted<cce_ui::widget::Button>>, crate::Message)>,
+    pub buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, crate::Message)>,
     /// Relief steps for the control_relief styling — (x, y, w, h, radius, depth,
     /// kind: [`RELIEF_RECESSED`]/[`RELIEF_RAISED`]/[`RELIEF_INSET`]). The flat rects
     /// own the faces; these are the edges-only walls emitted over them (the
@@ -423,7 +423,7 @@ impl PageContent {
             .with_bg(bg)
             .with_hover_bg(hover_bg)
             .with_label_color(label_color);
-        self.buttons.push((Owned::new(btn), action));
+        self.buttons.push((btn, action));
     }
 
     /// A button wearing the toolkit's own face — no per-call colors. The
@@ -438,7 +438,7 @@ impl PageContent {
             .with_label(label)
             .with_bg([0.0, 0.0, 0.0, 0.0])
             .with_hover_bg([1.0, 1.0, 1.0, 0.10]);
-        self.buttons.push((Owned::new(btn), action));
+        self.buttons.push((btn, action));
     }
 
     pub fn button_left(
@@ -459,7 +459,7 @@ impl PageContent {
             .with_hover_bg(hover_bg)
             .with_label_color(label_color)
             .with_left_align(true);
-        self.buttons.push((Owned::new(btn), action));
+        self.buttons.push((btn, action));
     }
 }
 

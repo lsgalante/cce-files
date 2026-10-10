@@ -374,7 +374,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
             list_w - 2.0 * search_pad,
             search_h,
         );
-        cce_ui::layout::render_widget_h(&mut pc, state.search_box, sx, sy, sw, sh, ctx);
+        cce_ui::compose::render_widget_h(&mut pc, state.search_box, sx, sy, sw, sh, ctx);
         // The TextBox's recessed well lives in its modern paint(); the flat view
         // this host renders through loses it, so carve it here.
         pc.relief_recessed(sx, sy, sw, sh, cce_ui::layout::textbox_corner_radius());
@@ -397,7 +397,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     if let Some(name_box) = name_box {
         let (tx, ty, tw, th) = at(name_box);
         ctx[state.save_name_box].set_row_rect(tx, tw);
-        cce_ui::layout::render_widget_h(&mut pc, state.save_name_box, tx, ty, tw, th, ctx);
+        cce_ui::compose::render_widget_h(&mut pc, state.save_name_box, tx, ty, tw, th, ctx);
         pc.relief_recessed(tx, ty, tw, th, cce_ui::layout::textbox_corner_radius());
     }
 

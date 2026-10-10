@@ -249,7 +249,7 @@ impl PreviewPane {
         // For `rect_with_radius_corners` on the well fill — the inherent
         // `rect`/`text` methods still win over the trait's by the usual
         // inherent-first rule, so the calls below are unaffected.
-        use cce_ui::layout::RenderTarget;
+        use cce_ui::scene::paint::RenderTarget;
         let (cx, cy, cw, ch) = self.rect;
 
         let text_fg = cce_ui::color::TEXT_FG;

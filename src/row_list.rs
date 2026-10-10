@@ -424,7 +424,7 @@ impl RowList {
 
     /// The pill track and thumb at `alpha` (track/thumb colours scaled).
     fn push_scrollbar(&self, pc: &mut crate::pages::PageContent, alpha: f32) {
-        use cce_ui::layout::RenderTarget;
+        use cce_ui::scene::paint::RenderTarget;
         let a = alpha.clamp(0.0, 1.0);
         if !self.overflowing() || a <= 0.001 {
             return;
@@ -463,7 +463,7 @@ impl RowList {
     /// (icon column, primary/secondary sizes and tints, char-estimate truncation,
     /// viewport-inset clip bounds) verbatim.
     pub fn push_prims(&self, pc: &mut crate::pages::PageContent) {
-        use cce_ui::layout::RenderTarget;
+        use cce_ui::scene::paint::RenderTarget;
         let (x, y, w, h) = (self.x, self.y, self.w, self.h);
         // The idle copy, at full alpha and every frame, raised or not: the
         // translucent bg over it is what sinks it, and the fore copy fades in
@@ -593,7 +593,7 @@ fn push_text(
     font: &Option<String>,
     bounds: Option<[f32; 4]>,
 ) {
-    use cce_ui::layout::RenderTarget;
+    use cce_ui::scene::paint::RenderTarget;
     match font {
         Some(f) => pc.text_with_font_and_bounds(text, x, y, size, color, f, bounds),
         None => pc.text_with_bounds(text, x, y, size, color, bounds),

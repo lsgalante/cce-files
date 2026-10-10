@@ -885,7 +885,7 @@ impl FilesystemApp {
         if has_sidebar {
             let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
             self.ui_context[self.paginator].set_selected_page(page_idx);
-            cce_ui::layout::render_widget_h(&mut dummy_pc, self.paginator, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
+            cce_ui::compose::render_widget_h(&mut dummy_pc, self.paginator, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
 
         // Each top-level widget rendered through the same immediate-mode path the root
@@ -923,7 +923,7 @@ impl FilesystemApp {
                 }
                 if let Some(tb) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
                     let (x, y, w, h) = self.ui_context[tb].rect();
-                    cce_ui::layout::render_widget_h(&mut plain_pc, tb, x, y, w, h, &mut self.ui_context);
+                    cce_ui::compose::render_widget_h(&mut plain_pc, tb, x, y, w, h, &mut self.ui_context);
                 }
 
                 // Legacy aggregate order: plain child quads, then rounded child quads.
@@ -992,7 +992,7 @@ impl FilesystemApp {
 
         // Gather all popovers
         let mut popover_pc = pages::PageContent::new();
-        cce_ui::layout::render_popovers(&mut popover_pc, &mut self.ui_context);
+        cce_ui::compose::render_popovers(&mut popover_pc, &mut self.ui_context);
 
         // Gather context menu overlay if visible
         let mut context_menu_pc = pages::PageContent::new();

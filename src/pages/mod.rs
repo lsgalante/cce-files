@@ -4,7 +4,7 @@ pub mod network;
 pub mod space;
 
 use cce_ui::widget::Handle;
-use cce_ui::layout::RenderTarget;
+use cce_ui::scene::paint::RenderTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -62,7 +62,7 @@ pub fn breadcrumb_header(
     ctx: &mut cce_ui::context::UiContext,
 ) -> f32 {
     let h = breadcrumb_h();
-    cce_ui::layout::render_widget_h(pc, breadcrumb, cx, cy, cw, h, ctx);
+    cce_ui::compose::render_widget_h(pc, breadcrumb, cx, cy, cw, h, ctx);
     let rect = cce_ui::scene::layout::Rect { x: cx, y: cy, width: cw, height: h };
     breadcrumb_relief(pc, &ctx[breadcrumb], rect);
     cy + h + cce_ui::layout::root_plate_gap()

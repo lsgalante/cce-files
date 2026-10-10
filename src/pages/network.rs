@@ -269,7 +269,7 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw
     // it, since a graph panned or zoomed past its edge would otherwise draw
     // over the preview beside it.
     let mut graph_pc = PageContent::new();
-    cce_ui::layout::render_widget_h(&mut graph_pc, state.graph, pane.0, pane.1, pane.2, pane.3, ctx);
+    cce_ui::compose::render_widget_h(&mut graph_pc, state.graph, pane.0, pane.1, pane.2, pane.3, ctx);
     pc.absorb(graph_pc.clipped_to([cx, top, cx + cw, cy + ch]));
 
     // Each node's glyph on the left of its body, at the size and inset the

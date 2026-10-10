@@ -6,6 +6,7 @@
 //! All functions do blocking IO; they run on the FsService task like the rest
 //! of `services::fs`.
 
+use cce_ui::fmt::percent_decode;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -217,27 +218,6 @@ fn percent_encode(s: &str) -> String {
         }
     }
     out
-}
-
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if let (Some(h), Some(l)) = (
-                bytes.get(i + 1).and_then(|b| (*b as char).to_digit(16)),
-                bytes.get(i + 2).and_then(|b| (*b as char).to_digit(16)),
-            ) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]

@@ -611,10 +611,13 @@ pub fn save_last_dir_in(config_dir: &Path, dir: &Path) {
 /// content: .gltf reads as application/json, .obj as text/plain, binary .stl
 /// and .ply as application/octet-stream, so Open never reached cce-model.
 /// shared-mime-info registers no PLY type; model/x-ply is the one
-/// cce-model.desktop claims. `ext` must already be lowercase.
+/// cce-model.desktop claims. Markdown sniffs as text/plain (the text
+/// editor), so .md never reached cce-documents. `ext` must already be
+/// lowercase.
 fn mime_for_extension(ext: &str) -> Option<&'static str> {
     Some(match ext {
         "kdl" => "application/x-kdl",
+        "md" | "markdown" => "text/markdown",
         "stl" => "model/stl",
         "obj" => "model/obj",
         "gltf" => "model/gltf+json",
@@ -896,7 +899,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         // Content that content-sniffing reads as the wrong type, so a pass
         // shows the extension decided it.
-        let cases: [(&str, &[u8], &str); 7] = [
+        let cases: [(&str, &[u8], &str); 9] = [
             ("part.stl", &[0u8; 84], "model/stl"),
             ("PART.STL", &[0u8; 84], "model/stl"),
             ("mesh.obj", b"v 0 0 0\n", "model/obj"),
@@ -904,6 +907,8 @@ mod tests {
             ("scene.Glb", b"glTF\x02\0\0\0", "model/gltf-binary"),
             ("scan.ply", b"ply\nformat binary_little_endian 1.0\n\0\xff", "model/x-ply"),
             ("config.KDL", b"node 1\n", "application/x-kdl"),
+            ("notes.md", b"# Notes\n\nPlain words.\n", "text/markdown"),
+            ("Book.Markdown", b"Plain words.\n", "text/markdown"),
         ];
         let got: Vec<_> = cases
             .iter()

@@ -697,24 +697,6 @@ pub fn load_kdl_associations_in(config_dir: &Path) -> Option<std::collections::H
     }
 }
 
-/// Where `.desktop` files live, in XDG precedence order: `$XDG_DATA_HOME`
-/// (else `~/.local/share`), then `$XDG_DATA_DIRS` (else /usr/local/share and
-/// /usr/share), each with `applications` appended. It has to match the dirs
-/// `xdg-mime query default` searched, or a handler it names is not found
-/// here. Unset or relative values are skipped, per the spec.
-fn applications_dirs() -> Vec<PathBuf> {
-    let var = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty());
-    let data_home = var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| Some(PathBuf::from(var("HOME")?).join(".local/share")));
-    let data_dirs: Vec<PathBuf> = var("XDG_DATA_DIRS")
-        .map(|v| std::env::split_paths(&v).filter(|p| p.is_absolute()).collect())
-        .filter(|dirs: &Vec<PathBuf>| !dirs.is_empty())
-        .unwrap_or_else(|| vec!["/usr/local/share".into(), "/usr/share".into()]);
-    data_home.into_iter().chain(data_dirs).map(|d| d.join("applications")).collect()
-}
-
 pub fn get_default_application(mime: &str) -> Option<(String, String)> {
     // 1. Check KDL configuration file override
     if let Some(associations) = load_kdl_associations() {
@@ -736,35 +718,11 @@ pub fn get_default_application(mime: &str) -> Option<(String, String)> {
         return None;
     }
 
-    let mut desktop_path = None;
-    for dir in applications_dirs() {
-        let path = dir.join(&desktop_filename);
-        if path.exists() {
-            desktop_path = Some(path);
-            break;
-        }
-    }
-
-    let path = desktop_path?;
-    let content = fs::read_to_string(path).ok()?;
-
-    let mut name = None;
-    let mut exec = None;
-
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with("Name=") && name.is_none() {
-            name = Some(line["Name=".len()..].trim().to_string());
-        } else if line.starts_with("Exec=") && exec.is_none() {
-            let mut cmd = line["Exec=".len()..].trim().to_string();
-            // Strip standard desktop entry field codes (placeholders)
-            let placeholders = ["%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%i", "%c", "%k", "%v"];
-            for placeholder in &placeholders {
-                cmd = cmd.replace(placeholder, "");
-            }
-            exec = Some(cmd.trim().to_string());
-        }
-    }
+    // Looked up in the dirs `xdg-mime query default` searched (XDG order), and
+    // only its [Desktop Entry] group read: an action's Exec= is not the app's.
+    let entry = cce_ui::desktop_entry::DesktopEntry::read(&cce_ui::desktop_entry::find(&desktop_filename)?)?;
+    let name = entry.get("Name").map(str::to_string);
+    let exec = entry.get("Exec").map(cce_ui::desktop_entry::strip_field_codes);
 
     match (name, exec) {
         (Some(n), Some(e)) => Some((n, e)),

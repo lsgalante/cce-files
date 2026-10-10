@@ -1,3 +1,4 @@
+use cce_ui::process::spawn_detached;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -799,17 +800,6 @@ pub fn spawn_command_for_path(cmd: &str, path: &Path) -> bool {
     }
     command.arg(path);
     spawn_detached(command).is_ok()
-}
-
-/// Spawn `cmd` and reap it on a background thread, so the child never lingers
-/// as a zombie once it exits. This was `cce_ui::process::spawn_detached` until
-/// the toolkit dropped that module (cce-ui 4e94236) as caller-less — it had two callers here.
-fn spawn_detached(mut cmd: std::process::Command) -> std::io::Result<()> {
-    let mut child = cmd.spawn()?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
 }
 
 pub fn open_file(path: &Path) {

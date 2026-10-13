@@ -13,29 +13,8 @@ use cce_files::pages::browse::is_project_dir;
 
 // ── Layout constants ────────────────────────────────────────────────
 
-const ROW_H: f32 = 24.0;        // context-menu row height
 const DIALOG_W: f32 = 400.0;
 const DIALOG_H: f32 = 160.0;
-const MENU_MIN_W: f32 = 120.0;
-
-/// Context-menu width/height for a given set of options.
-///
-/// The width comes from the SHAPED widest label in the menu font — the same
-/// face [`cce_ui::widget::context_menu`] uses for the toolkit's own menus.
-/// The old `bytes * 7.5` estimate belonged to neither face, so the plate was
-/// sized for a font nothing here draws in.
-fn context_menu_size(options: &[(String, Option<Message>)]) -> (f32, f32) {
-    let (family, size) = cce_ui::widget::context_menu::label_font();
-    let widest = options
-        .iter()
-        .map(|(s, _)| cce_ui::widget::display::measure_text_width(s, &family, size))
-        .fold(0.0f32, f32::max);
-    // TODO(style): 24 is the menu's own label side-padding (12 a side), a
-    // control-level number the toolkit's context_menu should supply.
-    let w = (widest + 24.0).max(MENU_MIN_W);
-    let h = options.len() as f32 * ROW_H;
-    (w, h)
-}
 
 /// Computed rects for the prompt modal ("Open with…" / "Rename"), so layout
 /// and hit-testing agree.
@@ -244,45 +223,30 @@ fn occlude_text(list: &mut cce_ui::scene::paint::DisplayList, overlays: &[[f32; 
 
 // ── State ───────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-struct ContextMenu {
-    visible: bool,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    options: Vec<(String, Option<Message>)>,
-    hovered: Option<usize>,
-}
-
-/// A row of the breadcrumb's context menu that the app runs itself.
-#[derive(Clone, Debug, PartialEq)]
-enum BreadcrumbRow {
-    CopyPath(String),
-    View(Page),
-}
-
-/// The breadcrumb's context menu while it is open: which show of the shared
-/// menu it is (`context_menu::generation`), so a stale one never runs, and
-/// what each row does (`None` for the header and the separator).
-struct BreadcrumbMenu {
+/// The shared context menu while it shows rows the app runs itself — a
+/// list row's, a Space tile's or a graph node's menu, the breadcrumb's, the
+/// preview pane's corner menu: which show of it this is
+/// (`context_menu::generation`), so a stale pick never runs, and what each
+/// row sends (`None` for a header or a separator). The toolkit runs nothing
+/// for these rows: a press, Enter or a screen reader's Click on one records
+/// it (`context_menu::take_picked`) and the app sends the row's message
+/// ([`FilesystemApp::take_menu_pick`]).
+struct AppMenu {
     generation: u64,
-    rows: Vec<Option<BreadcrumbRow>>,
+    rows: Vec<Option<Message>>,
+    /// The preview pane's corner menu, whose dot stays lit while it is open.
+    corner: bool,
 }
 
 /// The breadcrumb menu below its header: Copy Path, then the view switch —
 /// a dropdown beside the breadcrumb until 2026-10-06 — offering the views
-/// other than the one showing. Not all three with the current one marked:
-/// the menu face has no radio or check glyph (a "●" drew as a blank), and
-/// the page itself says which view it is.
-fn breadcrumb_menu_rows(path: String, current: Page) -> (Vec<String>, Vec<Option<BreadcrumbRow>>) {
-    let mut labels = vec!["Copy Path".to_string(), "-".to_string()];
-    let mut rows = vec![Some(BreadcrumbRow::CopyPath(path)), None];
+/// other than the one showing (the page itself says which view it is).
+fn breadcrumb_menu_rows(path: String, current: Page) -> Vec<(String, Option<Message>)> {
+    let mut rows = vec![("Copy Path".to_string(), Some(Message::CopyPath(path))), ("-".to_string(), None)];
     for page in Page::ALL.into_iter().filter(|&p| p != current) {
-        labels.push(page.view_label().to_string());
-        rows.push(Some(BreadcrumbRow::View(page)));
+        rows.push((page.view_label().to_string(), Some(Message::SwitchPage(page))));
     }
-    (labels, rows)
+    rows
 }
 
 /// The context menu for one path — a Space tile or a graph node — header
@@ -573,7 +537,9 @@ struct FilesystemApp {
     /// process's own, any later one is a replacement after a reconnect. See
     /// `renderer_init`.
     seen_renderer: bool,
-    context_menu: ContextMenu,
+    /// The app's own messages, for what arrives between events: a row of
+    /// an [`AppMenu`] run by a screen reader's Click (taken in `tick`).
+    sender: calloop::channel::Sender<Message>,
     prompt_dialog: Option<PromptDialog>,
     browse_split: SplitPane,
     network_split: SplitPane,
@@ -584,12 +550,9 @@ struct FilesystemApp {
     /// The three splits' fracs as they stood before a collapse, restored on
     /// expand.
     preview_prior_fracs: Option<(f32, f32, f32)>,
-    /// Rows of the OPEN plate-dock corner menu (empty = not ours); routed
-    /// before the generic context-menu dispatch.
-    plate_menu_actions: Vec<cce_ui::widget::plate_dock::PlateDockAction>,
-    /// The breadcrumb's context menu when it is the one open; routed, like
-    /// the plate-dock rows, before the generic context-menu dispatch.
-    breadcrumb_menu: Option<BreadcrumbMenu>,
+    /// The shared menu's rows while the app's own are showing; routed
+    /// before the toolkit's dispatch.
+    app_menu: Option<AppMenu>,
     // Space's double-click is tracked by path, not row index: its tiles are
     // renumbered by every relayout, so an index would not survive a resize.
     last_space_click_time: std::time::Instant,
@@ -685,11 +648,47 @@ impl FilesystemApp {
         self.fs_service.send(services::fs::FsRequest::ScanTree(dir, cancel));
     }
 
-    /// Show the app's context menu at (x, y). Row 0 of `options` is the
-    /// non-interactive header.
+    /// Show the app's context menu at (x, y) — a list row's, a Space tile's,
+    /// a graph node's. Row 0 of `options` is the header (dim, never run).
     fn open_context_menu(&mut self, x: f32, y: f32, options: Vec<(String, Option<Message>)>) {
-        let (w, h) = context_menu_size(&options);
-        self.context_menu = ContextMenu { visible: true, x, y, w, h, options, hovered: None };
+        let target = self.ui_context[self.paginator].base().id();
+        self.show_app_menu(x, y, options, 1, target, false);
+    }
+
+    /// Show the shared menu at (x, y) with rows the app runs: `rows` are
+    /// (label, what the row sends), the first `header_count` of them
+    /// headers. `target` is the widget a toolkit action would run on — none
+    /// of these rows has one, and every pick is routed without a context, so
+    /// it only ties the menu to a widget whose hiding hides it.
+    fn show_app_menu(
+        &mut self,
+        x: f32,
+        y: f32,
+        rows: Vec<(String, Option<Message>)>,
+        header_count: usize,
+        target: cce_ui::widget::WidgetId,
+        corner: bool,
+    ) {
+        use cce_ui::widget::context_menu as cm;
+        let (labels, rows): (Vec<String>, Vec<Option<Message>>) = rows.into_iter().unzip();
+        cm::show(x, y, labels, header_count, target);
+        self.app_menu = Some(AppMenu { generation: cm::generation(), rows, corner });
+    }
+
+    /// Whether the shared menu showing is the app's own — the show
+    /// [`AppMenu`] was built for, not since replaced or dismissed.
+    fn app_menu_live(&self) -> bool {
+        use cce_ui::widget::context_menu as cm;
+        cm::is_visible() && self.app_menu.as_ref().is_some_and(|m| m.generation == cm::generation())
+    }
+
+    /// The message of the app-menu row run since the last call — a press,
+    /// a release, Enter or a screen reader's Click on it — once. A pick from
+    /// any other show of the menu is dropped.
+    fn take_menu_pick(&mut self) -> Option<Message> {
+        let (generation, row) = cce_ui::widget::context_menu::take_picked()?;
+        let menu = self.app_menu.take_if(|m| m.generation == generation)?;
+        menu.rows.into_iter().nth(row).flatten()
     }
 
     /// Ask for `path`'s preview unless that is what was last asked for and
@@ -969,87 +968,11 @@ impl FilesystemApp {
             }
         }
 
-        // The overlays: the app's context menu, then the prompt dialog. Their
-        // faces are what the text beneath is cut away from.
+        // The overlay: the prompt dialog. Its faces are what the text beneath
+        // is cut away from. (The context menus are the toolkit's shared menu,
+        // painted by display_list over the frame or hosted in a popup.)
         let mut over = cce_ui::scene::paint::PaintCtx::new();
         let mut faces: Vec<[f32; 4]> = Vec::new();
-        if self.context_menu.visible {
-            let cx = self.context_menu.x;
-            let cy = self.context_menu.y;
-            let cw = self.context_menu.w;
-            let ch = self.context_menu.h;
-
-            // The menu is a lit plate of the same material as the surface it
-            // opens on: it takes the HOST plate's face rather than a popover
-            // color of its own, and floats as frosted glass — the configured
-            // translucency plus the blur-behind sentinel (negative alpha), which
-            // is the breadcrumb's raised-run treatment. The frost is not
-            // decoration at this alpha: it is what keeps the labels readable
-            // over live content instead of over a legible-by-luck backdrop.
-            //
-            // A fully transparent host fill degrades to the edges-only boss,
-            // exactly as the raised run does — with no face to tint, a plate
-            // would paint a hole.
-            let menu_r = cce_ui::layout::plate_corner_radius();
-            let face = cce_ui::color::page_low_color();
-            if face[3] > 0.001 {
-                let mut frosted = face;
-                frosted[3] = -frosted[3];
-                let depth = cce_ui::layout::bevel_width().min(ch * 0.2);
-                over.plate(
-                    pages::rect(cx, cy, cw, ch),
-                    (menu_r, menu_r, menu_r, menu_r),
-                    &cce_ui::scene::Material::from_fill(frosted),
-                    depth,
-                );
-                faces.push([cx, cy, cw, ch]);
-            } else {
-                pages::raised(&mut over, cx, cy, cw, ch, menu_r);
-            }
-            // Hover highlight, inset off the roll so it sits on the face rather
-            // than climbing the lit edge. The last row is the only one that meets
-            // a rounded corner (row 0 is the header and never highlights), so it
-            // carries the plate's radius on the bottom two.
-            if let Some(h_idx) = self.context_menu.hovered {
-                let iy = cy + h_idx as f32 * ROW_H;
-                let inset = (cce_ui::layout::bevel_width().min(ch * 0.2) * 0.5).max(2.0);
-                let last = h_idx + 1 == self.context_menu.options.len();
-                let hover = [cx + inset, iy + 2.0, cw - 2.0 * inset, ROW_H - 4.0];
-                pages::fill_rounded(
-                    &mut over,
-                    [0.20, 0.40, 0.65, 0.6],
-                    hover[0],
-                    hover[1],
-                    hover[2],
-                    hover[3],
-                    (menu_r - inset).max(0.0),
-                    (false, false, last, last),
-                );
-                faces.push(hover);
-            }
-            // Text options, in the DE's menu font — family and size. Drawn
-            // with a hardcoded 12.0 and no family, the row menu read in the
-            // default sans while the list it opened over wore the configured
-            // face.
-            let (menu_family, menu_size) = cce_ui::widget::context_menu::label_font();
-            for (idx, (opt, _)) in self.context_menu.options.iter().enumerate() {
-                let iy = cy + idx as f32 * ROW_H + (ROW_H - menu_size) / 2.0;
-                // The toolkit's semantic text colors, not the hand-mixed greys
-                // that came with the near-black popover face: the header's old
-                // 0.44 grey was a step above black and all but vanishes on the
-                // plate's own mid-slate.
-                let text_color = if idx == 0 {
-                    cce_ui::color::TEXT_DIM
-                } else if self.context_menu.hovered == Some(idx) {
-                    cce_ui::color::TEXT_HEADER
-                } else {
-                    cce_ui::color::TEXT_FG
-                };
-                // TODO(style): the row label's 8px lead-in is a control-level inset.
-                pages::text(&mut over, opt, cx + 8.0, iy, menu_size, text_color, Some(&menu_family), None);
-            }
-        }
-
         // The prompt dialog: backdrop, panel, title, and its well and buttons
         // ON the panel. The well painted with the window's widgets until
         // 2026-10-12, under the panel: its caret and selection were covered,
@@ -1113,8 +1036,11 @@ impl Application for FilesystemApp {
         if self.prompt_dialog.is_some() {
             return false;
         }
-        // 2. If context menu is visible, do not drag
-        if self.context_menu.visible {
+        // 2. If a context menu is up, do not drag: the press is the menu's
+        // (it runs a row or closes the menu). Without this a press over the
+        // plate under a menu drawn in the window (no popup) moved the window
+        // and only its release reached the app.
+        if cce_ui::widget::context_menu::is_visible() {
             return false;
         }
         // 3. If in the sidebar area (when sidebar is active), do not drag
@@ -1210,8 +1136,7 @@ impl Application for FilesystemApp {
             focused_well: FocusedWell::Content,
             preview_dock: Default::default(),
             preview_prior_fracs: None,
-            plate_menu_actions: Vec::new(),
-            breadcrumb_menu: None,
+            app_menu: None,
             select_mode,
             select_directory,
             save_mode,
@@ -1231,15 +1156,7 @@ impl Application for FilesystemApp {
             watcher: None,
             fs_service,
             seen_renderer: false,
-            context_menu: ContextMenu {
-                visible: false,
-                x: 0.0,
-                y: 0.0,
-                w: 120.0,
-                h: 0.0,
-                options: Vec::new(),
-                hovered: None,
-            },
+            sender: sender.clone(),
             prompt_dialog: None,
             browse_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
             network_split: SplitPane::new(0.49, 100.0, 100.0, cce_ui::layout::root_plate_gap()),
@@ -1517,6 +1434,10 @@ impl Application for FilesystemApp {
             Message::CopyPath(path) => {
                 cce_ui::widget::clipboard::copy_to_clipboard(&path);
             }
+            Message::PreviewDock(action) => {
+                self.dispatch_preview_dock(action);
+                *needs_rebuild = true;
+            }
             Message::OpenFile(path) => {
                 services::fs::open_file(&path);
             }
@@ -1530,6 +1451,13 @@ impl Application for FilesystemApp {
         if self.ui_context.tick(dt) {
             *needs_rebuild = true;
             self.needs_rebuild = true;
+        }
+
+        // A row of the app's own menu run between events — a screen
+        // reader's Click — is sent from here; the pointer and the keyboard
+        // take theirs in their own hooks.
+        if let Some(msg) = self.take_menu_pick() {
+            let _ = self.sender.send(msg);
         }
 
         if self.just_initialized {
@@ -1669,7 +1597,7 @@ impl Application for FilesystemApp {
             }
             if let Some(c) = dock::corner_center(band, stubbed) {
                 let emphasized = dock::corner_hit(c, self.cursor_x, self.cursor_y)
-                    || !self.plate_menu_actions.is_empty();
+                    || (self.app_menu_live() && self.app_menu.as_ref().is_some_and(|m| m.corner));
                 dock::draw_corner_dot(&mut pc, c, emphasized);
             }
         }
@@ -1721,29 +1649,6 @@ impl Application for FilesystemApp {
         // The toolkit's shared context menu gets the pointer exclusively while open.
         if cce_ui::widget::context_menu::is_visible() {
             if cce_ui::widget::context_menu::cursor_moved(pos.x, pos.y) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-            return;
-        }
-
-        if self.context_menu.visible {
-            let cx = self.context_menu.x;
-            let cy = self.context_menu.y;
-            let cw = self.context_menu.w;
-            let ch = self.context_menu.h;
-            let was_hovered = self.context_menu.hovered;
-            self.context_menu.hovered = None;
-            if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + ch {
-                let idx = ((pos.y - cy) / ROW_H) as usize;
-                if idx < self.context_menu.options.len() && idx > 0 {
-                    self.context_menu.hovered = Some(idx);
-                }
-            }
-            if self.context_menu.hovered != was_hovered {
-                changed = true;
-            }
-            if changed {
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1849,57 +1754,39 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        // The preview pane's plate-dock menu (cce-ui RFC 7c-2) routes BEFORE
-        // the generic context-menu dispatch below: that path targets widget
-        // ContextActions, not these rows. Keyed on RELEASE: in this app the
-        // routed-widget path upstream consumes left PRESSES before the hook
-        // (only releases reliably arrive here).
-        if button == MouseButton::Left
-            && state == ElementState::Released
-            && !self.plate_menu_actions.is_empty()
-            && cce_ui::widget::context_menu::is_visible()
-        {
-            let (px, py) = (pos.x as f32, pos.y as f32);
-            let picked = cce_ui::widget::context_menu::row_at(px, py)
-                .and_then(|row| self.plate_menu_actions.get(row).copied());
-            cce_ui::widget::context_menu::hide();
-            self.plate_menu_actions.clear();
-            if let Some(action) = picked {
-                self.dispatch_preview_dock(action);
-            }
-            *needs_rebuild = true;
-            self.needs_rebuild = true;
-            return None;
-        }
-
-        // The breadcrumb's menu rows run here too, ahead of the toolkit's
-        // dispatch — it would run Copy Path but has no notion of the view
-        // rows. On the press as well as the release: the toolkit runs a row
-        // on the PRESS when one reaches it, so whichever arrives first wins,
-        // and the hide it does leaves nothing for the other.
-        if button == MouseButton::Left {
+        // The app's own menus (a row's, a tile's, a node's, the breadcrumb's,
+        // the preview pane's corner menu) route BEFORE the toolkit's dispatch
+        // below, and with no context, so the toolkit runs nothing for their
+        // rows — not even the actions its label fallback would read into
+        // "Copy Path" or "Delete" — and only records the pick, which the app
+        // sends (`take_menu_pick`). A right press off the menu closes it and
+        // falls through, so a right-click elsewhere opens the menu there.
+        if self.app_menu_live() {
             use cce_ui::widget::context_menu as cm;
-            let live = self.breadcrumb_menu.as_ref().is_some_and(|m| cm::is_visible() && m.generation == cm::generation());
-            if !live {
-                self.breadcrumb_menu = None;
-            } else if cm::hit_test(pos.x as f32, pos.y as f32) {
-                let picked = cm::row_at(pos.x as f32, pos.y as f32)
-                    .and_then(|row| self.breadcrumb_menu.as_ref()?.rows.get(row).cloned().flatten());
-                // A press on the header or the separator leaves the menu up.
-                if let Some(row) = picked {
-                    cm::hide();
-                    self.breadcrumb_menu = None;
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return match row {
-                        BreadcrumbRow::CopyPath(path) => {
-                            cce_ui::widget::clipboard::copy_to_clipboard(&path);
-                            None
+            let (px, py) = (pos.x as f32, pos.y as f32);
+            if button == MouseButton::Right && state == ElementState::Pressed && !cm::hit_test(px, py) {
+                cm::hide();
+                self.app_menu = None;
+            } else {
+                match state {
+                    // A row runs (and the menu closes); anywhere else the
+                    // press closes it.
+                    ElementState::Pressed => {
+                        cm::mouse_input(button, state, px, py, None);
+                    }
+                    // On a release too: under a menu drawn in the window a
+                    // press can be taken for a window move before it gets
+                    // here, and then only the release arrives.
+                    ElementState::Released if button == MouseButton::Left => {
+                        if let Some(row) = cm::row_at(px, py) {
+                            cm::activate(row, None);
                         }
-                        BreadcrumbRow::View(page) => Some(Message::SwitchPage(page)),
-                    };
+                    }
+                    _ => {}
                 }
-                return None;
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return self.take_menu_pick();
             }
         }
 
@@ -1913,16 +1800,12 @@ impl Application for FilesystemApp {
             let band = self.preview_dock_band();
             if let Some(c) = dock::corner_center(band, self.preview_dock.stubbed()) {
                 if dock::corner_hit(c, pos.x as f32, pos.y as f32) {
-                    let rows = dock::standard_menu(self.preview_dock, false);
-                    let (labels, actions): (Vec<String>, Vec<_>) = rows.into_iter().unzip();
-                    cce_ui::widget::context_menu::show(
-                        c.0 - dock::CORNER_R,
-                        c.1 + dock::CORNER_R,
-                        labels,
-                        0,
-                        self.ui_context[self.paginator].base().id(),
-                    );
-                    self.plate_menu_actions = actions;
+                    let rows = dock::standard_menu(self.preview_dock, false)
+                        .into_iter()
+                        .map(|(label, action)| (label, Some(Message::PreviewDock(action))))
+                        .collect();
+                    let target = self.ui_context[self.paginator].base().id();
+                    self.show_app_menu(c.0 - dock::CORNER_R, c.1 + dock::CORNER_R, rows, 0, target, true);
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                     return None;
@@ -1986,39 +1869,6 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if self.context_menu.visible {
-            if state == ElementState::Pressed {
-                let cx = self.context_menu.x;
-                let cy = self.context_menu.y;
-                let cw = self.context_menu.w;
-                let ch = self.context_menu.h;
-
-                let mut clicked_option = None;
-                if pos.x >= cx && pos.x <= cx + cw && pos.y >= cy && pos.y <= cy + ch {
-                    let idx = ((pos.y - cy) / ROW_H) as usize;
-                    if idx < self.context_menu.options.len() && idx > 0 {
-                        clicked_option = self.context_menu.options[idx].1.clone();
-                    }
-                }
-
-                self.context_menu.visible = false;
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-
-                if let Some(action) = clicked_option {
-                    return Some(action);
-                }
-
-                if button == MouseButton::Right {
-                    // Fall through to allow right-clicking another item to show a new context menu
-                } else {
-                    return None;
-                }
-            } else {
-                return None;
-            }
-        }
-
         if button == MouseButton::Right && state == ElementState::Pressed {
             let crumb = match self.current_page {
                 Page::Browse => self.browse.breadcrumb,
@@ -2038,12 +1888,10 @@ impl Application for FilesystemApp {
                     use cce_ui::widget::context_menu as cm;
                     let breadcrumb = &self.ui_context[crumb];
                     let seg = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
-                    let (labels, actions) = breadcrumb_menu_rows(breadcrumb.path_to_seg(seg), self.current_page);
+                    let rows = breadcrumb_menu_rows(breadcrumb.path_to_seg(seg), self.current_page);
                     let header = cm::options().into_iter().next().unwrap_or_default();
-                    let options: Vec<String> = std::iter::once(header).chain(labels).collect();
-                    let rows = std::iter::once(None).chain(actions).collect();
-                    cm::show(cm::x(), cm::y(), options, 1, root);
-                    self.breadcrumb_menu = Some(BreadcrumbMenu { generation: cm::generation(), rows });
+                    let rows = std::iter::once((header, None)).chain(rows).collect();
+                    self.show_app_menu(cm::x(), cm::y(), rows, 1, root, false);
                     *needs_rebuild = true;
                     self.needs_rebuild = true;
                     return None;
@@ -2508,6 +2356,30 @@ impl Application for FilesystemApp {
             return None;
         }
 
+        // The app's own menu, while it is up, takes the keys a menu reads:
+        // Up / Down walk its highlight, Enter runs the highlighted row.
+        // (Escape never gets here: the runner closes the menu with it.)
+        if self.app_menu_live() {
+            use cce_ui::widget::context_menu as cm;
+            use cce_ui::widget::{Key, NamedKey};
+            match event.logical_key {
+                Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
+                    let dir = if event.logical_key == Key::Named(NamedKey::ArrowDown) { 1 } else { -1 };
+                    cm::step_hovered(dir);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    cm::activate_hovered(None);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return self.take_menu_pick();
+                }
+                _ => {}
+            }
+        }
+
         // A button holding the keyboard (Tab walks to it) takes Enter / Space
         // ahead of the page's own keys and the prompt's Enter-submits.
         if let Some(focused) = self.ui_context.focused_widget
@@ -2545,15 +2417,6 @@ impl Application for FilesystemApp {
             let kev = cce_ui::widget::Event::KeyInput(event.clone());
             let root = self.network.graph.id();
             if self.ui_context.propagate_event(&kev, root) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                return None;
-            }
-        }
-
-        if self.context_menu.visible {
-            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) {
-                self.context_menu.visible = false;
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
                 return None;
@@ -2786,18 +2649,19 @@ mod tests {
 
     #[test]
     fn the_breadcrumb_menu_offers_the_other_views() {
-        let (labels, rows) = breadcrumb_menu_rows("/home/me".to_string(), Page::Network);
+        let rows = breadcrumb_menu_rows("/home/me".to_string(), Page::Network);
+        let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(labels, ["Copy Path", "-", "List", "Space"]);
-        assert_eq!(rows, [
-            Some(BreadcrumbRow::CopyPath("/home/me".to_string())),
-            None,
-            Some(BreadcrumbRow::View(Page::Browse)),
-            Some(BreadcrumbRow::View(Page::Space)),
-        ]);
+        assert!(matches!(&rows[0].1, Some(Message::CopyPath(p)) if p == "/home/me"));
+        assert!(rows[1].1.is_none(), "the separator sends nothing");
+        assert!(matches!(rows[2].1, Some(Message::SwitchPage(Page::Browse))));
+        assert!(matches!(rows[3].1, Some(Message::SwitchPage(Page::Space))));
         for page in Page::ALL {
-            let (labels, rows) = breadcrumb_menu_rows(String::new(), page);
-            assert_eq!(labels.len(), rows.len(), "a row for every label");
-            assert!(!rows.contains(&Some(BreadcrumbRow::View(page))), "{page:?} offers itself");
+            let rows = breadcrumb_menu_rows(String::new(), page);
+            assert!(
+                !rows.iter().any(|(_, m)| matches!(m, Some(Message::SwitchPage(p)) if *p == page)),
+                "{page:?} offers itself"
+            );
         }
     }
 

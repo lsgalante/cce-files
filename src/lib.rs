@@ -21,4 +21,6 @@ pub enum Message {
     CopyPath(String),
     /// Open a file with its default handler.
     OpenFile(std::path::PathBuf),
+    /// A row of the preview pane's corner menu: collapse or expand the pane.
+    PreviewDock(cce_ui::widget::plate_dock::PlateDockAction),
 }

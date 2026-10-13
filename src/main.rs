@@ -881,9 +881,6 @@ impl FilesystemApp {
         self.ui_context[self.browse.save_name_box].prepare_text(&mut self.font_system);
         self.ui_context[self.browse.search_box].prepare_text(&mut self.font_system);
 
-        cce_ui::widget::hover_animation::reset_frame_registration();
-        cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
-
         // root plate container DISSOLVED: top-level widgets register parentless below; the
         // window plate tuple is emitted in the legacy aggregate order (after the plain
         // child quads).

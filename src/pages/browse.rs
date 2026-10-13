@@ -447,6 +447,15 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage, ctx: &mut UiContext) 
             Some(crate::services::fs::FsRequest::ReadDirectory(path))
         }
         BrowseMessage::DirectoryLoaded(path, entries) => {
+            // Going up (to the parent, or to any ancestor from the breadcrumb)
+            // selects the folder just left — the child of `path` on the way
+            // back down to where the list was.
+            let came_from = state
+                .current_dir
+                .strip_prefix(&path)
+                .ok()
+                .and_then(|rest| rest.components().next())
+                .map(|first| path.join(first));
             state.current_dir = path.clone();
             state.all_entries = entries;
             state.pending_select = None;
@@ -454,6 +463,12 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage, ctx: &mut UiContext) 
             ctx[state.search_box].edit_buffer.clear();
             state.search_visible = false;
             apply_filters(state, ctx);
+            if let Some(idx) = came_from.and_then(|p| state.entries.iter().position(|e| e.path == p)) {
+                state.selected = Some(idx);
+            }
+            // The scroll is still the last directory's: bring the selection
+            // into view even when its index happens to match the old one.
+            state.autoscrolled_to = None;
             state.update_breadcrumb(ctx);
             Some(crate::services::fs::FsRequest::SaveLastDir(path))
         }
@@ -732,6 +747,24 @@ mod tests {
         assert_eq!(state.current_dir, PathBuf::from("/d"));
         assert_eq!(state.entries.len(), 2);
         assert!(matches!(req, Some(crate::services::fs::FsRequest::SaveLastDir(p)) if p == PathBuf::from("/d")));
+    }
+
+    #[test]
+    fn going_up_selects_the_folder_just_left() {
+        let mut ui = UiContext::new();
+        let mut state = BrowseState::new(&mut ui);
+        let entries = || vec![entry("a", "/d/a", true), entry("b", "/d/b", true), entry("c", "/d/c", true)];
+        // To the parent.
+        state.current_dir = PathBuf::from("/d/b");
+        update(&mut state, BrowseMessage::DirectoryLoaded(PathBuf::from("/d"), entries()), &mut ui);
+        assert_eq!(state.selected, Some(1));
+        // To a further ancestor: the child on the way back down.
+        state.current_dir = PathBuf::from("/d/c/x/y");
+        update(&mut state, BrowseMessage::DirectoryLoaded(PathBuf::from("/d"), entries()), &mut ui);
+        assert_eq!(state.selected, Some(2));
+        // Going down selects the first row, as before.
+        update(&mut state, BrowseMessage::DirectoryLoaded(PathBuf::from("/d/a"), vec![entry("z", "/d/a/z", false), entry("q", "/d/a/q", false)]), &mut ui);
+        assert_eq!(state.selected, Some(0));
     }
 
     #[test]

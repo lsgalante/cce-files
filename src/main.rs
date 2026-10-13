@@ -614,23 +614,73 @@ impl FilesystemApp {
         })
     }
 
-    /// The message of the live button clicked since the last call (a pointer
-    /// release on it, or Enter / Space while it has the keyboard). A prompt
-    /// button closes the prompt's field first, so Submit reads what it holds.
-    fn take_button_click(&mut self) -> Option<Message> {
-        let mut picked = None;
-        for (h, msg) in self.live_buttons() {
-            if self.ui_context[h].take_click() && picked.is_none() {
-                picked = Some(msg);
+    /// What the widgets reported since the last call (`take_events`), as the
+    /// messages they send, in order: a live button clicked (a pointer
+    /// release on it, Enter / Space while it has the keyboard, an assistive
+    /// tool's click), the search box edited (typed, pasted, set by an
+    /// assistive tool). A prompt button closes the prompt's field first, so
+    /// Submit reads what it holds. Every other report — the save-name and
+    /// prompt fields' edits, which are read when they are submitted — is
+    /// dropped.
+    fn widget_messages(&mut self) -> Vec<Message> {
+        use cce_ui::widget::WidgetEvent;
+        let buttons = self.live_buttons();
+        let search = self.browse.search_box.id();
+        let mut out = Vec::new();
+        let mut clicked = false;
+        for (id, ev) in self.ui_context.take_events() {
+            match ev {
+                WidgetEvent::Clicked => {
+                    if let Some((_, msg)) = buttons.iter().find(|(h, _)| h.id() == id) {
+                        out.push(msg.clone());
+                        clicked = true;
+                    }
+                }
+                WidgetEvent::Changed if id == search => {
+                    let text = self.ui_context[self.browse.search_box].text.clone();
+                    out.push(Message::Browse(pages::browse::BrowseMessage::SearchChanged(text)));
+                }
+                _ => {}
             }
         }
-        if picked.is_some() {
+        if clicked {
             if let Some(tb) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
                 self.ui_context[tb].unfocus();
                 self.ui_context.clear_focus();
             }
         }
-        picked
+        out
+    }
+
+    /// Sweep the widgets' reports ([`Self::widget_messages`]) from a hook
+    /// that returns one message: every one but the last runs now, the last
+    /// is returned, so they arrive in the order they were raised.
+    fn drain_widget_events(&mut self, needs_rebuild: &mut bool) -> Option<Message> {
+        let mut msgs = self.widget_messages();
+        let last = msgs.pop();
+        self.run_now(msgs, needs_rebuild);
+        last
+    }
+
+    /// The widgets' reports swept after a hook that returned `msg`: they
+    /// were raised during it, so they run first and `msg` is returned. A
+    /// hook with nothing of its own returns the sweep's last.
+    fn after_dispatch(&mut self, msg: Option<Message>, needs_rebuild: &mut bool) -> Option<Message> {
+        match msg {
+            Some(msg) => {
+                let msgs = self.widget_messages();
+                self.run_now(msgs, needs_rebuild);
+                Some(msg)
+            }
+            None => self.drain_widget_events(needs_rebuild),
+        }
+    }
+
+    fn run_now(&mut self, msgs: Vec<Message>, needs_rebuild: &mut bool) {
+        for msg in msgs {
+            let mut exit = false;
+            self.update(msg, needs_rebuild, &mut exit);
+        }
     }
 
     /// Kick off a subtree scan if the Space page is showing a directory it has
@@ -1013,6 +1063,763 @@ impl FilesystemApp {
         self.frame = frame;
         self.ui_context.clear_dirty();
         self.needs_rebuild = false;
+    }
+}
+
+// ── Input dispatch ──────────────────────────────────────────────────
+//
+// The pointer and key hooks' bodies; the trait's hooks call these, then
+// sweep what the widgets reported (`after_dispatch`).
+
+impl FilesystemApp {
+    /// `handle_mouse_input` before the widget sweep (`after_dispatch`).
+    fn mouse_input(&mut self, button: MouseButton, state: ElementState, pos: LogicalPosition, needs_rebuild: &mut bool) -> Option<Message> {
+        if button != MouseButton::Left && button != MouseButton::Right {
+            return None;
+        }
+
+        // The app's own menus (a row's, a tile's, a node's, the breadcrumb's,
+        // the preview pane's corner menu) route BEFORE the toolkit's dispatch
+        // below, and with no context, so the toolkit runs nothing for their
+        // rows — not even the actions its label fallback would read into
+        // "Copy Path" or "Delete" — and only records the pick, which the app
+        // sends (`take_menu_pick`). A right press off the menu closes it and
+        // falls through, so a right-click elsewhere opens the menu there.
+        if self.app_menu_live() {
+            use cce_ui::widget::context_menu as cm;
+            let (px, py) = (pos.x as f32, pos.y as f32);
+            if button == MouseButton::Right && state == ElementState::Pressed && !cm::hit_test(px, py) {
+                cm::hide();
+                self.app_menu = None;
+            } else {
+                match state {
+                    // A row runs (and the menu closes); anywhere else the
+                    // press closes it.
+                    ElementState::Pressed => {
+                        cm::mouse_input(button, state, px, py, None);
+                    }
+                    // On a release too: under a menu drawn in the window a
+                    // press can be taken for a window move before it gets
+                    // here, and then only the release arrives.
+                    ElementState::Released if button == MouseButton::Left => {
+                        if let Some(row) = cm::row_at(px, py) {
+                            cm::activate(row, None);
+                        }
+                    }
+                    _ => {}
+                }
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return self.take_menu_pick();
+            }
+        }
+
+        // A left RELEASE on the preview pane's corner control opens its menu
+        // (the designer also opens on release; presses do not reliably reach
+        // this hook — see above). No press arming: the arming protocol
+        // disambiguates click from dock-DRAG, and a single pane has nowhere
+        // to dock.
+        if button == MouseButton::Left && state == ElementState::Released {
+            use cce_ui::widget::plate_dock as dock;
+            let band = self.preview_dock_band();
+            if let Some(c) = dock::corner_center(band, self.preview_dock.stubbed()) {
+                if dock::corner_hit(c, pos.x as f32, pos.y as f32) {
+                    let rows = dock::standard_menu(self.preview_dock, false)
+                        .into_iter()
+                        .map(|(label, action)| (label, Some(Message::PreviewDock(action))))
+                        .collect();
+                    let target = self.ui_context[self.paginator].base().id();
+                    self.show_app_menu(c.0 - dock::CORNER_R, c.1 + dock::CORNER_R, rows, 0, target, true);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            }
+        }
+
+        // The toolkit's shared context menu (breadcrumb, config-bound controls)
+        // swallows the click — select or dismiss — before any widget routing.
+        if cce_ui::widget::context_menu::is_visible() {
+            if cce_ui::widget::context_menu::mouse_input(button, state, pos.x, pos.y, Some(&mut self.ui_context)) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            return None;
+        }
+
+        if let Some(textbox) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
+            let r = prompt_rects(self.width as f32, self.height as f32);
+            let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
+            let (tb_x, tb_y, tb_w, tb_h) = r.tb;
+            let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+
+            if state == ElementState::Pressed {
+                let clicked_inside = pos.x >= dialog_x && pos.x <= dialog_x + dialog_w && pos.y >= dialog_y && pos.y <= dialog_y + dialog_h;
+                if !clicked_inside {
+                    self.ui_context[textbox].unfocus();
+                    self.ui_context.clear_focus();
+                    return Some(Message::PromptCancel);
+                }
+
+                if button == MouseButton::Left {
+                    if pos.x >= tb_x && pos.x <= tb_x + tb_w && pos.y >= tb_y && pos.y <= tb_y + tb_h {
+                        let root = textbox.id();
+                        if self.ui_context.propagate_event(&ev, root) {
+                            self.ui_context.set_focused_id(textbox.id());
+                        }
+                    } else if !self.route_buttons(&ev) {
+                        // A press on the panel, off the well and the buttons
+                        // (a button's press arms it; its release clicks it).
+                        self.ui_context[textbox].unfocus();
+                        self.ui_context.clear_focus();
+                    }
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                }
+            } else if button == MouseButton::Left {
+                if self.ui_context[textbox].editing {
+                    let root = textbox.id();
+                    if self.ui_context.propagate_event(&ev, root) {
+                        *needs_rebuild = true;
+                        self.needs_rebuild = true;
+                    }
+                }
+                // Cancel or the OK button, released on after a press on it.
+                self.route_buttons(&ev);
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return self.drain_widget_events(needs_rebuild);
+            }
+            return None;
+        }
+
+        if button == MouseButton::Right && state == ElementState::Pressed {
+            let crumb = match self.current_page {
+                Page::Browse => self.browse.breadcrumb,
+                Page::Network => self.network.breadcrumb,
+                Page::Space => self.space.breadcrumb,
+            };
+            if self.ui_context[crumb].hit_test(pos.x, pos.y, &self.ui_context) {
+                let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+                let root = crumb.id();
+                // The breadcrumb opens the toolkit's shared context menu itself
+                // (open_context_menu → segment header + Copy Path), recording
+                // the segment pressed. The app then shows that menu again,
+                // where it stands and under the same header, with the view
+                // switch added: the toolkit builds a breadcrumb's rows by type
+                // name and takes none from the app.
+                if self.ui_context.propagate_event(&ev, root) {
+                    use cce_ui::widget::context_menu as cm;
+                    let breadcrumb = &self.ui_context[crumb];
+                    let seg = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
+                    let rows = breadcrumb_menu_rows(breadcrumb.path_to_seg(seg), self.current_page);
+                    let header = cm::options().into_iter().next().unwrap_or_default();
+                    let rows = std::iter::once((header, None)).chain(rows).collect();
+                    self.show_app_menu(cm::x(), cm::y(), rows, 1, root, false);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            }
+
+            // Row context menu: hit-test the list directly — rows stopped being
+            // page_buttons when the List became a widget (Phase 6z), so the old
+            // button probe never fired.
+            {
+                let entry_idx = if self.current_page == Page::Browse {
+                    self.browse.list.row_at(pos.x, pos.y)
+                } else {
+                    None
+                };
+
+                if let Some(idx) = entry_idx {
+                    if let Some(entry) = self.browse.entries.get(idx) {
+                        let is_trash_dir = services::trash::is_trash_files_dir(&self.browse.current_dir);
+                        let header = if entry.is_dir {
+                            format!("[Directory] {}", entry.name)
+                        } else {
+                            format!("[File] {}", entry.name)
+                        };
+
+                        let mut options = vec![
+                            (header, None),
+                        ];
+
+                        if entry.is_dir {
+                            if is_project_dir(&entry.path) {
+                                options.push(("Open Project".to_string(), Some(Message::SelectOpen)));
+                                options.push(("Enter Directory".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(entry.path.clone())))));
+                            } else {
+                                options.push(("Open".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)))));
+                            }
+                        } else {
+                            options.push(("Select".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)))));
+                        }
+
+                        options.push(("Open with...".to_string(), Some(Message::PromptOpenWith(entry.path.clone()))));
+                        if !is_trash_dir {
+                            options.push(("Rename".to_string(), Some(Message::PromptRename(entry.path.clone()))));
+                        }
+
+                        if is_trash_dir {
+                            options.push(("Restore".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::RestoreEntry(idx)))));
+                            options.push(("Delete Permanently".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntryPermanent(idx)))));
+                            options.push(("Empty Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::EmptyTrash))));
+                        } else {
+                            options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
+                            options.push(("New Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NewFolder))));
+                            if let Some(trash_files) = services::trash::files_dir() {
+                                options.push(("Open Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(trash_files)))));
+                            }
+                        }
+
+                        self.open_context_menu(pos.x, pos.y, options);
+                        *needs_rebuild = true;
+                        self.needs_rebuild = true;
+                        return None;
+                    }
+                } else if let Some(tile) = (self.current_page == Page::Space)
+                    .then(|| self.space.tile_at(pos.x, pos.y))
+                    .flatten()
+                    .and_then(|idx| self.space.tiles.get(idx))
+                {
+                    let options = space_tile_menu(tile);
+                    self.open_context_menu(pos.x, pos.y, options);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                } else if let Some(options) = (self.current_page == Page::Network)
+                    .then(|| {
+                        // Only a node inside the pane: a panned graph's nodes
+                        // run on under the breadcrumb and the preview.
+                        let (x, y, w, h) = self.network.laid_out_for;
+                        let inside = pos.x >= x && pos.x < x + w && pos.y >= y && pos.y < y + h;
+                        inside.then(|| self.ui_context[self.network.graph].inner().node_at(pos.x, pos.y)).flatten()
+                    })
+                    .flatten()
+                    .and_then(|idx| graph_node_menu(idx, &self.browse.current_dir, &self.browse.entries))
+                {
+                    self.open_context_menu(pos.x, pos.y, options);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                } else if self.current_page == Page::Browse
+                    && self.browse.list.hit(pos.x, pos.y)
+                    && pos.y <= self.browse.list.y + self.browse.list.viewport_h
+                    && !services::trash::is_trash_files_dir(&self.browse.current_dir)
+                {
+                    // Empty space below the rows: a menu for the directory itself.
+                    let name = self
+                        .browse
+                        .current_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "/".to_string());
+                    let options = vec![
+                        (format!("[Directory] {}", name), None),
+                        ("New Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NewFolder))),
+                    ];
+                    self.open_context_menu(pos.x, pos.y, options);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            }
+        }
+
+        let mut changed = false;
+
+        log::debug!("MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
+        let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+        let menu_match = !self.select_mode && {
+            // Self-routing composite: handle_event, not propagate (see pointer move).
+            self.ui_context.lend_h(self.paginator, |w, ctx| w.handle_event(&ev, ctx)).unwrap_or(false)
+        };
+        if menu_match {
+            if let Some((idx, _)) = self.ui_context[self.paginator].menu_click() {
+                if idx < Page::ALL.len() {
+                    self.ui_context.clear_focus();
+                    self.current_page = Page::ALL[idx];
+                }
+            }
+            *needs_rebuild = true;
+            self.needs_rebuild = true;
+            return None;
+        }
+
+        // The dissolved splitter's divider: a left press grabs it (stealing keyboard
+        // focus like the legacy ctx.set_focused_ptr / release's clear_focus pair did),
+        // a release ends the drag. A collapsed preview owns its column width;
+        // the divider is not draggable until the pane expands.
+        if button == MouseButton::Left && !self.preview_dock.collapsed {
+            let split = match self.current_page {
+                Page::Browse => &mut self.browse_split,
+                Page::Network => &mut self.network_split,
+                Page::Space => &mut self.space_split,
+            };
+            if state == ElementState::Pressed {
+                if split.press(pos.x, pos.y) {
+                    self.ui_context.clear_focus();
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            } else if split.release() {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return None;
+            }
+        }
+
+        // Well focus follows the left click, keyed on RELEASE like the
+        // plate-dock control above: the routed-widget path consumes left
+        // PRESSES before this hook, so only releases reliably arrive here.
+        // Every overlay above the page (plate-dock menu, context menu, dialog,
+        // divider grab) has already returned, so a release reaching
+        // here is on page content: move the accent ring to the well it landed
+        // in, then let the release do its normal work. Releases outside any
+        // well (toolbar, plate) change nothing.
+        if button == MouseButton::Left && state == ElementState::Released {
+            let new_focus = if !self.preview_dock.collapsed
+                && let Some(well) = self.preview.well_at(pos.x, pos.y)
+            {
+                Some(match well {
+                    cce_files::preview_pane::PreviewWell::Top => FocusedWell::PreviewTop,
+                    cce_files::preview_pane::PreviewWell::Bottom => FocusedWell::PreviewBottom,
+                })
+            } else {
+                let split = match self.current_page {
+                    Page::Browse => &self.browse_split,
+                    Page::Network => &self.network_split,
+                    Page::Space => &self.space_split,
+                };
+                let (lx, ly, lw, lh) = split.left_rect();
+                if pos.x >= lx && pos.x <= lx + lw && pos.y >= ly && pos.y <= ly + lh {
+                    Some(FocusedWell::Content)
+                } else {
+                    None
+                }
+            };
+            if let Some(f) = new_focus
+                && f != self.focused_well
+            {
+                self.focused_well = f;
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        }
+
+        if self.current_page == Page::Browse {
+            if self.select_mode {
+                if { let root = self.browse.save_name_box.id(); self.ui_context.propagate_event(&ev, root) } {
+                    if state == ElementState::Pressed {
+                        self.ui_context.set_focused_id(self.browse.save_name_box.id());
+                    }
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                }
+            }
+            if self.browse.search_visible
+                && button == MouseButton::Left
+                && { let root = self.browse.search_box.id(); self.ui_context.propagate_event(&ev, root) }
+            {
+                self.ui_context.set_focused_id(self.browse.search_box.id());
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            if button == MouseButton::Left
+                && self.browse.list.mouse_input(state == ElementState::Pressed, pos.x, pos.y)
+            {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                if let Some(idx) = self.browse.list.take_double_click() {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
+                }
+                if let Some(idx) = self.browse.list.take_click() {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)));
+                }
+            }
+            if button == MouseButton::Left && state == ElementState::Pressed {
+                if self.ui_context[self.browse.breadcrumb].hit_test(pos.x, pos.y, &self.ui_context) {
+                    if { let root = self.browse.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
+                        if let Some(seg) = self.ui_context[self.browse.breadcrumb].path_click() {
+                            let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
+                            *needs_rebuild = true;
+                            self.needs_rebuild = true;
+                        }
+                    }
+                }
+            }
+        } else if self.current_page == Page::Network {
+            if button == MouseButton::Left {
+                if state == ElementState::Pressed {
+                    if self.ui_context[self.network.breadcrumb].hit_test(pos.x, pos.y, &self.ui_context) {
+                        if { let root = self.network.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
+                            if let Some(seg) = self.ui_context[self.network.breadcrumb].path_click() {
+                                let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
+                                self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
+                                changed = true;
+                            }
+                        }
+                    } else if {
+                        // Routed press: a node grab records the drag target; the router's
+                        // DragStart replaces the immediate drag_begin (3px threshold).
+                        let root = self.network.graph.id();
+                        self.ui_context.propagate_event(&ev, root)
+                    } {
+                        changed = true;
+                    }
+                } else if state == ElementState::Released {
+                    // The router delivers DragEnd (commit) before the release reaches
+                    // Graph; a committed drag leaves the release arm inert.
+                    let was_dragging = self.ui_context.is_dragging;
+                    let root = self.network.graph.id();
+                    if self.ui_context.propagate_event(&ev, root) || was_dragging {
+                        changed = true;
+                    }
+                }
+            }
+
+            // Sync selection from graph to browse state
+            let has_parent = self.browse.current_dir.parent().is_some();
+            let offset = if has_parent { 2 } else { 1 };
+            if let Some(node_sel) = self.ui_context[self.network.graph].selected_node() {
+                if node_sel >= offset {
+                    let entry_idx = node_sel - offset;
+                    if self.browse.selected != Some(entry_idx) {
+                        self.browse.selected = Some(entry_idx);
+                        if let Some(entry) = self.browse.entries.get(entry_idx) {
+                            if self.select_mode {
+                                self.ui_context[self.browse.save_name_box].text = entry.name.clone();
+                                if self.ui_context[self.browse.save_name_box].editing {
+                                    self.ui_context[self.browse.save_name_box].edit_buffer = entry.name.clone();
+                                }
+                            }
+                            let path = entry.path.clone();
+                            self.request_preview(path, false);
+                        }
+                        changed = true;
+                    }
+                } else {
+                    if self.browse.selected.is_some() {
+                        self.browse.selected = None;
+                        self.clear_preview();
+                        changed = true;
+                    }
+                }
+            } else {
+                if self.browse.selected.is_some() {
+                    self.browse.selected = None;
+                    self.clear_preview();
+                    changed = true;
+                }
+            }
+
+            // Sync double click navigation
+            if let Some(dbl_idx) = self.ui_context[self.network.graph].double_clicked_node() {
+                self.ui_context[self.network.graph].clear_double_clicked_node();
+                if has_parent && dbl_idx == 0 {
+                    if let Some(parent) = self.browse.current_dir.parent() {
+                        let parent_path = parent.to_path_buf();
+                        self.fs_service.send(services::fs::FsRequest::ReadDirectory(parent_path));
+                        changed = true;
+                    }
+                } else if dbl_idx >= offset {
+                    let entry_idx = dbl_idx - offset;
+                    if let Some(entry) = self.browse.entries.get(entry_idx) {
+                        if entry.is_dir && !is_project_dir(&entry.path) {
+                            let path = entry.path.clone();
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
+                            changed = true;
+                        } else if self.select_mode {
+                            self.ui_context[self.browse.save_name_box].text = entry.name.clone();
+                            if self.ui_context[self.browse.save_name_box].editing {
+                                self.ui_context[self.browse.save_name_box].edit_buffer = entry.name.clone();
+                            }
+                            return Some(Message::SelectOpen);
+                        }
+                    }
+                }
+            }
+
+            if changed {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        } else if self.current_page == Page::Space {
+            if button == MouseButton::Left && state == ElementState::Pressed {
+                if self.ui_context[self.space.breadcrumb].hit_test(pos.x, pos.y, &self.ui_context) {
+                    if { let root = self.space.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
+                        if let Some(seg) = self.ui_context[self.space.breadcrumb].path_click() {
+                            let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
+                            changed = true;
+                        }
+                    }
+                } else if let Some(idx) = self.space.tile_at(pos.x, pos.y) {
+                    let tile_path = self.space.tiles[idx].path.clone();
+                    let is_dir = self.space.tiles[idx].is_dir;
+
+                    // Same temporal double-click as the Browse list — the
+                    // toolkit does not deliver a double-click event.
+                    let now = std::time::Instant::now();
+                    let is_double = self.last_space_path.as_ref() == Some(&tile_path)
+                        && now.duration_since(self.last_space_click_time).as_millis() < 500;
+                    self.last_space_click_time = now;
+                    self.last_space_path = Some(tile_path.clone());
+
+                    if is_double {
+                        if is_dir {
+                            // Navigating re-roots the map: ReadDirectory moves
+                            // current_dir, and ensure_space_scan rescans it.
+                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(tile_path));
+                        } else {
+                            services::fs::open_file(&tile_path);
+                        }
+                    } else {
+                        self.space.selected_path = Some(tile_path.clone());
+                        self.request_preview(tile_path, false);
+                    }
+                    changed = true;
+                }
+            }
+            if changed {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        }
+
+        if state == ElementState::Pressed {
+            let clicked_search = self.current_page == Page::Browse && self.browse.search_visible && self.ui_context[self.browse.search_box].hit_test(pos.x, pos.y, &self.ui_context);
+            let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.ui_context[self.browse.save_name_box].hit_test(pos.x, pos.y, &self.ui_context);
+            if !clicked_search {
+                self.ui_context.unfocus_id(self.browse.search_box.id());
+            }
+            if !clicked_save_name {
+                self.ui_context.unfocus_id(self.browse.save_name_box.id());
+            }
+            if !clicked_search && !clicked_save_name {
+                self.ui_context.clear_focus();
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+        }
+
+        // The chooser's buttons: a press arms the one under it, the release
+        // on it clicks it.
+        if button == MouseButton::Left {
+            let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+            if self.route_buttons(&ev) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            if let Some(msg) = self.drain_widget_events(needs_rebuild) {
+                return Some(msg);
+            }
+        }
+
+        None
+    }
+
+    /// `handle_key_input` before the widget sweep (`after_dispatch`).
+    fn key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Message> {
+        if event.state != ElementState::Pressed {
+            return None;
+        }
+
+        // The app's own menu, while it is up, takes the keys a menu reads:
+        // Up / Down walk its highlight, Enter runs the highlighted row.
+        // (Escape never gets here: the runner closes the menu with it.)
+        if self.app_menu_live() {
+            use cce_ui::widget::context_menu as cm;
+            use cce_ui::widget::{Key, NamedKey};
+            match event.logical_key {
+                Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
+                    let dir = if event.logical_key == Key::Named(NamedKey::ArrowDown) { 1 } else { -1 };
+                    cm::step_hovered(dir);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    cm::activate_hovered(None);
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return self.take_menu_pick();
+                }
+                _ => {}
+            }
+        }
+
+        // A button holding the keyboard (Tab walks to it) takes Enter / Space
+        // ahead of the page's own keys and the prompt's Enter-submits.
+        if let Some(focused) = self.ui_context.focused_widget
+            && self.live_buttons().iter().any(|(h, _)| h.id() == focused)
+        {
+            let kev = cce_ui::widget::Event::KeyInput(event.clone());
+            if self.ui_context.propagate_event(&kev, focused) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return self.drain_widget_events(needs_rebuild);
+            }
+        }
+
+        if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
+            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
+                self.ui_context[*textbox].unfocus();
+                self.ui_context.clear_focus();
+                return Some(Message::PromptSubmit);
+            }
+            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) {
+                self.ui_context[*textbox].unfocus();
+                self.ui_context.clear_focus();
+                return Some(Message::PromptCancel);
+            }
+            let kev = cce_ui::widget::Event::KeyInput(event.clone());
+            let root = textbox.id();
+            if self.ui_context.propagate_event(&kev, root) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            return None;
+        }
+
+        if self.current_page == Page::Network {
+            let kev = cce_ui::widget::Event::KeyInput(event.clone());
+            let root = self.network.graph.id();
+            if self.ui_context.propagate_event(&kev, root) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return None;
+            }
+        }
+
+        // The dissolved List's search keys, app-side: the open shortcut shows the strip
+        // and focuses the box; the close shortcut hides it and clears the filter (the
+        // legacy List set just_changed after clearing, which surfaced as an empty
+        // SearchChanged); anything else goes to the box while it is open.
+        if self.current_page == Page::Browse {
+            if !self.browse.search_visible {
+                let open_key = cce_ui::color::list_open_search_key();
+                if cce_ui::widget::match_key_shortcut(event, &open_key) {
+                    self.browse.search_visible = true;
+                    self.ui_context.focus_id(self.browse.search_box.id());
+                    self.ui_context.set_focused_id(self.browse.search_box.id());
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return None;
+                }
+            } else {
+                let close_key = cce_ui::color::list_close_search_key();
+                if cce_ui::widget::match_key_shortcut(event, &close_key) {
+                    self.browse.search_visible = false;
+                    self.ui_context.unfocus_id(self.browse.search_box.id());
+                    self.ui_context.clear_focus();
+                    // Emptied outright, the buffer with the text: the box
+                    // reports an edit wherever its text and buffer differ,
+                    // and a query left in the buffer would filter the list
+                    // again at the next sweep, the strip hidden.
+                    let search = &mut self.ui_context[self.browse.search_box];
+                    search.text.clear();
+                    search.edit_buffer.clear();
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(String::new())));
+                }
+                if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let root = self.browse.search_box.id(); self.ui_context.propagate_event(&kev, root) } {
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
+                    // An edit comes back as SearchChanged.
+                    return self.drain_widget_events(needs_rebuild);
+                }
+            }
+        }
+
+        // If the save_name_box is focused, forward key inputs to it
+        if self.select_mode && self.ui_context[self.browse.save_name_box].editing {
+            if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let root = self.browse.save_name_box.id(); self.ui_context.propagate_event(&kev, root) } {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
+                    self.ui_context.unfocus_id(self.browse.save_name_box.id());
+                    self.ui_context.clear_focus();
+                    return Some(Message::SelectOpen);
+                }
+                return None;
+            }
+        }
+
+        // Global key navigation. Arrow keys, Backspace, and Escape are fixed;
+        // the rest resolve through input.kdl (see BrowseKeys).
+        if self.current_page == Page::Browse {
+            match &event.logical_key {
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowUp) => {
+                    if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
+                        return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
+                    }
+                }
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowDown) => {
+                    if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
+                        return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
+                    }
+                }
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) => {
+                    if self.select_mode {
+                        std::process::exit(1);
+                    }
+                }
+                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Backspace) => {
+                    if let Some(parent) = self.browse.current_dir.parent() {
+                        return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
+                    }
+                }
+                _ => {}
+            }
+
+            let m = |chord: &str| cce_ui::widget::match_key_shortcut(event, chord);
+            if m(&self.keys.open_file) {
+                if let Some(idx) = self.browse.selected {
+                    if let Some(entry) = self.browse.entries.get(idx) {
+                        if entry.is_dir && !is_project_dir(&entry.path) {
+                            return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
+                        } else {
+                            return Some(Message::SelectOpen);
+                        }
+                    }
+                } else if self.save_mode {
+                    return Some(Message::SelectOpen);
+                }
+            } else if m(&self.keys.select_next) {
+                if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
+                }
+            } else if m(&self.keys.select_prev) {
+                if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
+                }
+            } else if m(&self.keys.enter_dir) {
+                if let Some(idx) = self.browse.selected {
+                    if let Some(entry) = self.browse.entries.get(idx) {
+                        if entry.is_dir && !is_project_dir(&entry.path) {
+                            return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
+                        }
+                    }
+                }
+            } else if m(&self.keys.parent_dir) {
+                if let Some(parent) = self.browse.current_dir.parent() {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
+                }
+            } else if m(&self.keys.delete_entry) {
+                if let Some(idx) = self.browse.selected {
+                    return Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)));
+                }
+            } else if m(&self.keys.toggle_hidden) {
+                return Some(Message::Browse(pages::browse::BrowseMessage::ToggleHidden));
+            }
+        }
+
+        None
     }
 }
 
@@ -1453,10 +2260,14 @@ impl Application for FilesystemApp {
             self.needs_rebuild = true;
         }
 
-        // A row of the app's own menu run between events — a screen
-        // reader's Click — is sent from here; the pointer and the keyboard
-        // take theirs in their own hooks.
+        // What arrived between events — a screen reader's Click on a row of
+        // the app's own menu or on a button, its edit of the search box — is
+        // sent from here; the pointer and the keyboard hooks take theirs as
+        // they dispatch.
         if let Some(msg) = self.take_menu_pick() {
+            let _ = self.sender.send(msg);
+        }
+        for msg in self.widget_messages() {
             let _ = self.sender.send(msg);
         }
 
@@ -1750,552 +2561,13 @@ impl Application for FilesystemApp {
         }
     }
     fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, pos: LogicalPosition, needs_rebuild: &mut bool) -> Option<Self::Message> {
-        if button != MouseButton::Left && button != MouseButton::Right {
-            return None;
-        }
+        let msg = self.mouse_input(button, state, pos, needs_rebuild);
+        self.after_dispatch(msg, needs_rebuild)
+    }
 
-        // The app's own menus (a row's, a tile's, a node's, the breadcrumb's,
-        // the preview pane's corner menu) route BEFORE the toolkit's dispatch
-        // below, and with no context, so the toolkit runs nothing for their
-        // rows — not even the actions its label fallback would read into
-        // "Copy Path" or "Delete" — and only records the pick, which the app
-        // sends (`take_menu_pick`). A right press off the menu closes it and
-        // falls through, so a right-click elsewhere opens the menu there.
-        if self.app_menu_live() {
-            use cce_ui::widget::context_menu as cm;
-            let (px, py) = (pos.x as f32, pos.y as f32);
-            if button == MouseButton::Right && state == ElementState::Pressed && !cm::hit_test(px, py) {
-                cm::hide();
-                self.app_menu = None;
-            } else {
-                match state {
-                    // A row runs (and the menu closes); anywhere else the
-                    // press closes it.
-                    ElementState::Pressed => {
-                        cm::mouse_input(button, state, px, py, None);
-                    }
-                    // On a release too: under a menu drawn in the window a
-                    // press can be taken for a window move before it gets
-                    // here, and then only the release arrives.
-                    ElementState::Released if button == MouseButton::Left => {
-                        if let Some(row) = cm::row_at(px, py) {
-                            cm::activate(row, None);
-                        }
-                    }
-                    _ => {}
-                }
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                return self.take_menu_pick();
-            }
-        }
-
-        // A left RELEASE on the preview pane's corner control opens its menu
-        // (the designer also opens on release; presses do not reliably reach
-        // this hook — see above). No press arming: the arming protocol
-        // disambiguates click from dock-DRAG, and a single pane has nowhere
-        // to dock.
-        if button == MouseButton::Left && state == ElementState::Released {
-            use cce_ui::widget::plate_dock as dock;
-            let band = self.preview_dock_band();
-            if let Some(c) = dock::corner_center(band, self.preview_dock.stubbed()) {
-                if dock::corner_hit(c, pos.x as f32, pos.y as f32) {
-                    let rows = dock::standard_menu(self.preview_dock, false)
-                        .into_iter()
-                        .map(|(label, action)| (label, Some(Message::PreviewDock(action))))
-                        .collect();
-                    let target = self.ui_context[self.paginator].base().id();
-                    self.show_app_menu(c.0 - dock::CORNER_R, c.1 + dock::CORNER_R, rows, 0, target, true);
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                }
-            }
-        }
-
-        // The toolkit's shared context menu (breadcrumb, config-bound controls)
-        // swallows the click — select or dismiss — before any widget routing.
-        if cce_ui::widget::context_menu::is_visible() {
-            if cce_ui::widget::context_menu::mouse_input(button, state, pos.x, pos.y, Some(&mut self.ui_context)) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-            return None;
-        }
-
-        if let Some(textbox) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
-            let r = prompt_rects(self.width as f32, self.height as f32);
-            let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
-            let (tb_x, tb_y, tb_w, tb_h) = r.tb;
-            let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-
-            if state == ElementState::Pressed {
-                let clicked_inside = pos.x >= dialog_x && pos.x <= dialog_x + dialog_w && pos.y >= dialog_y && pos.y <= dialog_y + dialog_h;
-                if !clicked_inside {
-                    self.ui_context[textbox].unfocus();
-                    self.ui_context.clear_focus();
-                    return Some(Message::PromptCancel);
-                }
-
-                if button == MouseButton::Left {
-                    if pos.x >= tb_x && pos.x <= tb_x + tb_w && pos.y >= tb_y && pos.y <= tb_y + tb_h {
-                        let root = textbox.id();
-                        if self.ui_context.propagate_event(&ev, root) {
-                            self.ui_context.set_focused_id(textbox.id());
-                        }
-                    } else if !self.route_buttons(&ev) {
-                        // A press on the panel, off the well and the buttons
-                        // (a button's press arms it; its release clicks it).
-                        self.ui_context[textbox].unfocus();
-                        self.ui_context.clear_focus();
-                    }
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                }
-            } else if button == MouseButton::Left {
-                if self.ui_context[textbox].editing {
-                    let root = textbox.id();
-                    if self.ui_context.propagate_event(&ev, root) {
-                        *needs_rebuild = true;
-                        self.needs_rebuild = true;
-                    }
-                }
-                // Cancel or the OK button, released on after a press on it.
-                self.route_buttons(&ev);
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                return self.take_button_click();
-            }
-            return None;
-        }
-
-        if button == MouseButton::Right && state == ElementState::Pressed {
-            let crumb = match self.current_page {
-                Page::Browse => self.browse.breadcrumb,
-                Page::Network => self.network.breadcrumb,
-                Page::Space => self.space.breadcrumb,
-            };
-            if self.ui_context[crumb].hit_test(pos.x, pos.y, &self.ui_context) {
-                let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-                let root = crumb.id();
-                // The breadcrumb opens the toolkit's shared context menu itself
-                // (open_context_menu → segment header + Copy Path), recording
-                // the segment pressed. The app then shows that menu again,
-                // where it stands and under the same header, with the view
-                // switch added: the toolkit builds a breadcrumb's rows by type
-                // name and takes none from the app.
-                if self.ui_context.propagate_event(&ev, root) {
-                    use cce_ui::widget::context_menu as cm;
-                    let breadcrumb = &self.ui_context[crumb];
-                    let seg = breadcrumb.right_clicked_seg.unwrap_or(breadcrumb.path.len());
-                    let rows = breadcrumb_menu_rows(breadcrumb.path_to_seg(seg), self.current_page);
-                    let header = cm::options().into_iter().next().unwrap_or_default();
-                    let rows = std::iter::once((header, None)).chain(rows).collect();
-                    self.show_app_menu(cm::x(), cm::y(), rows, 1, root, false);
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                }
-            }
-
-            // Row context menu: hit-test the list directly — rows stopped being
-            // page_buttons when the List became a widget (Phase 6z), so the old
-            // button probe never fired.
-            {
-                let entry_idx = if self.current_page == Page::Browse {
-                    self.browse.list.row_at(pos.x, pos.y)
-                } else {
-                    None
-                };
-
-                if let Some(idx) = entry_idx {
-                    if let Some(entry) = self.browse.entries.get(idx) {
-                        let is_trash_dir = services::trash::is_trash_files_dir(&self.browse.current_dir);
-                        let header = if entry.is_dir {
-                            format!("[Directory] {}", entry.name)
-                        } else {
-                            format!("[File] {}", entry.name)
-                        };
-
-                        let mut options = vec![
-                            (header, None),
-                        ];
-
-                        if entry.is_dir {
-                            if is_project_dir(&entry.path) {
-                                options.push(("Open Project".to_string(), Some(Message::SelectOpen)));
-                                options.push(("Enter Directory".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(entry.path.clone())))));
-                            } else {
-                                options.push(("Open".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)))));
-                            }
-                        } else {
-                            options.push(("Select".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)))));
-                        }
-
-                        options.push(("Open with...".to_string(), Some(Message::PromptOpenWith(entry.path.clone()))));
-                        if !is_trash_dir {
-                            options.push(("Rename".to_string(), Some(Message::PromptRename(entry.path.clone()))));
-                        }
-
-                        if is_trash_dir {
-                            options.push(("Restore".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::RestoreEntry(idx)))));
-                            options.push(("Delete Permanently".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntryPermanent(idx)))));
-                            options.push(("Empty Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::EmptyTrash))));
-                        } else {
-                            options.push(("Delete".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)))));
-                            options.push(("New Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NewFolder))));
-                            if let Some(trash_files) = services::trash::files_dir() {
-                                options.push(("Open Trash".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(trash_files)))));
-                            }
-                        }
-
-                        self.open_context_menu(pos.x, pos.y, options);
-                        *needs_rebuild = true;
-                        self.needs_rebuild = true;
-                        return None;
-                    }
-                } else if let Some(tile) = (self.current_page == Page::Space)
-                    .then(|| self.space.tile_at(pos.x, pos.y))
-                    .flatten()
-                    .and_then(|idx| self.space.tiles.get(idx))
-                {
-                    let options = space_tile_menu(tile);
-                    self.open_context_menu(pos.x, pos.y, options);
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                } else if let Some(options) = (self.current_page == Page::Network)
-                    .then(|| {
-                        // Only a node inside the pane: a panned graph's nodes
-                        // run on under the breadcrumb and the preview.
-                        let (x, y, w, h) = self.network.laid_out_for;
-                        let inside = pos.x >= x && pos.x < x + w && pos.y >= y && pos.y < y + h;
-                        inside.then(|| self.ui_context[self.network.graph].inner().node_at(pos.x, pos.y)).flatten()
-                    })
-                    .flatten()
-                    .and_then(|idx| graph_node_menu(idx, &self.browse.current_dir, &self.browse.entries))
-                {
-                    self.open_context_menu(pos.x, pos.y, options);
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                } else if self.current_page == Page::Browse
-                    && self.browse.list.hit(pos.x, pos.y)
-                    && pos.y <= self.browse.list.y + self.browse.list.viewport_h
-                    && !services::trash::is_trash_files_dir(&self.browse.current_dir)
-                {
-                    // Empty space below the rows: a menu for the directory itself.
-                    let name = self
-                        .browse
-                        .current_dir
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "/".to_string());
-                    let options = vec![
-                        (format!("[Directory] {}", name), None),
-                        ("New Folder".to_string(), Some(Message::Browse(pages::browse::BrowseMessage::NewFolder))),
-                    ];
-                    self.open_context_menu(pos.x, pos.y, options);
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                }
-            }
-        }
-
-        let mut changed = false;
-
-        log::debug!("MOUSE INPUT: {:?} {:?} pos=({}, {})", button, state, pos.x, pos.y);
-        let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-        let menu_match = !self.select_mode && {
-            // Self-routing composite: handle_event, not propagate (see pointer move).
-            self.ui_context.lend_h(self.paginator, |w, ctx| w.handle_event(&ev, ctx)).unwrap_or(false)
-        };
-        if menu_match {
-            if let Some((idx, _)) = self.ui_context[self.paginator].menu_click() {
-                if idx < Page::ALL.len() {
-                    self.ui_context.clear_focus();
-                    self.current_page = Page::ALL[idx];
-                }
-            }
-            *needs_rebuild = true;
-            self.needs_rebuild = true;
-            return None;
-        }
-
-        // The dissolved splitter's divider: a left press grabs it (stealing keyboard
-        // focus like the legacy ctx.set_focused_ptr / release's clear_focus pair did),
-        // a release ends the drag. A collapsed preview owns its column width;
-        // the divider is not draggable until the pane expands.
-        if button == MouseButton::Left && !self.preview_dock.collapsed {
-            let split = match self.current_page {
-                Page::Browse => &mut self.browse_split,
-                Page::Network => &mut self.network_split,
-                Page::Space => &mut self.space_split,
-            };
-            if state == ElementState::Pressed {
-                if split.press(pos.x, pos.y) {
-                    self.ui_context.clear_focus();
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                }
-            } else if split.release() {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                return None;
-            }
-        }
-
-        // Well focus follows the left click, keyed on RELEASE like the
-        // plate-dock control above: the routed-widget path consumes left
-        // PRESSES before this hook, so only releases reliably arrive here.
-        // Every overlay above the page (plate-dock menu, context menu, dialog,
-        // divider grab) has already returned, so a release reaching
-        // here is on page content: move the accent ring to the well it landed
-        // in, then let the release do its normal work. Releases outside any
-        // well (toolbar, plate) change nothing.
-        if button == MouseButton::Left && state == ElementState::Released {
-            let new_focus = if !self.preview_dock.collapsed
-                && let Some(well) = self.preview.well_at(pos.x, pos.y)
-            {
-                Some(match well {
-                    cce_files::preview_pane::PreviewWell::Top => FocusedWell::PreviewTop,
-                    cce_files::preview_pane::PreviewWell::Bottom => FocusedWell::PreviewBottom,
-                })
-            } else {
-                let split = match self.current_page {
-                    Page::Browse => &self.browse_split,
-                    Page::Network => &self.network_split,
-                    Page::Space => &self.space_split,
-                };
-                let (lx, ly, lw, lh) = split.left_rect();
-                if pos.x >= lx && pos.x <= lx + lw && pos.y >= ly && pos.y <= ly + lh {
-                    Some(FocusedWell::Content)
-                } else {
-                    None
-                }
-            };
-            if let Some(f) = new_focus
-                && f != self.focused_well
-            {
-                self.focused_well = f;
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-        }
-
-        if self.current_page == Page::Browse {
-            if self.select_mode {
-                if { let root = self.browse.save_name_box.id(); self.ui_context.propagate_event(&ev, root) } {
-                    if state == ElementState::Pressed {
-                        self.ui_context.set_focused_id(self.browse.save_name_box.id());
-                    }
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                }
-            }
-            if self.browse.search_visible
-                && button == MouseButton::Left
-                && { let root = self.browse.search_box.id(); self.ui_context.propagate_event(&ev, root) }
-            {
-                self.ui_context.set_focused_id(self.browse.search_box.id());
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-            if button == MouseButton::Left
-                && self.browse.list.mouse_input(state == ElementState::Pressed, pos.x, pos.y)
-            {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                if let Some(idx) = self.browse.list.take_double_click() {
-                    return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
-                }
-                if let Some(idx) = self.browse.list.take_click() {
-                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(idx)));
-                }
-            }
-            if button == MouseButton::Left && state == ElementState::Pressed {
-                if self.ui_context[self.browse.breadcrumb].hit_test(pos.x, pos.y, &self.ui_context) {
-                    if { let root = self.browse.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
-                        if let Some(seg) = self.ui_context[self.browse.breadcrumb].path_click() {
-                            let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
-                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
-                            *needs_rebuild = true;
-                            self.needs_rebuild = true;
-                        }
-                    }
-                }
-            }
-        } else if self.current_page == Page::Network {
-            if button == MouseButton::Left {
-                if state == ElementState::Pressed {
-                    if self.ui_context[self.network.breadcrumb].hit_test(pos.x, pos.y, &self.ui_context) {
-                        if { let root = self.network.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
-                            if let Some(seg) = self.ui_context[self.network.breadcrumb].path_click() {
-                                let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
-                                self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
-                                changed = true;
-                            }
-                        }
-                    } else if {
-                        // Routed press: a node grab records the drag target; the router's
-                        // DragStart replaces the immediate drag_begin (3px threshold).
-                        let root = self.network.graph.id();
-                        self.ui_context.propagate_event(&ev, root)
-                    } {
-                        changed = true;
-                    }
-                } else if state == ElementState::Released {
-                    // The router delivers DragEnd (commit) before the release reaches
-                    // Graph; a committed drag leaves the release arm inert.
-                    let was_dragging = self.ui_context.is_dragging;
-                    let root = self.network.graph.id();
-                    if self.ui_context.propagate_event(&ev, root) || was_dragging {
-                        changed = true;
-                    }
-                }
-            }
-
-            // Sync selection from graph to browse state
-            let has_parent = self.browse.current_dir.parent().is_some();
-            let offset = if has_parent { 2 } else { 1 };
-            if let Some(node_sel) = self.ui_context[self.network.graph].selected_node() {
-                if node_sel >= offset {
-                    let entry_idx = node_sel - offset;
-                    if self.browse.selected != Some(entry_idx) {
-                        self.browse.selected = Some(entry_idx);
-                        if let Some(entry) = self.browse.entries.get(entry_idx) {
-                            if self.select_mode {
-                                self.ui_context[self.browse.save_name_box].text = entry.name.clone();
-                                if self.ui_context[self.browse.save_name_box].editing {
-                                    self.ui_context[self.browse.save_name_box].edit_buffer = entry.name.clone();
-                                }
-                            }
-                            let path = entry.path.clone();
-                            self.request_preview(path, false);
-                        }
-                        changed = true;
-                    }
-                } else {
-                    if self.browse.selected.is_some() {
-                        self.browse.selected = None;
-                        self.clear_preview();
-                        changed = true;
-                    }
-                }
-            } else {
-                if self.browse.selected.is_some() {
-                    self.browse.selected = None;
-                    self.clear_preview();
-                    changed = true;
-                }
-            }
-
-            // Sync double click navigation
-            if let Some(dbl_idx) = self.ui_context[self.network.graph].double_clicked_node() {
-                self.ui_context[self.network.graph].clear_double_clicked_node();
-                if has_parent && dbl_idx == 0 {
-                    if let Some(parent) = self.browse.current_dir.parent() {
-                        let parent_path = parent.to_path_buf();
-                        self.fs_service.send(services::fs::FsRequest::ReadDirectory(parent_path));
-                        changed = true;
-                    }
-                } else if dbl_idx >= offset {
-                    let entry_idx = dbl_idx - offset;
-                    if let Some(entry) = self.browse.entries.get(entry_idx) {
-                        if entry.is_dir && !is_project_dir(&entry.path) {
-                            let path = entry.path.clone();
-                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(path));
-                            changed = true;
-                        } else if self.select_mode {
-                            self.ui_context[self.browse.save_name_box].text = entry.name.clone();
-                            if self.ui_context[self.browse.save_name_box].editing {
-                                self.ui_context[self.browse.save_name_box].edit_buffer = entry.name.clone();
-                            }
-                            return Some(Message::SelectOpen);
-                        }
-                    }
-                }
-            }
-
-            if changed {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-        } else if self.current_page == Page::Space {
-            if button == MouseButton::Left && state == ElementState::Pressed {
-                if self.ui_context[self.space.breadcrumb].hit_test(pos.x, pos.y, &self.ui_context) {
-                    if { let root = self.space.breadcrumb.id(); self.ui_context.propagate_event(&ev, root) } {
-                        if let Some(seg) = self.ui_context[self.space.breadcrumb].path_click() {
-                            let target_path = pages::browse::path_to_segment(&self.browse.current_dir, seg);
-                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(target_path));
-                            changed = true;
-                        }
-                    }
-                } else if let Some(idx) = self.space.tile_at(pos.x, pos.y) {
-                    let tile_path = self.space.tiles[idx].path.clone();
-                    let is_dir = self.space.tiles[idx].is_dir;
-
-                    // Same temporal double-click as the Browse list — the
-                    // toolkit does not deliver a double-click event.
-                    let now = std::time::Instant::now();
-                    let is_double = self.last_space_path.as_ref() == Some(&tile_path)
-                        && now.duration_since(self.last_space_click_time).as_millis() < 500;
-                    self.last_space_click_time = now;
-                    self.last_space_path = Some(tile_path.clone());
-
-                    if is_double {
-                        if is_dir {
-                            // Navigating re-roots the map: ReadDirectory moves
-                            // current_dir, and ensure_space_scan rescans it.
-                            self.fs_service.send(services::fs::FsRequest::ReadDirectory(tile_path));
-                        } else {
-                            services::fs::open_file(&tile_path);
-                        }
-                    } else {
-                        self.space.selected_path = Some(tile_path.clone());
-                        self.request_preview(tile_path, false);
-                    }
-                    changed = true;
-                }
-            }
-            if changed {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-        }
-
-        if state == ElementState::Pressed {
-            let clicked_search = self.current_page == Page::Browse && self.browse.search_visible && self.ui_context[self.browse.search_box].hit_test(pos.x, pos.y, &self.ui_context);
-            let clicked_save_name = self.select_mode && self.current_page == Page::Browse && self.ui_context[self.browse.save_name_box].hit_test(pos.x, pos.y, &self.ui_context);
-            if !clicked_search {
-                self.ui_context.unfocus_id(self.browse.search_box.id());
-            }
-            if !clicked_save_name {
-                self.ui_context.unfocus_id(self.browse.save_name_box.id());
-            }
-            if !clicked_search && !clicked_save_name {
-                self.ui_context.clear_focus();
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-        }
-
-        // The chooser's buttons: a press arms the one under it, the release
-        // on it clicks it.
-        if button == MouseButton::Left {
-            let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
-            if self.route_buttons(&ev) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-            if let Some(msg) = self.take_button_click() {
-                return Some(msg);
-            }
-        }
-
-        None
+    fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
+        let msg = self.key_input(event, needs_rebuild);
+        self.after_dispatch(msg, needs_rebuild)
     }
 
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
@@ -2351,201 +2623,6 @@ impl Application for FilesystemApp {
         self.needs_rebuild = true;
     }
 
-    fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
-        if event.state != ElementState::Pressed {
-            return None;
-        }
-
-        // The app's own menu, while it is up, takes the keys a menu reads:
-        // Up / Down walk its highlight, Enter runs the highlighted row.
-        // (Escape never gets here: the runner closes the menu with it.)
-        if self.app_menu_live() {
-            use cce_ui::widget::context_menu as cm;
-            use cce_ui::widget::{Key, NamedKey};
-            match event.logical_key {
-                Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
-                    let dir = if event.logical_key == Key::Named(NamedKey::ArrowDown) { 1 } else { -1 };
-                    cm::step_hovered(dir);
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                }
-                Key::Named(NamedKey::Enter) => {
-                    cm::activate_hovered(None);
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return self.take_menu_pick();
-                }
-                _ => {}
-            }
-        }
-
-        // A button holding the keyboard (Tab walks to it) takes Enter / Space
-        // ahead of the page's own keys and the prompt's Enter-submits.
-        if let Some(focused) = self.ui_context.focused_widget
-            && self.live_buttons().iter().any(|(h, _)| h.id() == focused)
-        {
-            let kev = cce_ui::widget::Event::KeyInput(event.clone());
-            if self.ui_context.propagate_event(&kev, focused) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                return self.take_button_click();
-            }
-        }
-
-        if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
-            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
-                self.ui_context[*textbox].unfocus();
-                self.ui_context.clear_focus();
-                return Some(Message::PromptSubmit);
-            }
-            if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) {
-                self.ui_context[*textbox].unfocus();
-                self.ui_context.clear_focus();
-                return Some(Message::PromptCancel);
-            }
-            let kev = cce_ui::widget::Event::KeyInput(event.clone());
-            let root = textbox.id();
-            if self.ui_context.propagate_event(&kev, root) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-            }
-            return None;
-        }
-
-        if self.current_page == Page::Network {
-            let kev = cce_ui::widget::Event::KeyInput(event.clone());
-            let root = self.network.graph.id();
-            if self.ui_context.propagate_event(&kev, root) {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                return None;
-            }
-        }
-
-        // The dissolved List's search keys, app-side: the open shortcut shows the strip
-        // and focuses the box; the close shortcut hides it and clears the filter (the
-        // legacy List set just_changed after clearing, which surfaced as an empty
-        // SearchChanged); anything else goes to the box while it is open.
-        if self.current_page == Page::Browse {
-            if !self.browse.search_visible {
-                let open_key = cce_ui::color::list_open_search_key();
-                if cce_ui::widget::match_key_shortcut(event, &open_key) {
-                    self.browse.search_visible = true;
-                    self.ui_context.focus_id(self.browse.search_box.id());
-                    self.ui_context.set_focused_id(self.browse.search_box.id());
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return None;
-                }
-            } else {
-                let close_key = cce_ui::color::list_close_search_key();
-                if cce_ui::widget::match_key_shortcut(event, &close_key) {
-                    self.browse.search_visible = false;
-                    self.ui_context.unfocus_id(self.browse.search_box.id());
-                    self.ui_context.clear_focus();
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(String::new())));
-                }
-                if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let root = self.browse.search_box.id(); self.ui_context.propagate_event(&kev, root) } {
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    if self.ui_context[self.browse.search_box].take_change() {
-                        return Some(Message::Browse(pages::browse::BrowseMessage::SearchChanged(
-                            self.ui_context[self.browse.search_box].text.clone()
-                        )));
-                    }
-                    return None;
-                }
-            }
-        }
-
-        // If the save_name_box is focused, forward key inputs to it
-        if self.select_mode && self.ui_context[self.browse.save_name_box].editing {
-            if { let kev = cce_ui::widget::Event::KeyInput(event.clone()); let root = self.browse.save_name_box.id(); self.ui_context.propagate_event(&kev, root) } {
-                *needs_rebuild = true;
-                self.needs_rebuild = true;
-                if event.logical_key == cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Enter) {
-                    self.ui_context.unfocus_id(self.browse.save_name_box.id());
-                    self.ui_context.clear_focus();
-                    return Some(Message::SelectOpen);
-                }
-                return None;
-            }
-        }
-
-        // Global key navigation. Arrow keys, Backspace, and Escape are fixed;
-        // the rest resolve through input.kdl (see BrowseKeys).
-        if self.current_page == Page::Browse {
-            match &event.logical_key {
-                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowUp) => {
-                    if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
-                        return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
-                    }
-                }
-                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::ArrowDown) => {
-                    if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
-                        return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
-                    }
-                }
-                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Escape) => {
-                    if self.select_mode {
-                        std::process::exit(1);
-                    }
-                }
-                cce_ui::widget::Key::Named(cce_ui::widget::NamedKey::Backspace) => {
-                    if let Some(parent) = self.browse.current_dir.parent() {
-                        return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
-                    }
-                }
-                _ => {}
-            }
-
-            let m = |chord: &str| cce_ui::widget::match_key_shortcut(event, chord);
-            if m(&self.keys.open_file) {
-                if let Some(idx) = self.browse.selected {
-                    if let Some(entry) = self.browse.entries.get(idx) {
-                        if entry.is_dir && !is_project_dir(&entry.path) {
-                            return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
-                        } else {
-                            return Some(Message::SelectOpen);
-                        }
-                    }
-                } else if self.save_mode {
-                    return Some(Message::SelectOpen);
-                }
-            } else if m(&self.keys.select_next) {
-                if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Down) {
-                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
-                }
-            } else if m(&self.keys.select_prev) {
-                if let Some(index) = pages::browse::next_selection_index(&self.browse, pages::browse::BrowseNavigation::Up) {
-                    return Some(Message::Browse(pages::browse::BrowseMessage::SelectEntry(index)));
-                }
-            } else if m(&self.keys.enter_dir) {
-                if let Some(idx) = self.browse.selected {
-                    if let Some(entry) = self.browse.entries.get(idx) {
-                        if entry.is_dir && !is_project_dir(&entry.path) {
-                            return Some(Message::Browse(pages::browse::BrowseMessage::NavigateTo(idx)));
-                        }
-                    }
-                }
-            } else if m(&self.keys.parent_dir) {
-                if let Some(parent) = self.browse.current_dir.parent() {
-                    return Some(Message::Browse(pages::browse::BrowseMessage::NavigateToPath(parent.to_path_buf())));
-                }
-            } else if m(&self.keys.delete_entry) {
-                if let Some(idx) = self.browse.selected {
-                    return Some(Message::Browse(pages::browse::BrowseMessage::DeleteEntry(idx)));
-                }
-            } else if m(&self.keys.toggle_hidden) {
-                return Some(Message::Browse(pages::browse::BrowseMessage::ToggleHidden));
-            }
-        }
-
-        None
-    }
 }
 
 // ── Main ────────────────────────────────────────────────────────────

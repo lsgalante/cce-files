@@ -84,6 +84,31 @@ struct PromptDialog {
     kind: PromptKind,
     path: std::path::PathBuf,
     textbox: Handle<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>,
+    cancel: ButtonHandle,
+    ok: ButtonHandle,
+}
+
+type ButtonHandle = Handle<cce_ui::widget::Adapted<cce_ui::widget::Button>>;
+
+/// The chooser's footer buttons (`--select`, `--select-dir`, `--save`):
+/// Cancel, and Select or Save.
+#[derive(Clone, Copy)]
+struct ChooserButtons {
+    cancel: ButtonHandle,
+    confirm: ButtonHandle,
+}
+
+/// A button wearing the toolkit's own face with no tint of its own: a
+/// transparent face over the theme's border and relief (the closed-dropdown
+/// convention) and a faint neutral hover. The toolkit's Primary face is
+/// itself blue-tinted, which is exactly what the chooser's and the prompt's
+/// buttons are not supposed to be. Placed and painted by `rebuild_layout`,
+/// routed by the input hooks (`route_buttons`).
+fn plain_button(label: &str) -> cce_ui::widget::Adapted<cce_ui::widget::Button> {
+    cce_ui::widget::Button::new(0.0, 0.0, 0.0, 0.0)
+        .with_label(label)
+        .with_bg([0.0, 0.0, 0.0, 0.0])
+        .with_hover_bg([1.0, 1.0, 1.0, 0.10])
 }
 
 fn prompt_rects(win_w: f32, win_h: f32) -> PromptRects {
@@ -112,34 +137,6 @@ fn prompt_rects(win_w: f32, win_h: f32) -> PromptRects {
     }
 }
 
-/// The overlap of two rects (zero-sized where they do not meet).
-fn intersect_rect(a: cce_ui::scene::layout::Rect, b: cce_ui::scene::layout::Rect) -> cce_ui::scene::layout::Rect {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = (a.x + a.width).min(b.x + b.width);
-    let y1 = (a.y + a.height).min(b.y + b.height);
-    cce_ui::scene::layout::Rect { x: x0, y: y0, width: (x1 - x0).max(0.0), height: (y1 - y0).max(0.0) }
-}
-
-/// Clip a vertical span `[y, y+h)` to the viewport `[top, bottom)`.
-/// Returns the clipped `(y, h)`, or `None` if fully outside.
-fn clip_to_viewport(y: f32, h: f32, top: f32, bottom: f32) -> Option<(f32, f32)> {
-    if y >= bottom || y + h <= top {
-        return None;
-    }
-    let mut ny = y;
-    let mut nh = h;
-    if ny < top {
-        let diff = top - ny;
-        ny = top;
-        nh = (nh - diff).max(0.0);
-    }
-    if ny + nh > bottom {
-        nh = (bottom - ny).max(0.0);
-    }
-    Some((ny, nh))
-}
-
 /// Which side of an occluder a box's surviving span lies on, and where the cut
 /// falls — see [`wider_side`].
 enum Side {
@@ -165,61 +162,51 @@ fn wider_side(t_min: f32, t_max: f32, o_min: f32, o_max: f32) -> Option<Side> {
     }
 }
 
-/// Clip a text/label box against overlay rects so it does not bleed through
-/// popovers/menus/dialogs. Returns the adjusted clip bounds, or `None` if the
-/// box is fully covered (should be discarded).
+/// Clip a text/label box against overlay faces (`[x, y, w, h]` each) so it
+/// does not bleed through menus/dialogs. Returns the adjusted clip bounds, or
+/// `None` if the box is fully covered (should be discarded).
 fn occlude_against(
     mut bounds: [f32; 4],
     t_min_x: f32,
     t_max_x: f32,
     t_min_y: f32,
     t_max_y: f32,
-    overlays: &[&pages::PageContent],
+    overlays: &[[f32; 4]],
 ) -> Option<[f32; 4]> {
-    for overlay_pc in overlays {
-        // Plates occlude exactly as rects do — an overlay's opaque face is its
-        // plate now, not a flat fill, and a face missing from this sweep lets the
-        // page's text bleed through the surface covering it.
-        let faces = overlay_pc
-            .rects
-            .iter()
-            .map(|(_, x, y, w, h, _, _)| (*x, *y, *w, *h))
-            .chain(overlay_pc.plates.iter().map(|(_, x, y, w, h, _, _)| (*x, *y, *w, *h)));
-        for (ox, oy, ow, oh) in faces {
-            let o_min_x = ox;
-            let o_max_x = ox + ow;
-            let o_min_y = oy;
-            let o_max_y = oy + oh;
+    for &[ox, oy, ow, oh] in overlays {
+        let o_min_x = ox;
+        let o_max_x = ox + ow;
+        let o_min_y = oy;
+        let o_max_y = oy + oh;
 
-            if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
-                if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
-                    return None;
+        if t_max_x > o_min_x && t_min_x < o_max_x && t_max_y > o_min_y && t_min_y < o_max_y {
+            if t_min_x >= o_min_x && t_max_x <= o_max_x && t_min_y >= o_min_y && t_max_y <= o_max_y {
+                return None;
+            }
+            // Cut on ONE axis, on ONE side. The result of subtracting a rect
+            // from a rect is not a rect, so this picks the largest piece that
+            // is: trim x, unless the occluder already spans the box
+            // horizontally and only a y cut can uncover anything.
+            //
+            // Clamping every side independently is what this used to do, and
+            // two clamps on one axis cross over into an inverted, empty band —
+            // so a box the occluder merely dipped into vanished whole, the
+            // part nothing covered along with the rest. That is how hovering a
+            // context-menu row erased the file-list row beside it: the hover
+            // fill's top edge landed inside that row's text band, and the y
+            // clamp it triggered threw away the name sitting well clear of the
+            // menu.
+            if o_min_x <= t_min_x && o_max_x >= t_max_x {
+                match wider_side(t_min_y, t_max_y, o_min_y, o_max_y) {
+                    Some(Side::Before(cut)) => bounds[3] = bounds[3].min(cut),
+                    Some(Side::After(cut)) => bounds[1] = bounds[1].max(cut),
+                    None => return None,
                 }
-                // Cut on ONE axis, on ONE side. The result of subtracting a rect
-                // from a rect is not a rect, so this picks the largest piece that
-                // is: trim x, unless the occluder already spans the box
-                // horizontally and only a y cut can uncover anything.
-                //
-                // Clamping every side independently is what this used to do, and
-                // two clamps on one axis cross over into an inverted, empty band —
-                // so a box the occluder merely dipped into vanished whole, the
-                // part nothing covered along with the rest. That is how hovering a
-                // context-menu row erased the file-list row beside it: the hover
-                // fill's top edge landed inside that row's text band, and the y
-                // clamp it triggered threw away the name sitting well clear of the
-                // menu.
-                if o_min_x <= t_min_x && o_max_x >= t_max_x {
-                    match wider_side(t_min_y, t_max_y, o_min_y, o_max_y) {
-                        Some(Side::Before(cut)) => bounds[3] = bounds[3].min(cut),
-                        Some(Side::After(cut)) => bounds[1] = bounds[1].max(cut),
-                        None => return None,
-                    }
-                } else {
-                    match wider_side(t_min_x, t_max_x, o_min_x, o_max_x) {
-                        Some(Side::Before(cut)) => bounds[2] = bounds[2].min(cut),
-                        Some(Side::After(cut)) => bounds[0] = bounds[0].max(cut),
-                        None => return None,
-                    }
+            } else {
+                match wider_side(t_min_x, t_max_x, o_min_x, o_max_x) {
+                    Some(Side::Before(cut)) => bounds[2] = bounds[2].min(cut),
+                    Some(Side::After(cut)) => bounds[0] = bounds[0].max(cut),
+                    None => return None,
                 }
             }
         }
@@ -230,208 +217,29 @@ fn occlude_against(
 /// Height of the chooser-mode bottom action bar (the band carved into the plate).
 const SELECT_BAR_H: f32 = 48.0;
 
-/// What painting a [`pages::PageContent`] part reads besides the part: the
-/// window size (an unbounded label's clip) and the pointer (a button's hover).
-struct EmitEnv {
-    win: (f32, f32),
-    cursor: (f32, f32),
-}
-
-impl EmitEnv {
-    /// Paint `part` into `out`, a category at a time, in the order the parts
-    /// have always drawn in: plates, fills, images, glyphs, strokes, relief
-    /// walls, grooves, buttons (plate, then label), then text. `view` is the
-    /// content region `(top, bottom)` the page part is held to — fills,
-    /// plates and walls cut to it, glyphs and strokes clipped by it, labels
-    /// bounded by it. The text of a part with `overlays` is cut away from
-    /// their faces ([`occlude_against`]). Every button lands in
-    /// `page_buttons` for the hand hit tests.
-    fn part(
-        &self,
-        out: &mut cce_ui::scene::paint::PaintCtx,
-        part: &pages::PageContent,
-        view: Option<(f32, f32)>,
-        overlays: &[&pages::PageContent],
-        page_buttons: &mut Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, Message)>,
-    ) {
-        use cce_ui::scene::layout::Rect;
-        use cce_ui::scene::Material;
-        let (win_w, win_h) = self.win;
-        let cut = |y: f32, h: f32| match view {
-            Some((top, bottom)) => clip_to_viewport(y, h, top, bottom),
-            None => Some((y, h)),
-        };
-        // A glyph or stroke is cut by a clip, not pressed flat: its own,
-        // narrowed to the view's band across `(x, w)`.
-        let clip_for = |own: Option<[f32; 4]>, x: f32, w: f32| {
-            let mut clip = own.map(|[l, t, r, b]| Rect { x: l, y: t, width: r - l, height: b - t });
-            if let Some((top, bottom)) = view {
-                let band = Rect { x, y: top, width: w, height: bottom - top };
-                clip = Some(match clip {
-                    Some(c) => intersect_rect(c, band),
-                    None => band,
-                });
-            }
-            clip
-        };
-        let misses = |c: Rect, x: f32, y: f32, w: f32, h: f32| {
-            c.width <= 0.0 || c.height <= 0.0 || c.x >= x + w || c.x + c.width <= x || c.y >= y + h || c.y + c.height <= y
-        };
-        let rgb = |c: [f32; 4]| [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8];
-
-        // Plates first: a plate owns a FACE, so it is the floor of its part —
-        // everything else the part emits (a hover fill, an engraved seam, the
-        // labels) is meant to land on top of it. Emitted after the rects it
-        // would paint straight over them, which is where the context menu's
-        // hover row went the first time this ran.
-        for (c, px, py, pw, ph, pr, pd) in &part.plates {
-            let Some((y, h)) = cut(*py, *ph) else { continue };
-            out.plate(Rect { x: *px, y, width: *pw, height: h }, (*pr, *pr, *pr, *pr), &Material::from_fill(*c), *pd);
-        }
-        for (c, x, y, w, h, r, corners) in &part.rects {
-            let Some((y, h)) = cut(*y, *h) else { continue };
-            let rect = Rect { x: *x, y, width: *w, height: h };
-            if *r > 0.1 {
-                out.rounded_rect(rect, *r, *corners, *c);
-            } else {
-                out.quad(rect, *c);
-            }
-        }
-        for (id, x, y, w, h, alpha) in &part.images {
-            let Some((y, h)) = cut(*y, *h) else { continue };
-            out.image(*id, Rect { x: *x, y, width: *w, height: h }, *alpha);
-        }
-        for (name, x, y, w, h, color, bounds) in &part.icons {
-            // Cut, never squashed: a glyph is a picture, so a row scrolled
-            // half under the list's edge loses its half rather than being
-            // pressed flat the way the fills are clipped.
-            let clip = clip_for(*bounds, *x, *w);
-            if clip.is_some_and(|c| misses(c, *x, *y, *w, *h)) {
-                continue;
-            }
-            if let Some(c) = clip {
-                out.push_clip(c);
-            }
-            out.icon(name, Rect { x: *x, y: *y, width: *w, height: *h }, *color);
-            if clip.is_some() {
-                out.pop_clip();
-            }
-        }
-        for (shape, color, bounds) in &part.strokes {
-            // The page's view cuts a stroke top and bottom only. Its own box
-            // is no clip across: a vertical wire is one pixel wide on a
-            // half-pixel, and a scissor that tight rounds it away (the graph
-            // page drew only its horizontal runs).
-            let (sx, sy, sw, sh) = shape.bounds();
-            let clip = clip_for(*bounds, sx - 4.0, sw + 8.0);
-            if clip.is_some_and(|c| misses(c, sx, sy, sw, sh)) {
-                continue;
-            }
-            if let Some(c) = clip {
-                out.push_clip(c);
-            }
-            match *shape {
-                pages::Stroke::Line { x1, y1, x2, y2, thickness, cap } => out.vector(x1, y1, x2, y2, thickness, *color, cap),
-                pages::Stroke::Arc { cx, cy, radius, thickness, start, end } => out.arc(cx, cy, radius, thickness, start, end, *color),
-                pages::Stroke::Disc { cx, cy, radius } => out.circle(cx, cy, radius, *color),
-            }
-            if clip.is_some() {
-                out.pop_clip();
-            }
-        }
-        for (x, y, w, h, r, depth, kind) in &part.reliefs {
-            let Some((y, h)) = cut(*y, *h) else { continue };
-            let rect = Rect { x: *x, y, width: *w, height: h };
-            let radii = (*r, *r, *r, *r);
-            match *kind {
-                pages::RELIEF_RAISED => out.boss(rect, radii, *depth),
-                pages::RELIEF_INSET => out.inset_plate(rect, radii, Material::face([0.0; 4]).as_ref(), *depth),
-                pages::RELIEF_INSET_FOCUS => out.inset_plate_tinted(
-                    rect,
-                    radii,
-                    Material::face([0.0; 4]).as_ref(),
-                    *depth,
-                    cce_ui::widget::ControlPlate::focus_tint(),
-                ),
-                pages::RELIEF_RECESSED_FOCUS => {
-                    let hc = cce_ui::color::highlight_primary_color();
-                    out.recess_tinted(rect, radii, *depth, [hc[0], hc[1], hc[2]]);
-                }
-                _ => out.recess(rect, radii, *depth),
-            }
-        }
-        for (ax, ay, bx, by, gw, gd, hx, hy, hw, hh) in &part.grooves {
-            // Clipped by the HOST rect, not the seam's own span: a groove
-            // whose host is scrolled out has nothing left to engrave.
-            let Some((hy, hh)) = cut(*hy, *hh) else { continue };
-            out.groove((*ax, *ay), (*bx, *by), *gw, *gd, Rect { x: *hx, y: hy, width: *hw, height: hh });
-        }
-        for (btn, action) in &part.buttons {
-            let base = btn.base();
-            let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
-            let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
-            let label = base.label.as_deref().unwrap_or("");
-            // The label's font is the configured button font, resolved the
-            // same way `Button::paint` resolves it — family AND size.
-            let (label_family, label_size) = {
-                let (family, size) = cce_ui::layout::parse_font_string(&cce_ui::layout::button_font());
-                (family, size.unwrap_or(12.0))
-            };
-            let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
-
-            let Some((wy, wh)) = cut(base.y, base.h) else { continue };
-            let (wx, ww) = (base.x, base.w);
-            let (cx, cy) = self.cursor;
-            let hovering = cx >= wx && cx <= wx + ww && cy >= wy && cy <= wy + wh;
-            let col = if hovering { hover_bg } else { bg };
-            let rect = Rect { x: wx, y: wy, width: ww, height: wh };
-            // Flush inset button (control_relief): groove ring down, beveled
-            // lip back up, face level with the surface — mirroring
-            // Button::paint's relief branch. 4.0 is the standard radius.
-            if cce_ui::layout::control_relief() {
-                let depth = cce_ui::layout::bevel_width().min(wh * 0.2);
-                out.inset_plate(rect, (4.0, 4.0, 4.0, 4.0), Material::face(col).as_ref(), depth);
-            } else {
-                out.rounded_rect(rect, 4.0, (true, true, true, true), col);
-            }
-
-            // Centred by the SHAPED width, as `Button::label_width` does, and
-            // placed vertically by `align_text_y`, the toolkit's convention.
-            let text_w = cce_ui::widget::display::measure_text_width(label, &label_family, label_size);
-            let text_x = if btn.justify == cce_ui::widget::Justification::Left {
-                // TODO(style): a left-justified button label's lead-in is a
-                // control-level inset (Button's own, not a rung).
-                base.x + 8.0
-            } else {
-                base.x + (base.w - text_w) / 2.0
-            };
-            let text_y = cce_ui::layout::align_text_y(base.y, base.h, label_size, 0.0);
-            let start = match view {
-                Some((top, bottom)) => [0.0, top, win_w, bottom],
-                None => [0.0, 0.0, win_w, win_h],
-            };
-            let bounds = occlude_against(start, text_x, text_x + text_w, text_y, text_y + label_size * 1.4, overlays);
-            if let Some(b) = bounds {
-                // The family goes with it: measuring in one face and
-                // rendering in another is how the centring drifted.
-                out.text_with(label.to_string(), text_x, text_y, label_size, rgb(label_color), Some(label_family), Some(b));
-            }
-            page_buttons.push((btn.clone(), action.clone()));
-        }
-        for (text, size, x, y, col, font, bounds) in &part.texts {
-            let bounds = match view {
-                Some((top, bottom)) => Some(match bounds {
-                    Some(b) => [b[0], b[1].max(top), b[2], b[3].min(bottom)],
-                    None => [0.0, top, win_w, bottom],
-                }),
-                None => *bounds,
-            };
-            let start = bounds.unwrap_or([0.0, 0.0, win_w, win_h]);
-            let text_w = text.chars().count() as f32 * size * 0.65;
-            let Some(b) = occlude_against(start, *x, *x + text_w, *y, *y + *size * 1.4, overlays) else { continue };
-            out.text_with(text.clone(), *x, *y, *size, rgb(*col), font.clone(), Some(b));
-        }
+/// Cut the text of `list` away from `overlays` (`[x, y, w, h]` each): the
+/// faces of the menu and the dialog, painted over it later in the frame.
+/// Text is drawn in one pass after all geometry, so a label under an overlay
+/// would otherwise show through it. A label wholly under one is dropped; one
+/// partly under keeps the widest piece a single clip can hold
+/// ([`occlude_against`]). Its extent is estimated, not shaped.
+fn occlude_text(list: &mut cce_ui::scene::paint::DisplayList, overlays: &[[f32; 4]], win: (f32, f32)) {
+    use cce_ui::scene::paint::Prim;
+    if overlays.is_empty() {
+        return;
     }
+    list.items.retain_mut(|item| {
+        let Prim::Text { text, x, y, font_size, bounds, .. } = &mut item.prim else { return true };
+        let start = bounds.unwrap_or([0.0, 0.0, win.0, win.1]);
+        let w = text.chars().count() as f32 * *font_size * 0.65;
+        match occlude_against(start, *x, *x + w, *y, *y + *font_size * 1.4, overlays) {
+            Some(b) => {
+                *bounds = Some(b);
+                true
+            }
+            None => false,
+        }
+    });
 }
 
 // ── State ───────────────────────────────────────────────────────────
@@ -752,8 +560,8 @@ struct FilesystemApp {
     width: u32,
     height: u32,
     scale_factor: f64,
-    page_buttons: Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, Message)>,
-    hovered_button: Option<usize>,
+    /// The chooser's footer buttons, in a chooser mode only.
+    chooser: Option<ChooserButtons>,
     cursor_x: f32,
     cursor_y: f32,
     paginator: Handle<cce_ui::widget::Adapted<Paginator>>,
@@ -796,11 +604,70 @@ struct FilesystemApp {
 
 impl FilesystemApp {
     /// Show `dialog` in place of the prompt that is up, if any, whose text box
-    /// leaves the context with it.
+    /// and buttons leave the context with it.
     fn set_prompt(&mut self, dialog: Option<PromptDialog>) {
         if let Some(old) = std::mem::replace(&mut self.prompt_dialog, dialog) {
             self.ui_context.remove(old.textbox);
+            self.ui_context.remove(old.cancel);
+            self.ui_context.remove(old.ok);
         }
+    }
+
+    /// A prompt of `kind` on `path` around `textbox`, its buttons made.
+    fn new_prompt(&mut self, kind: PromptKind, path: std::path::PathBuf, textbox: Handle<cce_ui::widget::Adapted<cce_ui::widget::TextBox>>) -> PromptDialog {
+        let cancel = self.ui_context.insert(plain_button("Cancel"));
+        let ok = self.ui_context.insert(plain_button(kind.ok_label()));
+        PromptDialog { kind, path, textbox, cancel, ok }
+    }
+
+    /// The buttons standing now, each with what it sends: the prompt's while
+    /// one is up — it covers the window — else the chooser's.
+    fn live_buttons(&self) -> Vec<(ButtonHandle, Message)> {
+        if let Some(d) = &self.prompt_dialog {
+            return vec![(d.cancel, Message::PromptCancel), (d.ok, Message::PromptSubmit)];
+        }
+        match self.chooser {
+            Some(c) => vec![(c.cancel, Message::SelectCancel), (c.confirm, Message::SelectOpen)],
+            None => Vec::new(),
+        }
+    }
+
+    /// Route a pointer event to the live buttons — a press arms the one it
+    /// lands on, a release commits it (in its rect) or cancels it, a move
+    /// enters or leaves. True when one took it.
+    fn route_buttons(&mut self, ev: &cce_ui::widget::Event) -> bool {
+        let mut taken = false;
+        for (h, _) in self.live_buttons() {
+            taken |= self.ui_context.propagate_event(ev, h.id());
+        }
+        taken
+    }
+
+    /// Whether `(px, py)` is on a live button.
+    fn over_button(&self, px: f32, py: f32) -> bool {
+        self.live_buttons().into_iter().any(|(h, _)| {
+            let (x, y, w, bh) = self.ui_context[h].rect();
+            px >= x && px <= x + w && py >= y && py <= y + bh
+        })
+    }
+
+    /// The message of the live button clicked since the last call (a pointer
+    /// release on it, or Enter / Space while it has the keyboard). A prompt
+    /// button closes the prompt's field first, so Submit reads what it holds.
+    fn take_button_click(&mut self) -> Option<Message> {
+        let mut picked = None;
+        for (h, msg) in self.live_buttons() {
+            if self.ui_context[h].take_click() && picked.is_none() {
+                picked = Some(msg);
+            }
+        }
+        if picked.is_some() {
+            if let Some(tb) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
+                self.ui_context[tb].unfocus();
+                self.ui_context.clear_focus();
+            }
+        }
+        picked
     }
 
     /// Kick off a subtree scan if the Space page is showing a directory it has
@@ -1029,89 +896,43 @@ impl FilesystemApp {
             self.ui_context.lend_h(tb, |w, ctx| w.set_parent(None, ctx));
         }
 
-        // Each top-level widget rendered through the same immediate-mode path the root
-        // recursion used, replicating the legacy TUPLE ORDER: plain child quads first,
-        // then the dissolved root plate container's plate, then the rounded children (the
-        // aggregate emitted all plain quads before the rounded root bg).
-        let mut window_pc = pages::PageContent::new();
-        {
-            let self_ptr = self as *mut Self;
-            unsafe {
-                let mut plain_pc = pages::PageContent::new();
-                // The dissolved splitter's paint: its divider quad, then the preview
-                // pane (the only pane content the pages don't render themselves). The
-                // left pane's container copy is gone — the legacy aggregate painted it
-                // UNDER the page's own copy, double-compositing every translucent quad.
-                {
-                    let split = match self.current_page {
-                        Page::Browse => &self.browse_split,
-                        Page::Network => &self.network_split,
-                        Page::Space => &self.space_split,
-                    };
-                    // A collapsed preview draws neither divider nor content —
-                    // the stub band and its corner control paint in
-                    // display_list, over everything (cce-ui RFC 7c-2).
-                    if !self.preview_dock.collapsed {
-                        if let Some((dx, dy, dw, dh, dc)) = split.divider_quad() {
-                            plain_pc.rects.push((dc, dx, dy, dw, dh, 0.0, (true, true, true, true)));
-                        }
-                        let (px_r, py_r, pw_r, ph_r) = split.right_rect();
-                        // The pane clamps its own text bounds to its rect inside
-                        // push_prims (the old SplitBox clamp, absorbed).
-                        (*self_ptr).preview.set_rect(px_r, py_r, pw_r, ph_r);
-                        (*self_ptr).preview.push_prims(&mut plain_pc);
-                    }
-                }
-                if let Some(tb) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
-                    let (x, y, w, h) = self.ui_context[tb].rect();
-                    cce_ui::compose::render_widget_h(&mut plain_pc, tb, x, y, w, h, &mut self.ui_context);
-                }
+        let (win_w, win_h) = (self.width as f32, self.height as f32);
+        // The window and page layers, painted in call order. Their text is cut
+        // away from the overlays' faces below, which are collected as they
+        // are painted (`occlude_text`).
+        let mut pc = cce_ui::scene::paint::PaintCtx::new();
 
-                // Legacy aggregate order: plain child quads, then rounded child quads.
-                // The dissolved root plate that used to sit between them is now a
-                // Prim::Plate emitted FIRST in display_list — the lit window slab the
-                // rest of the frame sits on (and the surface the band carves CSG into).
-                let mut plain_pc = plain_pc;
-                let (plain, rounded): (Vec<_>, Vec<_>) =
-                    std::mem::take(&mut plain_pc.rects).into_iter().partition(|r| r.5 <= 0.1);
-                window_pc.rects.extend(plain);
-                window_pc.rects.extend(rounded);
-                window_pc.absorb(plain_pc);
+        // The dissolved splitter's paint: its divider quad, then the preview
+        // pane (the only pane content the pages don't render themselves). The
+        // left pane's container copy is gone — the legacy aggregate painted it
+        // UNDER the page's own copy, double-compositing every translucent quad.
+        // A collapsed preview draws neither divider nor content — the stub
+        // band and its corner control paint in display_list, over everything
+        // (cce-ui RFC 7c-2).
+        if !self.preview_dock.collapsed {
+            let split = match self.current_page {
+                Page::Browse => &self.browse_split,
+                Page::Network => &self.network_split,
+                Page::Space => &self.space_split,
+            };
+            let divider = split.divider_quad();
+            let (px_r, py_r, pw_r, ph_r) = split.right_rect();
+            if let Some((dx, dy, dw, dh, dc)) = divider {
+                pages::fill(&mut pc, dc, dx, dy, dw, dh);
             }
+            // The pane cuts its own labels to its rect (the old SplitBox
+            // clamp, absorbed).
+            self.preview.set_rect(px_r, py_r, pw_r, ph_r);
+            self.preview.push_prims(&mut pc);
         }
 
-        // 3. Draw Page custom/static content (drawn to pc)
-        let mut pc = pages::PageContent::new();
-        match self.current_page {
-            Page::Browse => {
-                let (bx, by, bw, bh) = self.browse_split.left_rect();
-                let browse_pc = pages::browse::view(&mut self.browse, bx, by, bw, bh, self.select_mode, &mut self.ui_context);
-
-                pc.absorb(browse_pc);
-            }
-            Page::Network => {
-                let (nx, ny, nw, nh) = self.network_split.left_rect();
-                let network_pc = pages::network::view(&mut self.network, &self.browse, nx, ny, nw, nh, &mut self.ui_context);
-
-                pc.absorb(network_pc);
-            }
-            Page::Space => {
-                let (sx, sy, sw, sh) = self.space_split.left_rect();
-                let space_pc = pages::space::view(&mut self.space, &self.browse, sx, sy, sw, sh, &mut self.ui_context);
-
-                pc.absorb(space_pc);
-            }
-        }
-
-        // Draw bottom selection bar if select_mode is enabled. It lives below the
-        // content region, so it goes into window_pc: page content (pc) is clipped
-        // to the viewport and would swallow the bar entirely.
-        if self.select_mode {
+        // The chooser's bottom action bar, below the content region.
+        if let Some(chooser) = self.chooser {
             let bar_y = self.height as f32 - select_bar_h - cce_ui::layout::root_plate_inset();
             // Divider line — under control_relief the bar is a band carved into the
             // plate (see display_list), so the flat line is the fallback only.
             if !cce_ui::layout::control_relief() {
-                window_pc.rect([0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
+                pages::fill(&mut pc, [0.15, 0.20, 0.16, 1.0], browse_x, bar_y, usable_w, 1.0);
             }
 
             let btn_h = cce_ui::layout::button_height();
@@ -1126,13 +947,32 @@ impl FilesystemApp {
             // buttons hanging short of the column above them.
             let confirm_x = browse_x + usable_w - btn_w;
             let cancel_x = confirm_x - gap - btn_w;
-            window_pc.button_plain("Cancel", cancel_x, btn_y, btn_w, btn_h, Message::SelectCancel);
-            let button_label = if self.save_mode { "Save" } else { "Select" };
-            window_pc.button_plain(button_label, confirm_x, btn_y, btn_w, btn_h, Message::SelectOpen);
+            pages::widget(&mut pc, chooser.cancel, cancel_x, btn_y, btn_w, btn_h, &mut self.ui_context);
+            pages::widget(&mut pc, chooser.confirm, confirm_x, btn_y, btn_w, btn_h, &mut self.ui_context);
         }
 
-        // Gather context menu overlay if visible
-        let mut context_menu_pc = pages::PageContent::new();
+        // The page, in the left pane. Laid out inside the content region, it
+        // needs no cut to it: the list holds its rows to its viewport, the
+        // graph is clipped to its canvas.
+        match self.current_page {
+            Page::Browse => {
+                let (bx, by, bw, bh) = self.browse_split.left_rect();
+                pages::browse::view(&mut self.browse, &mut pc, bx, by, bw, bh, self.select_mode, &mut self.ui_context);
+            }
+            Page::Network => {
+                let (nx, ny, nw, nh) = self.network_split.left_rect();
+                pages::network::view(&mut self.network, &self.browse, &mut pc, nx, ny, nw, nh, &mut self.ui_context);
+            }
+            Page::Space => {
+                let (sx, sy, sw, sh) = self.space_split.left_rect();
+                pages::space::view(&mut self.space, &self.browse, &mut pc, sx, sy, sw, sh, &mut self.ui_context);
+            }
+        }
+
+        // The overlays: the app's context menu, then the prompt dialog. Their
+        // faces are what the text beneath is cut away from.
+        let mut over = cce_ui::scene::paint::PaintCtx::new();
+        let mut faces: Vec<[f32; 4]> = Vec::new();
         if self.context_menu.visible {
             let cx = self.context_menu.x;
             let cy = self.context_menu.y;
@@ -1155,9 +995,16 @@ impl FilesystemApp {
             if face[3] > 0.001 {
                 let mut frosted = face;
                 frosted[3] = -frosted[3];
-                context_menu_pc.plate(frosted, cx, cy, cw, ch, menu_r);
+                let depth = cce_ui::layout::bevel_width().min(ch * 0.2);
+                over.plate(
+                    pages::rect(cx, cy, cw, ch),
+                    (menu_r, menu_r, menu_r, menu_r),
+                    &cce_ui::scene::Material::from_fill(frosted),
+                    depth,
+                );
+                faces.push([cx, cy, cw, ch]);
             } else {
-                context_menu_pc.relief_raised(cx, cy, cw, ch, menu_r);
+                pages::raised(&mut over, cx, cy, cw, ch, menu_r);
             }
             // Hover highlight, inset off the roll so it sits on the face rather
             // than climbing the lit edge. The last row is the only one that meets
@@ -1167,15 +1014,18 @@ impl FilesystemApp {
                 let iy = cy + h_idx as f32 * ROW_H;
                 let inset = (cce_ui::layout::bevel_width().min(ch * 0.2) * 0.5).max(2.0);
                 let last = h_idx + 1 == self.context_menu.options.len();
-                context_menu_pc.rect_rounded(
+                let hover = [cx + inset, iy + 2.0, cw - 2.0 * inset, ROW_H - 4.0];
+                pages::fill_rounded(
+                    &mut over,
                     [0.20, 0.40, 0.65, 0.6],
-                    cx + inset,
-                    iy + 2.0,
-                    cw - 2.0 * inset,
-                    ROW_H - 4.0,
+                    hover[0],
+                    hover[1],
+                    hover[2],
+                    hover[3],
                     (menu_r - inset).max(0.0),
                     (false, false, last, last),
                 );
+                faces.push(hover);
             }
             // Text options, in the DE's menu font — family and size. Drawn
             // with a hardcoded 12.0 and no family, the row menu read in the
@@ -1196,64 +1046,48 @@ impl FilesystemApp {
                     cce_ui::color::TEXT_FG
                 };
                 // TODO(style): the row label's 8px lead-in is a control-level inset.
-                context_menu_pc.text_with_font(opt, cx + 8.0, iy, menu_size, text_color, &menu_family);
+                pages::text(&mut over, opt, cx + 8.0, iy, menu_size, text_color, Some(&menu_family), None);
             }
         }
 
-        // Gather the prompt dialog backdrop & panel if active (its textbox renders with the window widgets; this is everything else)
-        let mut dialog_pc = pages::PageContent::new();
-        if let Some(PromptDialog { kind, textbox, .. }) = &mut self.prompt_dialog {
-            let kind = *kind;
-            let r = prompt_rects(self.width as f32, self.height as f32);
+        // The prompt dialog: backdrop, panel, title, and its well and buttons
+        // ON the panel. The well painted with the window's widgets until
+        // 2026-10-12, under the panel: its caret and selection were covered,
+        // and its text, cut away from the backdrop, was dropped.
+        if let Some(PromptDialog { kind, textbox, cancel, ok, .. }) = &self.prompt_dialog {
+            let (kind, textbox, cancel, ok) = (*kind, *textbox, *cancel, *ok);
+            let r = prompt_rects(win_w, win_h);
             let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
-            let (tb_x, tb_y, tb_w, tb_h) = r.tb;
-            let (btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h) = r.cancel;
-            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.ok;
 
             // Semi-transparent backdrop overlay
-            dialog_pc.rect([0.02, 0.02, 0.03, 0.6], 0.0, 0.0, self.width as f32, self.height as f32);
+            pages::fill(&mut over, [0.02, 0.02, 0.03, 0.6], 0.0, 0.0, win_w, win_h);
             // Dialog panel border
-            dialog_pc.rect([0.22, 0.22, 0.28, 1.0], dialog_x, dialog_y, dialog_w, dialog_h);
+            pages::fill(&mut over, [0.22, 0.22, 0.28, 1.0], dialog_x, dialog_y, dialog_w, dialog_h);
             // Dialog panel background
-            dialog_pc.rect([0.08, 0.08, 0.12, 1.0], dialog_x + 1.0, dialog_y + 1.0, dialog_w - 2.0, dialog_h - 2.0);
+            pages::fill(&mut over, [0.08, 0.08, 0.12, 1.0], dialog_x + 1.0, dialog_y + 1.0, dialog_w - 2.0, dialog_h - 2.0);
+            faces.push([0.0, 0.0, win_w, win_h]);
+            // Raised dialog plate (control_relief styling).
+            pages::raised(&mut over, dialog_x, dialog_y, dialog_w, dialog_h, 0.0);
 
             // Title and prompt, inset from the plate rim by the pane rung
             // (the same inset the well and buttons take in prompt_rects).
             let dialog_pad = cce_ui::layout::plate_padding();
-            dialog_pc.text(kind.title(), dialog_x + dialog_pad, dialog_y + dialog_pad, 14.0, [1.0, 1.0, 1.0, 1.0]);
+            pages::text(&mut over, kind.title(), dialog_x + dialog_pad, dialog_y + dialog_pad, 14.0, [1.0, 1.0, 1.0, 1.0], None, None);
             // TODO(style): the prompt's 42px drop is the dialog's text rhythm.
-            dialog_pc.text(kind.prompt(), dialog_x + dialog_pad, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0]);
+            pages::text(&mut over, kind.prompt(), dialog_x + dialog_pad, dialog_y + 42.0, 11.0, [0.54, 0.54, 0.58, 1.0], None, None);
 
-            // Set textbox position dynamically using configured textbox height
-            self.ui_context[*textbox].set_rect(tb_x, tb_y, tb_w, tb_h);
-            // Raised dialog plate + recessed command well (control_relief styling).
-            dialog_pc.relief_raised(dialog_x, dialog_y, dialog_w, dialog_h, 0.0);
-            dialog_pc.relief_recessed(tb_x, tb_y, tb_w, tb_h, cce_ui::layout::textbox_corner_radius());
-
-            // Plain toolkit faces, like the chooser footer: the themed Button
-            // owns its own hover state, so the hand-rolled cursor tracking and
-            // the red/green tints go together.
-            dialog_pc.button_plain("Cancel", btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h, Message::PromptCancel);
-            dialog_pc.button_plain(kind.ok_label(), btn_open_x, btn_open_y, btn_open_w, btn_open_h, Message::PromptSubmit);
+            let (tb_x, tb_y, tb_w, tb_h) = r.tb;
+            pages::widget(&mut over, textbox, tb_x, tb_y, tb_w, tb_h, &mut self.ui_context);
+            let (x, y, w, h) = r.cancel;
+            pages::widget(&mut over, cancel, x, y, w, h, &mut self.ui_context);
+            let (x, y, w, h) = r.ok;
+            pages::widget(&mut over, ok, x, y, w, h, &mut self.ui_context);
         }
 
-        // Paint the parts in layer order into the cached frame. The page part
-        // is held to the content region; the window and page parts' text is
-        // occluded by the overlays above them (the menu, the dialog).
-        let mut page_buttons = Vec::new();
-        let mut out = cce_ui::scene::paint::PaintCtx::new();
-        let overlays = [&context_menu_pc, &dialog_pc];
-        let emit = EmitEnv {
-            win: (self.width as f32, self.height as f32),
-            cursor: (self.cursor_x, self.cursor_y),
-        };
-        emit.part(&mut out, &window_pc, None, &overlays, &mut page_buttons);
-        emit.part(&mut out, &pc, Some((content_y, content_y + content_h)), &overlays, &mut page_buttons);
-        emit.part(&mut out, &context_menu_pc, None, &[], &mut page_buttons);
-        emit.part(&mut out, &dialog_pc, None, &[], &mut page_buttons);
-
-        self.frame = out.finish();
-        self.page_buttons = page_buttons;
+        let mut frame = pc.finish();
+        occlude_text(&mut frame, &faces, (win_w, win_h));
+        frame.items.extend(over.finish().items);
+        self.frame = frame;
         self.ui_context.clear_dirty();
         self.needs_rebuild = false;
     }
@@ -1290,12 +1124,9 @@ impl Application for FilesystemApp {
                 return false;
             }
         }
-        // 4. If over any page button, do not drag
-        for (btn, _) in &self.page_buttons {
-            let base = btn.base();
-            if px >= base.x && px <= base.x + base.w && py >= base.y && py <= base.y + base.h {
-                return false;
-            }
+        // 4. If over a button (the chooser's), do not drag: the press is its.
+        if self.over_button(px, py) {
+            return false;
         }
         if self.current_page == Page::Browse {
             if self.browse_split.dragging || self.browse_split.hovered {
@@ -1362,6 +1193,10 @@ impl Application for FilesystemApp {
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
         let paginator = cce_ui::widget::Paginator::new(pages_names);
         let fs_service = services::fs::FsService::new(sender.clone());
+        let chooser = select_mode.then(|| ChooserButtons {
+            cancel: ui_context.insert(plain_button("Cancel")),
+            confirm: ui_context.insert(plain_button(if save_mode { "Save" } else { "Select" })),
+        });
         let initial_w = if select_mode { 900 } else { 1200 };
         let initial_h = if select_mode { 500 } else { 720 };
         let app = Self {
@@ -1387,8 +1222,7 @@ impl Application for FilesystemApp {
             width: initial_w,
             height: initial_h,
             scale_factor: 1.0,
-            page_buttons: Vec::new(),
-            hovered_button: None,
+            chooser,
             cursor_x: 0.0,
             cursor_y: 0.0,
             paginator: ui_context.insert(paginator),
@@ -1619,7 +1453,8 @@ impl Application for FilesystemApp {
                 tb.focus();
                 let textbox = self.ui_context.insert(tb);
                 self.ui_context.set_focused_id(textbox.id());
-                self.set_prompt(Some(PromptDialog { kind: PromptKind::OpenWith, path, textbox }));
+                let dialog = self.new_prompt(PromptKind::OpenWith, path, textbox);
+                self.set_prompt(Some(dialog));
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
@@ -1640,12 +1475,15 @@ impl Application for FilesystemApp {
                 tb.sync_editor_state();
                 let textbox = self.ui_context.insert(tb);
                 self.ui_context.set_focused_id(textbox.id());
-                self.set_prompt(Some(PromptDialog { kind: PromptKind::Rename, path, textbox }));
+                let dialog = self.new_prompt(PromptKind::Rename, path, textbox);
+                self.set_prompt(Some(dialog));
                 *needs_rebuild = true;
                 self.needs_rebuild = true;
             }
             Message::PromptSubmit => {
-                if let Some(PromptDialog { kind, path, textbox }) = self.prompt_dialog.take() {
+                if let Some(PromptDialog { kind, path, textbox, cancel, ok }) = self.prompt_dialog.take() {
+                    self.ui_context.remove(cancel);
+                    self.ui_context.remove(ok);
                     let value = self.ui_context.remove(textbox).map_or_else(String::new, |textbox| {
                         if textbox.editing {
                             textbox.edit_buffer.trim().to_string()
@@ -1874,6 +1712,7 @@ impl Application for FilesystemApp {
                 let root = textbox.id();
                 let _ = self.ui_context.propagate_event(&mv, root);
             }
+            self.route_buttons(&mv);
             *needs_rebuild = true;
             self.needs_rebuild = true;
             return;
@@ -1991,17 +1830,12 @@ impl Application for FilesystemApp {
             }
         }
 
-        // Repaint only when the hovered page button actually changes. Page-button hover is
-        // a binary color decided at rebuild time (see rebuild_layout), so idle pointer moves
-        // don't need a redraw. Rebuilding unconditionally re-commits the translucent surface
-        // every move, which makes the compositor re-blur the backdrop continuously.
-        let hovered_button = self.page_buttons.iter().position(|(btn, _)| {
-            let base = btn.base();
-            self.cursor_x >= base.x && self.cursor_x <= base.x + base.w
-                && self.cursor_y >= base.y && self.cursor_y <= base.y + base.h
-        });
-        if hovered_button != self.hovered_button {
-            self.hovered_button = hovered_button;
+        // The chooser's buttons: repaint only when one's hover actually
+        // changes (the move reports the enter / leave), so idle pointer moves
+        // don't need a redraw. Rebuilding unconditionally re-commits the
+        // translucent surface every move, which makes the compositor re-blur
+        // the backdrop continuously.
+        if self.route_buttons(&mv) {
             changed = true;
         }
 
@@ -2106,54 +1940,48 @@ impl Application for FilesystemApp {
             return None;
         }
 
-        if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
+        if let Some(textbox) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
             let r = prompt_rects(self.width as f32, self.height as f32);
             let (dialog_x, dialog_y, dialog_w, dialog_h) = (r.x, r.y, r.w, r.h);
             let (tb_x, tb_y, tb_w, tb_h) = r.tb;
-            let (btn_cancel_x, btn_cancel_y, btn_cancel_w, btn_cancel_h) = r.cancel;
-            let (btn_open_x, btn_open_y, btn_open_w, btn_open_h) = r.ok;
+            let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
 
             if state == ElementState::Pressed {
                 let clicked_inside = pos.x >= dialog_x && pos.x <= dialog_x + dialog_w && pos.y >= dialog_y && pos.y <= dialog_y + dialog_h;
                 if !clicked_inside {
-                    self.ui_context[*textbox].unfocus();
+                    self.ui_context[textbox].unfocus();
                     self.ui_context.clear_focus();
                     return Some(Message::PromptCancel);
                 }
 
                 if button == MouseButton::Left {
                     if pos.x >= tb_x && pos.x <= tb_x + tb_w && pos.y >= tb_y && pos.y <= tb_y + tb_h {
-                        let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
                         let root = textbox.id();
                         if self.ui_context.propagate_event(&ev, root) {
                             self.ui_context.set_focused_id(textbox.id());
-                            *needs_rebuild = true;
-                            self.needs_rebuild = true;
                         }
-                    } else if pos.x >= btn_cancel_x && pos.x <= btn_cancel_x + btn_cancel_w && pos.y >= btn_cancel_y && pos.y <= btn_cancel_y + btn_cancel_h {
-                        self.ui_context[*textbox].unfocus();
+                    } else if !self.route_buttons(&ev) {
+                        // A press on the panel, off the well and the buttons
+                        // (a button's press arms it; its release clicks it).
+                        self.ui_context[textbox].unfocus();
                         self.ui_context.clear_focus();
-                        return Some(Message::PromptCancel);
-                    } else if pos.x >= btn_open_x && pos.x <= btn_open_x + btn_open_w && pos.y >= btn_open_y && pos.y <= btn_open_y + btn_open_h {
-                        self.ui_context[*textbox].unfocus();
-                        self.ui_context.clear_focus();
-                        return Some(Message::PromptSubmit);
-                    } else {
-                        self.ui_context[*textbox].unfocus();
-                        self.ui_context.clear_focus();
-                        *needs_rebuild = true;
-                        self.needs_rebuild = true;
                     }
+                    *needs_rebuild = true;
+                    self.needs_rebuild = true;
                 }
-            } else {
-                if button == MouseButton::Left && self.ui_context[*textbox].editing {
-                    let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+            } else if button == MouseButton::Left {
+                if self.ui_context[textbox].editing {
                     let root = textbox.id();
                     if self.ui_context.propagate_event(&ev, root) {
                         *needs_rebuild = true;
                         self.needs_rebuild = true;
                     }
                 }
+                // Cancel or the OK button, released on after a press on it.
+                self.route_buttons(&ev);
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return self.take_button_click();
             }
             return None;
         }
@@ -2606,14 +2434,16 @@ impl Application for FilesystemApp {
             }
         }
 
-        if button == MouseButton::Left && state == ElementState::Released {
-            for (btn, action) in &self.page_buttons {
-                let base = btn.base();
-                if pos.x >= base.x && pos.x <= base.x + base.w && pos.y >= base.y && pos.y <= base.y + base.h {
-                    *needs_rebuild = true;
-                    self.needs_rebuild = true;
-                    return Some(action.clone());
-                }
+        // The chooser's buttons: a press arms the one under it, the release
+        // on it clicks it.
+        if button == MouseButton::Left {
+            let ev = cce_ui::widget::Event::MouseButton { button, state, x: pos.x, y: pos.y, local_x: pos.x, local_y: pos.y };
+            if self.route_buttons(&ev) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+            }
+            if let Some(msg) = self.take_button_click() {
+                return Some(msg);
             }
         }
 
@@ -2676,6 +2506,19 @@ impl Application for FilesystemApp {
     fn handle_key_input(&mut self, event: &KeyEvent, needs_rebuild: &mut bool) -> Option<Self::Message> {
         if event.state != ElementState::Pressed {
             return None;
+        }
+
+        // A button holding the keyboard (Tab walks to it) takes Enter / Space
+        // ahead of the page's own keys and the prompt's Enter-submits.
+        if let Some(focused) = self.ui_context.focused_widget
+            && self.live_buttons().iter().any(|(h, _)| h.id() == focused)
+        {
+            let kev = cce_ui::widget::Event::KeyInput(event.clone());
+            if self.ui_context.propagate_event(&kev, focused) {
+                *needs_rebuild = true;
+                self.needs_rebuild = true;
+                return self.take_button_click();
+            }
         }
 
         if let Some(PromptDialog { textbox, .. }) = &mut self.prompt_dialog {
@@ -2855,31 +2698,42 @@ mod tests {
 
     const WIN: [f32; 4] = [0.0, 0.0, 1000.0, 700.0];
 
-    fn rect_overlay(x: f32, y: f32, w: f32, h: f32) -> pages::PageContent {
-        let mut pc = pages::PageContent::new();
-        pc.rect([0.0, 0.0, 0.0, 1.0], x, y, w, h);
-        pc
-    }
-
-    fn plate_overlay(x: f32, y: f32, w: f32, h: f32) -> pages::PageContent {
-        let mut pc = pages::PageContent::new();
-        pc.plates.push(([0.0, 0.0, 0.0, 1.0], x, y, w, h, 8.0, 4.0));
-        pc
+    fn rect_overlay(x: f32, y: f32, w: f32, h: f32) -> [f32; 4] {
+        [x, y, w, h]
     }
 
     /// A box the overlay covers outright is discarded, not clipped.
     #[test]
     fn a_covered_box_is_dropped() {
         let menu = rect_overlay(300.0, 253.0, 430.0, 120.0);
-        assert!(occlude_against(WIN, 320.0, 400.0, 300.0, 317.0, &[&menu]).is_none());
+        assert!(occlude_against(WIN, 320.0, 400.0, 300.0, 317.0, &[menu]).is_none());
     }
 
-    /// An overlay's face is a plate now, so the sweep has to see plates or the
-    /// page's text draws straight through the surface covering it.
+    /// The frame's text is cut away from the overlays painted over it: a label
+    /// under the menu's face is dropped, one running under its edge is cut at
+    /// it, one clear of it is untouched, and the geometry is left alone.
     #[test]
-    fn a_plate_occludes_like_a_rect() {
-        let menu = plate_overlay(300.0, 253.0, 430.0, 120.0);
-        assert!(occlude_against(WIN, 320.0, 400.0, 300.0, 317.0, &[&menu]).is_none());
+    fn the_frame_text_under_an_overlay_is_cut() {
+        use cce_ui::scene::paint::{PaintCtx, Prim};
+        let mut pc = PaintCtx::new();
+        pc.quad(pages::rect(0.0, 0.0, 10.0, 10.0), [1.0; 4]);
+        pages::text(&mut pc, "under", 320.0, 300.0, 12.0, [1.0; 4], None, None);
+        pages::text(&mut pc, "a long line running under the menu", 40.0, 288.0, 12.0, [1.0; 4], None, None);
+        pages::text(&mut pc, "clear", 40.0, 600.0, 12.0, [1.0; 4], None, None);
+        let mut list = pc.finish();
+        occlude_text(&mut list, &[rect_overlay(300.0, 253.0, 430.0, 120.0)], (WIN[2], WIN[3]));
+        let texts: Vec<(String, Option<[f32; 4]>)> = list
+            .items
+            .iter()
+            .filter_map(|i| match &i.prim {
+                Prim::Text { text, bounds, .. } => Some((text.clone(), *bounds)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(list.items.len(), 3, "the fill and two labels");
+        assert_eq!(texts[0].0, "a long line running under the menu");
+        assert_eq!(texts[0].1.unwrap()[2], 300.0, "cut at the menu's left edge");
+        assert_eq!(texts[1], ("clear".to_string(), Some(WIN)));
     }
 
     /// The regression. A file-list row's name sits well left of the menu, but the
@@ -2893,7 +2747,7 @@ mod tests {
         let menu = rect_overlay(300.0, 253.0, 430.0, 120.0);
         let hover = rect_overlay(305.0, 294.0, 420.0, 20.0);
 
-        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[&menu, &hover])
+        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[menu, hover])
             .expect("a line the overlay only dips into still has a visible run");
 
         assert_eq!(b[2], 300.0, "clipped at the menu's left edge");
@@ -2908,7 +2762,7 @@ mod tests {
     #[test]
     fn an_overlay_spanning_the_box_clips_it_vertically() {
         let menu = rect_overlay(300.0, 253.0, 430.0, 120.0);
-        let b = occlude_against(WIN, 320.0, 400.0, 240.0, 257.0, &[&menu]).expect("straddles the top");
+        let b = occlude_against(WIN, 320.0, 400.0, 240.0, 257.0, &[menu]).expect("straddles the top");
         assert_eq!(b[3], 253.0, "clipped to the strip above the menu");
         assert_eq!(b[2], WIN[2], "and not trimmed horizontally");
     }
@@ -2919,13 +2773,13 @@ mod tests {
     fn the_cut_keeps_the_wider_side() {
         // Overlay near the box's right end: the long run before it survives.
         let right = rect_overlay(380.0, 0.0, 200.0, 700.0);
-        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[&right]).unwrap();
+        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[right]).unwrap();
         assert_eq!(b[2], 380.0);
         assert_eq!(b[0], WIN[0]);
 
         // Overlay near the left end: the run after it survives instead.
         let left = rect_overlay(0.0, 0.0, 80.0, 700.0);
-        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[&left]).unwrap();
+        let b = occlude_against(WIN, 40.0, 420.0, 288.0, 305.0, &[left]).unwrap();
         assert_eq!(b[0], 80.0);
         assert_eq!(b[2], WIN[2]);
     }

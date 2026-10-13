@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use crate::pages::PageContent;
+use cce_ui::scene::paint::PaintCtx;
 use crate::pages::browse::{BrowseState, DirEntry};
 use cce_ui::context::UiContext;
 use cce_ui::widget::Handle;
@@ -204,10 +204,9 @@ impl NetworkState {
     }
 }
 
-pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) -> PageContent {
-    let mut pc = PageContent::new();
-
-    let top = crate::pages::breadcrumb_header(&mut pc, state.breadcrumb, cx, cy, cw, ctx);
+/// Lay the page out in the pane `(cx, cy, cw, ch)` and paint it into `pc`.
+pub fn view(state: &mut NetworkState, browse: &BrowseState, pc: &mut PaintCtx, cx: f32, cy: f32, cw: f32, ch: f32, ctx: &mut cce_ui::context::UiContext) {
+    let top = crate::pages::breadcrumb_header(pc, state.breadcrumb, cx, cy, cw, ctx);
 
     // The pane the graph is laid out in, under the breadcrumb.
     let pane = (cx, top, cw, (cy + ch - top).max(0.0));
@@ -265,26 +264,22 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, cx: f32, cy: f32, cw
         }
     }
 
-    // Render the Graph widget into its pane under the breadcrumb — cut to
-    // it, since a graph panned or zoomed past its edge would otherwise draw
-    // over the preview beside it.
-    let mut graph_pc = PageContent::new();
-    cce_ui::compose::render_widget_h(&mut graph_pc, state.graph, pane.0, pane.1, pane.2, pane.3, ctx);
-    pc.absorb(graph_pc.clipped_to([cx, top, cx + cw, cy + ch]));
-
-    // Each node's glyph on the left of its body, at the size and inset the
-    // graph's geometry toggle has on the right (hidden here): scaled with
-    // the zoom. Cut to the graph's rect, as its labels are.
-    let canvas = [cx, top, cx + cw, cy + ch];
+    // Paint the Graph widget in its pane under the breadcrumb, cut to it —
+    // a graph panned or zoomed past its edge would otherwise draw over the
+    // preview beside it — and each node's glyph on the left of its body, at
+    // the size and inset the graph's geometry toggle has on the right
+    // (hidden here): scaled with the zoom, cut as the graph is.
+    let canvas = crate::pages::rect(cx, top, cw, (cy + ch - top).max(0.0));
     let glyph_color = [0xcc as f32 / 255.0, 0xcc as f32 / 255.0, 0xd4 as f32 / 255.0, 1.0];
-    for (idx, glyph) in state.node_glyphs.iter().enumerate() {
-        let Some((nx, ny, nw, nh)) = ctx[state.graph].node_rect(idx) else { continue };
-        let scale_f = nw / 80.0;
-        let side = (18.0 * scale_f).clamp(6.0, 50.0);
-        pc.icon_bounded(glyph, nx + 6.0 * scale_f, ny + (nh - side) / 2.0, side, side, glyph_color, Some(canvas));
-    }
-
-    pc
+    pc.clip(canvas, |pc| {
+        crate::pages::widget(pc, state.graph, pane.0, pane.1, pane.2, pane.3, ctx);
+        for (idx, glyph) in state.node_glyphs.iter().enumerate() {
+            let Some((nx, ny, nw, nh)) = ctx[state.graph].node_rect(idx) else { continue };
+            let scale_f = nw / 80.0;
+            let side = (18.0 * scale_f).clamp(6.0, 50.0);
+            crate::pages::icon(pc, glyph, nx + 6.0 * scale_f, ny + (nh - side) / 2.0, side, side, glyph_color, None);
+        }
+    });
 }
 
 #[cfg(test)]

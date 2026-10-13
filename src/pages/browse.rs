@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::pages::PageContent;
+use cce_ui::scene::paint::PaintCtx;
 use cce_ui::context::UiContext;
 use cce_ui::widget::Handle;
 use cce_ui::widget::{Adapted, WidgetHost, Breadcrumb, PathController};
@@ -216,8 +216,8 @@ pub fn next_selection_index(state: &BrowseState, direction: BrowseNavigation) ->
 
 // ── View ────────────────────────────────────────────────────────────
 
-pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) -> PageContent {
-    let mut pc = PageContent::new();
+/// Lay the page out in the pane `(cx, cy, cw, ch)` and paint it into `pc`.
+pub fn view(state: &mut BrowseState, pc: &mut PaintCtx, cx: f32, cy: f32, cw: f32, ch: f32, select_mode: bool, ctx: &mut cce_ui::context::UiContext) {
     let text_dim = cce_ui::color::TEXT_DIM;
 
 
@@ -250,7 +250,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
 
     // 1. The Breadcrumb, where every page puts it.
     let (bx, by, bw, _) = at(crumb);
-    crate::pages::breadcrumb_header(&mut pc, state.breadcrumb, bx, by, bw, ctx);
+    crate::pages::breadcrumb_header(pc, state.breadcrumb, bx, by, bw, ctx);
 
     // 2. The list (ScrollBox).
     let (list_x, list_y, list_w, list_h) = at(list);
@@ -366,7 +366,7 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
         state.autoscrolled_to = state.selected;
     }
 
-    state.list.push_prims(&mut pc);
+    state.list.push_prims(pc);
     if state.search_visible {
         let (sx, sy, sw, sh) = (
             list_x + search_pad,
@@ -374,10 +374,9 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
             list_w - 2.0 * search_pad,
             search_h,
         );
-        cce_ui::compose::render_widget_h(&mut pc, state.search_box, sx, sy, sw, sh, ctx);
-        // The TextBox's recessed well lives in its modern paint(); the flat view
-        // this host renders through loses it, so carve it here.
-        pc.relief_recessed(sx, sy, sw, sh, cce_ui::layout::textbox_corner_radius());
+        // The TextBox paints its own well (the field's well and run, its
+        // focus tint), which the flat-host bridge dropped and this carved again.
+        crate::pages::widget(pc, state.search_box, sx, sy, sw, sh, ctx);
     }
 
     // Count label in the bottom right corner of the scrolling list
@@ -391,17 +390,14 @@ pub fn view(state: &mut BrowseState, cx: f32, cy: f32, cw: f32, ch: f32, select_
     let count_text_w = count_str.len() as f32 * 6.0;
     let count_x = list_x + list_w - count_text_w - 24.0;
     let count_y = list_y + list_h - 18.0;
-    pc.text(&count_str, count_x, count_y, 11.0, text_dim);
+    crate::pages::text(pc, &count_str, count_x, count_y, 11.0, text_dim, None, None);
 
     // 3. Allocate and render Textbox(es)
     if let Some(name_box) = name_box {
         let (tx, ty, tw, th) = at(name_box);
         ctx[state.save_name_box].set_row_rect(tx, tw);
-        cce_ui::compose::render_widget_h(&mut pc, state.save_name_box, tx, ty, tw, th, ctx);
-        pc.relief_recessed(tx, ty, tw, th, cce_ui::layout::textbox_corner_radius());
+        crate::pages::widget(pc, state.save_name_box, tx, ty, tw, th, ctx);
     }
-
-    pc
 }
 
 // ── Update ──────────────────────────────────────────────────────────

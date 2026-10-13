@@ -9,7 +9,7 @@
 //!   tiles near-square instead of the slivers a naive slice-and-dice produces;
 //! - [`SpaceState::relayout`], which walks the scanned tree recursively and
 //!   flattens it into a [`Tile`] list, culling anything too small to see;
-//! - [`view`], which paints that list into a `PageContent`.
+//! - [`view`], which paints that list into the frame's `PaintCtx`.
 //!
 //! The scan itself is `services::scan`, driven from `main.rs` — this module is
 //! given a finished tree.
@@ -23,7 +23,9 @@ use cce_ui::context::UiContext;
 use cce_ui::widget::Handle;
 use cce_ui::widget::{Adapted, Breadcrumb, PathController};
 
-use crate::pages::PageContent;
+use cce_ui::scene::paint::PaintCtx;
+
+use crate::pages::{fill, fill_rounded, text, well};
 use crate::pages::browse::BrowseState;
 use crate::services::scan::TreeNode;
 use crate::util::{format_size, truncate_px};
@@ -667,18 +669,18 @@ fn rest_kind(rest: &[&TreeNode], path: &Path, dominant: &HashMap<PathBuf, Catego
 
 // ── View ────────────────────────────────────────────────────────────
 
+/// Lay the page out in the pane `(cx, cy, cw, ch)` and paint it into `pc`.
 pub fn view(
     state: &mut SpaceState,
     browse: &BrowseState,
+    pc: &mut PaintCtx,
     cx: f32,
     cy: f32,
     cw: f32,
     ch: f32,
     ctx: &mut cce_ui::context::UiContext,
-) -> PageContent {
-    let mut pc = PageContent::new();
-
-    let top = crate::pages::breadcrumb_header(&mut pc, state.breadcrumb, cx, cy, cw, ctx);
+) {
+    let top = crate::pages::breadcrumb_header(pc, state.breadcrumb, cx, cy, cw, ctx);
 
     let mut segments = Vec::new();
     for component in browse.current_dir.components() {
@@ -706,22 +708,28 @@ pub fn view(
     // except in the 1px inset.
     let bg = cce_ui::color::list_bg_color();
     let radius = cce_ui::layout::list_corner_radius();
-    {
-        use cce_ui::scene::paint::RenderTarget;
-        pc.rect_with_radius_corners(bg, map.0, map.1, map.2, map.3, radius, (true, true, true, true));
+    fill_rounded(pc, bg, map.0, map.1, map.2, map.3, radius, (true, true, true, true));
+    let drawn = map_body(state, browse, pc, map);
+    // The well's wall over its floor and whatever the map drew on it.
+    well(pc, map.0, map.1, map.2, map.3, radius, state.focused);
+    if drawn {
+        footer(state, pc, cx, cw, map);
     }
-    if state.focused {
-        pc.relief_recessed_focused(map.0, map.1, map.2, map.3, radius);
-    } else {
-        pc.relief_recessed(map.0, map.1, map.2, map.3, radius);
-    }
+}
 
+/// The map's tiles and outlines, or the line saying why there are none —
+/// `false` then, and no footer under it.
+fn map_body(state: &mut SpaceState, browse: &BrowseState, pc: &mut PaintCtx, map: (f32, f32, f32, f32)) -> bool {
     let text_dim = cce_ui::color::TEXT_DIM;
     let text_fg = cce_ui::color::TEXT_FG;
+    let note = |pc: &mut PaintCtx, msg: &str| {
+        let pad = cce_ui::layout::plate_padding();
+        text(pc, msg, map.0 + pad, map.1 + pad, 11.0, text_dim, None, None);
+    };
 
     if let Some(err) = &state.error {
-        pc.text(err, map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
-        return pc;
+        note(pc, err);
+        return false;
     }
 
     if state.scanning {
@@ -731,8 +739,8 @@ pub fn view(
             state.scan_files,
             format_size(state.scan_bytes)
         );
-        pc.text(&msg, map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
-        return pc;
+        note(pc, &msg);
+        return false;
     }
 
     // Inset one pixel so tiles do not sit on top of the well's rim.
@@ -741,8 +749,8 @@ pub fn view(
     // A root of zero bytes still gets a tile — an empty, dark map that read as
     // a scan that had not finished.
     if state.tiles.is_empty() || state.tree.as_ref().is_none_or(|t| t.size == 0) {
-        pc.text("Nothing to show — nothing here takes up any space.", map.0 + cce_ui::layout::plate_padding(), map.1 + cce_ui::layout::plate_padding(), 11.0, text_dim);
-        return pc;
+        note(pc, "Nothing to show — nothing here takes up any space.");
+        return false;
     }
 
     let frame = cce_ui::color::parse_hex_rgba_linear("#20242b").unwrap_or([0.1, 0.1, 0.12, 1.0]);
@@ -751,28 +759,28 @@ pub fn view(
         if tile.is_dir {
             // A directory paints only its frame — its children cover the
             // inside, and where they do not, the gap reads as slack space.
-            pc.rect(frame, tx, ty, tw, th);
+            fill(pc, frame, tx, ty, tw, th);
             // One drawn as a block has no children over it: fill it, inside a
             // frame-coloured rim, in a dimmed copy of what fills it most.
             // An opened directory's name sits on its frame-coloured strip; a
             // block's sits on its fill.
             let mut label = text_dim;
             if let Some(cat) = tile.aggregate {
-                let fill = mix(cat.color(), frame, AGGREGATE_DIM);
+                let fill_color = mix(cat.color(), frame, AGGREGATE_DIM);
                 if tw > 2.0 && th > 2.0 {
-                    pc.rect(fill, tx + 1.0, ty + 1.0, tw - 2.0, th - 2.0);
+                    fill(pc, fill_color, tx + 1.0, ty + 1.0, tw - 2.0, th - 2.0);
                 }
-                label = label_on(fill, text_fg, frame);
+                label = label_on(fill_color, text_fg, frame);
             }
             if th >= DIR_LABEL_MIN && tw >= FILE_LABEL_MIN_W {
-                pc.text(&elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, label);
+                text(pc, &elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, label, None, None);
             }
         } else {
             let (fx, fy, fw, fh) = file_face(tile.rect);
-            let fill = Category::of(&tile.name).color();
-            pc.rect(fill, fx, fy, fw, fh);
+            let fill_color = Category::of(&tile.name).color();
+            fill(pc, fill_color, fx, fy, fw, fh);
             if tw >= FILE_LABEL_MIN_W && th >= FILE_LABEL_MIN_H {
-                pc.text(&elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, label_on(fill, text_fg, frame));
+                text(pc, &elide(&tile.name, tw - 6.0), tx + 3.0, ty + 2.0, 10.0, label_on(fill_color, text_fg, frame), None, None);
             }
         }
     }
@@ -783,22 +791,28 @@ pub fn view(
     // and a 1px frame on the dark between tiles did not answer it.
     if let Some(top) = state.hovered.and_then(|i| top_folder(&state.tiles, i)) {
         let [r, g, b, _] = cce_ui::color::TEXT_ACCENT;
-        outline(&mut pc, state.tiles[top].rect, [r, g, b, TOP_FOLDER_ALPHA], 2.0);
+        outline(pc, state.tiles[top].rect, [r, g, b, TOP_FOLDER_ALPHA], 2.0);
     }
     if let Some(sel) = &state.selected_path {
         if let Some(t) = state.tiles.iter().find(|t| &t.path == sel) {
-            outline(&mut pc, t.rect, cce_ui::color::TEXT_HEADER, 2.0);
+            outline(pc, t.rect, cce_ui::color::TEXT_HEADER, 2.0);
         }
     }
     if let Some(idx) = state.hovered {
         if let Some(t) = state.tiles.get(idx) {
-            outline(&mut pc, t.rect, cce_ui::color::TEXT_ACCENT, 1.0);
+            outline(pc, t.rect, cce_ui::color::TEXT_ACCENT, 1.0);
         }
     }
+    true
+}
 
-    // Footer, line one: whatever the cursor is over, else the summary. The
-    // root tile covers the whole map, so "over the root" (a frame gap) counts
-    // as over nothing.
+/// The footer under the map: the readout, and the colour legend under it.
+fn footer(state: &SpaceState, pc: &mut PaintCtx, cx: f32, cw: f32, map: (f32, f32, f32, f32)) {
+    let text_dim = cce_ui::color::TEXT_DIM;
+    let text_fg = cce_ui::color::TEXT_FG;
+    // Line one: whatever the cursor is over, else the summary. The root tile
+    // covers the whole map, so "over the root" (a frame gap) counts as over
+    // nothing.
     let left = cx + 8.0;
     let avail = (cw - 16.0).max(0.0);
     let line1 = map.1 + map.3 + 3.0;
@@ -808,7 +822,7 @@ pub fn view(
         Some(t) => readout(t, &state.scanned_dir, total, avail),
         None => summary(total, state.breakdown.files, avail),
     };
-    pc.text(&readout, left, line1, FOOTER_FONT, text_dim);
+    text(pc, &readout, left, line1, FOOTER_FONT, text_dim, None, None);
 
     // Line two: the legend, largest kind first, as many as fit. The hovered
     // tile's kind is lit, so the key answers "what colour is this?" in place.
@@ -821,13 +835,11 @@ pub fn view(
         if x + w > left + avail {
             break;
         }
-        pc.rect(cat.color(), x, line2 + (FOOTER_LINE - 2.0 - SWATCH) / 2.0, SWATCH, SWATCH);
+        fill(pc, cat.color(), x, line2 + (FOOTER_LINE - 2.0 - SWATCH) / 2.0, SWATCH, SWATCH);
         let color = if lit == Some(cat) { text_fg } else { text_dim };
-        pc.text(&label, x + SWATCH + SWATCH_GAP, line2, FOOTER_FONT, color);
+        text(pc, &label, x + SWATCH + SWATCH_GAP, line2, FOOTER_FONT, color, None, None);
         x += w + LEGEND_GAP;
     }
-
-    pc
 }
 
 /// The top-level folder (depth 1) holding tile `idx`, when it lies deeper
@@ -947,17 +959,17 @@ fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
-/// Four thin rects making a border — `PageContent` has no stroke primitive.
-fn outline(pc: &mut PageContent, rect: (f32, f32, f32, f32), color: [f32; 4], t: f32) {
+/// Four thin fills making a border round `rect`, `t` thick.
+fn outline(pc: &mut PaintCtx, rect: (f32, f32, f32, f32), color: [f32; 4], t: f32) {
     let (x, y, w, h) = rect;
     if w <= 0.0 || h <= 0.0 {
         return;
     }
     let t = t.min(w / 2.0).min(h / 2.0);
-    pc.rect(color, x, y, w, t);
-    pc.rect(color, x, y + h - t, w, t);
-    pc.rect(color, x, y + t, t, h - t * 2.0);
-    pc.rect(color, x + w - t, y + t, t, h - t * 2.0);
+    fill(pc, color, x, y, w, t);
+    fill(pc, color, x, y + h - t, w, t);
+    fill(pc, color, x, y + t, t, h - t * 2.0);
+    fill(pc, color, x + w - t, y + t, t, h - t * 2.0);
 }
 
 /// Trim to what fits in `width` px at the ~10px tile font. An estimate, not a

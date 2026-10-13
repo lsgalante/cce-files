@@ -9,24 +9,19 @@
 //! row overlays) BEFORE the rounded background, washing them under the translucent bg —
 //! the same sandwich the settings lists had (Phase 6v). `push_prims` draws bg first.
 //!
-//! **That fix holds only because these prims go into the PAGE's `PageContent`.**
-//! `rebuild_layout` partitions `plain_pc`'s rects by radius and appends all the plain
-//! ones before all the rounded ones, so anything routed through there is re-sorted
-//! rather than drawn in call order. The bg here is rounded (`list_corner_radius`
-//! defaults to 4.0) while the scrollbar and row overlays are radius-0, so moving this
-//! emission to `plain_pc`/`window_pc` — as `PreviewPane::push_prims` does, which makes
-//! it look like the natural thing to do — would sort the bg back after them and
-//! reinstate the exact Phase 6v sandwich this note describes. It would also be silent:
-//! the bg is translucent, so the overlays wash out rather than disappear.
-//!
-//! The scrollbar leans on the same call order, twice (the DE's centre-line rule, see
-//! cce-ui's CLAUDE.md "Every scrollbar rides a centre line, behind the plate"): its
-//! IDLE copy goes out before the bg, so the translucent well dims it, and its FORE
-//! copy after the row overlays. Both are pills (rounded), so even a radius partition
-//! would keep the two copies either side of the rounded bg — but it would still sink
-//! the radius-0 row overlays under the bg, so the note above stands.
+//! `push_prims` paints into a `PaintCtx` in call order, and the order is the picture
+//! (the DE's centre-line rule, see cce-ui's CLAUDE.md "Every scrollbar rides a centre
+//! line, behind the plate"): the scrollbar's IDLE copy goes out before the bg, so the
+//! translucent well dims it, the row overlays and glyphs over the bg, the FORE copy after
+//! them, and the well's wall last, over everything the well holds. (Until 2026-10-12 the
+//! list went into the page's `PageContent`, which replayed each kind of prim as a group —
+//! fills in call order, then glyphs, then walls — and only the fills' order was the list's
+//! own.)
 
+use cce_ui::scene::paint::PaintCtx;
 use cce_ui::widget::{Bounds, Justification, MouseScrollDelta, ScrollMotion, ScrollbarActivity, LINE_PX};
+
+use crate::pages::{fill, fill_rounded, icon, text, well};
 
 /// Column sizing (moved here with the cce-ui `List` deletion — RowList is the only
 /// remaining consumer of the column model).
@@ -423,8 +418,7 @@ impl RowList {
     }
 
     /// The pill track and thumb at `alpha` (track/thumb colours scaled).
-    fn push_scrollbar(&self, pc: &mut crate::pages::PageContent, alpha: f32) {
-        use cce_ui::scene::paint::RenderTarget;
+    fn push_scrollbar(&self, pc: &mut PaintCtx, alpha: f32) {
         let a = alpha.clamp(0.0, 1.0);
         if !self.overflowing() || a <= 0.001 {
             return;
@@ -435,7 +429,8 @@ impl RowList {
         };
         let all = (true, true, true, true);
         let (sb_x, track_y, sb_w, track_h, thumb_y, thumb_h) = self.scrollbar_geom();
-        pc.rect_with_radius_corners(
+        fill_rounded(
+            pc,
             dim(cce_ui::color::scrollbar_track_color()),
             sb_x,
             track_y,
@@ -444,7 +439,8 @@ impl RowList {
             sb_w.min(track_h) * 0.5,
             all,
         );
-        pc.rect_with_radius_corners(
+        fill_rounded(
+            pc,
             dim(cce_ui::color::scrollbar_thumb_color()),
             sb_x,
             thumb_y,
@@ -458,18 +454,18 @@ impl RowList {
     // ── Paint ──
 
     /// The legacy frame, single-drawn and in the right order: the scrollbar's idle copy,
-    /// the rounded bg (this list ran with `show_border = false`), row overlays, the
-    /// scrollbar's fore copy, then the row text — the `List` column-branch cell layout
-    /// (icon column, primary/secondary sizes and tints, char-estimate truncation,
-    /// viewport-inset clip bounds) verbatim.
-    pub fn push_prims(&self, pc: &mut crate::pages::PageContent) {
-        use cce_ui::scene::paint::RenderTarget;
+    /// the rounded bg (this list ran with `show_border = false`), row overlays and glyphs,
+    /// the scrollbar's fore copy, the well's wall, and the row text — the `List`
+    /// column-branch cell layout (icon column, primary/secondary sizes and tints,
+    /// char-estimate truncation, viewport-inset clip bounds) verbatim.
+    pub fn push_prims(&self, pc: &mut PaintCtx) {
         let (x, y, w, h) = (self.x, self.y, self.w, self.h);
         // The idle copy, at full alpha and every frame, raised or not: the
         // translucent bg over it is what sinks it, and the fore copy fades in
         // over it, so dropping it at the latch would blink the bar.
         self.push_scrollbar(pc, 1.0);
-        pc.rect_with_radius_corners(
+        fill_rounded(
+            pc,
             cce_ui::color::list_bg_color(),
             x,
             y,
@@ -478,14 +474,6 @@ impl RowList {
             cce_ui::layout::list_corner_radius(),
             (true, true, true, true),
         );
-        // Recessed well like a text box: the list floor sits below the pane
-        // surface, its wall carved over the bg and row overlays. Focused, the
-        // well swaps that lighting for the accent ring (the tinted carve).
-        if self.focused {
-            pc.relief_recessed_focused(x, y, w, h, cce_ui::layout::list_corner_radius());
-        } else {
-            pc.relief_recessed(x, y, w, h, cce_ui::layout::list_corner_radius());
-        }
 
 
         let col_bounds = self.column_bounds();
@@ -529,7 +517,7 @@ impl RowList {
                 let qy = draw_y.max(y);
                 let qb = (draw_y + self.item_height).min(y + self.viewport_h);
                 if qb > qy {
-                    pc.rect(bg, x + 2.0, qy, w - 4.0, qb - qy);
+                    fill(pc, bg, x + 2.0, qy, w - 4.0, qb - qy);
                 }
             }
 
@@ -539,12 +527,12 @@ impl RowList {
             let y_secondary = cce_ui::layout::center_text_y(draw_y, self.item_height, secondary_size);
 
             let mut start_text_offset = 8.0;
-            if let Some(icon) = row.icon {
+            if let Some(glyph) = row.icon {
                 if !col_bounds.is_empty() {
                     // A glyph the size of the name's text, centred on the row.
                     let side = primary_size;
                     let gy = draw_y + (self.item_height - side) * 0.5;
-                    pc.icon_bounded(icon, x + col_bounds[0].0 + 12.0, gy, side, side, row_fg, clip);
+                    icon(pc, glyph, x + col_bounds[0].0 + 12.0, gy, side, side, row_fg, clip);
                     start_text_offset = 32.0;
                 }
             }
@@ -571,32 +559,19 @@ impl RowList {
                 } else {
                     cell_text.clone()
                 };
-                push_text(pc, &truncated, cell_draw_x, cell_y, cell_size, cell_color, &font, clip);
+                text(pc, &truncated, cell_draw_x, cell_y, cell_size, cell_color, font.as_deref(), clip);
             }
         }
 
         // The fore copy, after the row overlays, at the fade: it keeps drawing
-        // all the way out rather than stopping at the latch. (A part's icons and
-        // reliefs are emitted after all its rects, and text after everything,
-        // so the row glyphs, the well's wall and the labels still land over it.)
+        // all the way out rather than stopping at the latch. The text pass
+        // draws after all geometry, so the labels still land over it.
         self.push_scrollbar(pc, self.activity.fade());
-    }
-}
-
-fn push_text(
-    pc: &mut crate::pages::PageContent,
-    text: &str,
-    x: f32,
-    y: f32,
-    size: f32,
-    color: [f32; 4],
-    font: &Option<String>,
-    bounds: Option<[f32; 4]>,
-) {
-    use cce_ui::scene::paint::RenderTarget;
-    match font {
-        Some(f) => pc.text_with_font_and_bounds(text, x, y, size, color, f, bounds),
-        None => pc.text_with_bounds(text, x, y, size, color, bounds),
+        // Recessed well like a text box: the list floor sits below the pane
+        // surface, its wall carved over the bg, the row overlays and the bar.
+        // Focused, the well swaps that lighting for the accent ring (the
+        // tinted carve).
+        well(pc, x, y, w, h, cce_ui::layout::list_corner_radius(), self.focused);
     }
 }
 
@@ -604,6 +579,26 @@ fn push_text(
 mod tests {
     use super::*;
     use cce_ui::widget::Justification;
+
+    /// What `push_prims` painted, in order, text left out: each a kind
+    /// ("fill", "glyph", "wall"), its left edge, its colour (fills) and
+    /// whether it is rounded.
+    fn painted(l: &RowList) -> Vec<(&'static str, f32, [f32; 4], bool)> {
+        use cce_ui::scene::paint::Prim;
+        let mut pc = PaintCtx::new();
+        l.push_prims(&mut pc);
+        pc.finish()
+            .items
+            .into_iter()
+            .filter_map(|item| match item.prim {
+                Prim::Quad { rect, color } => Some(("fill", rect.x, color, false)),
+                Prim::RoundedRect { rect, color, .. } => Some(("fill", rect.x, color, true)),
+                Prim::Image { rect, .. } => Some(("glyph", rect.x, [0.0; 4], false)),
+                Prim::Recess { rect, .. } => Some(("wall", rect.x, [0.0; 4], false)),
+                _ => None,
+            })
+            .collect()
+    }
 
     fn list_with_rows(n: usize) -> RowList {
         let mut l = RowList::new(30.0, 2.0);
@@ -682,13 +677,12 @@ mod tests {
 
         // Sunk, the idle copy is drawn before the bg and the fore copy not
         // at all (fade 0); both pills.
-        let mut pc = crate::pages::PageContent::new();
-        l.push_prims(&mut pc);
         let bg = cce_ui::color::list_bg_color();
-        let bg_at = pc.rects.iter().position(|r| r.0 == bg && r.1 == l.x).expect("bg");
-        let bars: Vec<usize> = (0..pc.rects.len()).filter(|&i| pc.rects[i].1 == sb_x).collect();
+        let items = painted(&l);
+        let bg_at = items.iter().position(|(_, x, c, _)| *c == bg && *x == l.x).expect("bg");
+        let bars: Vec<usize> = items.iter().enumerate().filter(|(_, it)| it.1 == sb_x).map(|(i, _)| i).collect();
         assert_eq!(bars.len(), 2, "track and thumb, idle copy only");
-        assert!(bars.iter().all(|&i| i < bg_at && pc.rects[i].5 > 0.0));
+        assert!(bars.iter().all(|&i| i < bg_at && items[i].3), "pills, under the bg");
 
         // A wheel raises it; the fade brings the fore copy in after the rows.
         assert!(l.wheel(&MouseScrollDelta::LineDelta(0.0, -2.0), 50.0, 50.0));
@@ -697,11 +691,15 @@ mod tests {
             l.tick(1.0 / 60.0);
         }
         assert!(l.activity.fade() > 0.99);
-        let mut pc = crate::pages::PageContent::new();
-        l.push_prims(&mut pc);
-        let bars: Vec<usize> = (0..pc.rects.len()).filter(|&i| pc.rects[i].1 == sb_x).collect();
+        let items = painted(&l);
+        let bars: Vec<usize> = items.iter().enumerate().filter(|(_, it)| it.1 == sb_x).map(|(i, _)| i).collect();
         assert_eq!(bars.len(), 4, "idle copy and fore copy");
-        assert_eq!(bars[2], pc.rects.len() - 2, "the fore copy is the last thing drawn");
+        let last_fill = items.iter().rposition(|(kind, ..)| *kind == "fill").unwrap();
+        assert_eq!(bars[3], last_fill, "the fore copy is the last fill drawn, over the rows");
+        // The well's wall, when there is one, over all of it.
+        if let Some(wall) = items.iter().position(|(kind, ..)| *kind == "wall") {
+            assert_eq!(wall, items.len() - 1, "the well's wall is drawn last");
+        }
 
         // Raised, a press on the thumb grabs it, not the row under it.
         let (_, _, _, _, thumb_y, thumb_h) = l.scrollbar_geom();

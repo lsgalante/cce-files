@@ -3,12 +3,12 @@
 //! with control relief off).
 //!
 //! Moved in-crate from cce-ui's `PreviewState` (its only consumer was this app)
-//! and flattened to the RowList idiom: a plain struct whose `push_prims` emits
-//! rects and texts ONCE into a `PageContent`, per-text clip bounds pre-clamped
-//! to the pane rect. This replaces the old Adapted<W> widget whose paint ran
-//! twice per frame (quads via `Paint::paint`, text via the legacy-labels
-//! hatch) and the caller-side text clamp in `rebuild_layout`. Scrolling is
-//! `wheel()`, called imperatively from the app like `RowList::wheel`.
+//! and flattened to the RowList idiom: a plain struct whose `push_prims` paints
+//! ONCE into the frame's `PaintCtx`, every label cut to the pane rect. This
+//! replaces the old Adapted<W> widget whose paint ran twice per frame (quads
+//! via `Paint::paint`, text via the legacy-labels hatch) and the caller-side
+//! text clamp in `rebuild_layout`. Scrolling is `wheel()`, called imperatively
+//! from the app like `RowList::wheel`.
 
 use std::path::PathBuf;
 
@@ -18,7 +18,9 @@ use cce_ui::widget::display::{measure_text_width, truncate_tail};
 use crate::util::truncate_px;
 use cce_ui::widget::{Bounds, MouseScrollDelta, ScrollMotion};
 
-use crate::pages::PageContent;
+use cce_ui::scene::paint::PaintCtx;
+
+use crate::pages::{fill, fill_rounded, icon, well};
 
 /// Pitch of the text preview's lines (11px monospace on a 15px advance).
 const PREVIEW_LINE_H: f32 = 15.0;
@@ -218,39 +220,20 @@ impl PreviewPane {
         moved || self.scroll_motion.is_animating()
     }
 
-    /// One pass: sections, fills, image runs, and text — every text emitted with
-    /// bounds intersected against the pane rect (the old caller-side clamp).
-    pub fn push_prims(&self, pc: &mut PageContent) {
-        let text_start = pc.texts.len();
-        self.emit(pc);
-
+    /// One pass, in call order: each well's floor, what it holds, then its wall
+    /// over them — every label cut to the pane rect (the old caller-side clamp).
+    pub fn push_prims(&self, pc: &mut PaintCtx) {
         let (cx, cy, cw, ch) = self.rect;
-        let (pane_l, pane_t, pane_r, pane_b) = (cx, cy, cx + cw, cy + ch);
-        let mut i = text_start;
-        while i < pc.texts.len() {
-            let bounds = &mut pc.texts[i].6;
-            let b = bounds.unwrap_or([pane_l, pane_t, pane_r, pane_b]);
-            let clamped = [
-                b[0].max(pane_l),
-                b[1].max(pane_t),
-                b[2].min(pane_r),
-                b[3].min(pane_b),
-            ];
-            if clamped[2] <= clamped[0] || clamped[3] <= clamped[1] {
-                pc.texts.remove(i);
-                continue;
+        let pane = [cx, cy, cx + cw, cy + ch];
+        // A label cut to the pane, as well as to its own bounds; one the pane
+        // leaves nothing of is not drawn.
+        let text = |pc: &mut PaintCtx, content: &str, x: f32, y: f32, size: f32, color: [f32; 4], font: Option<&str>, bounds: Option<[f32; 4]>| {
+            let b = bounds.unwrap_or(pane);
+            let cut = [b[0].max(pane[0]), b[1].max(pane[1]), b[2].min(pane[2]), b[3].min(pane[3])];
+            if cut[2] > cut[0] && cut[3] > cut[1] {
+                crate::pages::text(pc, content, x, y, size, color, font, Some(cut));
             }
-            *bounds = Some(clamped);
-            i += 1;
-        }
-    }
-
-    fn emit(&self, pc: &mut PageContent) {
-        // For `rect_with_radius_corners` on the well fill — the inherent
-        // `rect`/`text` methods still win over the trait's by the usual
-        // inherent-first rule, so the calls below are unaffected.
-        use cce_ui::scene::paint::RenderTarget;
-        let (cx, cy, cw, ch) = self.rect;
+        };
 
         let text_fg = cce_ui::color::TEXT_FG;
         let text_dim = cce_ui::color::TEXT_DIM;
@@ -258,7 +241,7 @@ impl PreviewPane {
 
         if self.path.is_none() {
             let pad = cce_ui::layout::plate_padding();
-            pc.text("Select a file to view details", cx + pad, cy + pad, 13.0, text_dim);
+            text(pc, "Select a file to view details", cx + pad, cy + pad, 13.0, text_dim, None, None);
             return;
         }
 
@@ -279,13 +262,6 @@ impl PreviewPane {
         if !relief {
             well_outline(pc, cx, cy, cw, half_h);
         }
-        if relief {
-            if self.focused_well == Some(PreviewWell::Top) {
-                pc.relief_recessed_focused(cx, cy, cw, half_h, radius);
-            } else {
-                pc.relief_recessed(cx, cy, cw, half_h, radius);
-            }
-        }
         let rect_y = cy + inset;
         let rect_h = half_h - pad - 2.0 * inset;
 
@@ -298,7 +274,7 @@ impl PreviewPane {
         // content box below is unchanged: text and images already start at
         // rect_y, so widening the fill moves nothing but the shelf.
         let bg_color = cce_ui::color::list_bg_color();
-        pc.rect_with_radius_corners(bg_color, cx, cy, cw, half_h, radius, (true, true, true, true));
+        fill_rounded(pc, bg_color, cx, cy, cw, half_h, radius, (true, true, true, true));
 
         if let Some((id, img_w, img_h)) = self.image_tex {
             let fitted = fit_rect(
@@ -307,7 +283,7 @@ impl PreviewPane {
                 Rect { x: cx, y: rect_y, width: cw, height: rect_h },
                 FitMode::Contain { max_upscale: 4.0 },
             );
-            pc.image(id, fitted.x, fitted.y, fitted.width, fitted.height, 1.0);
+            pc.image(id, fitted, 1.0);
         } else if let Some(content) = &self.content_preview {
             // The first whole line scrolled past, plus the sub-line remainder
             // the glide is mid-way through: lines slide under the well's top
@@ -328,18 +304,21 @@ impl PreviewPane {
                 let char_w = measure_text_width("M", "monospace", 11.0).max(1.0);
                 let limit = (((cw - 2.0 * inset) / char_w).floor() as usize).max(20);
                 let line_truncated = truncate_tail(line, limit);
-                pc.text_with_font_bounded(&line_truncated, cx + inset, text_y, 11.0, text_fg, "monospace", clip);
+                text(pc, &line_truncated, cx + inset, text_y, 11.0, text_fg, Some("monospace"), Some(clip));
                 text_y += PREVIEW_LINE_H;
             }
         } else {
-            pc.text("No preview available", cx + inset, rect_y + inset, 11.0, text_dim);
+            text(pc, "No preview available", cx + inset, rect_y + inset, 11.0, text_dim, None, None);
+        }
+        if relief {
+            well(pc, cx, cy, cw, half_h, radius, self.focused_well == Some(PreviewWell::Top));
         }
 
         // 2. Bottom pane: Details Section. The visible gap between the wells
         // is exactly root_plate_gap — the same separator width as everywhere
         // else on the plate (it was a hardcoded 12+7=19px before).
         let details_top = cy + half_h + cce_ui::layout::root_plate_gap();
-        let icon = if self.is_dir { "folder" } else { "file" };
+        let glyph = if self.is_dir { "folder" } else { "file" };
 
         let details = [
             ("Path", &self.path_display),
@@ -357,19 +336,12 @@ impl PreviewPane {
         if !relief {
             well_outline(pc, cx, details_top, cw, (cy + ch) - details_top);
         }
-        if relief {
-            if self.focused_well == Some(PreviewWell::Bottom) {
-                pc.relief_recessed_focused(cx, details_top, cw, (cy + ch) - details_top, radius);
-            } else {
-                pc.relief_recessed(cx, details_top, cw, (cy + ch) - details_top, radius);
-            }
-        }
 
         // TODO(style): the header's 6px drop, the 42/112 label columns and
         // the 20px row pitch are the details form's own rhythm.
         let header_y = details_content_start_y + 6.0;
         // A 20px glyph centred on the 16px name beside it.
-        pc.icon(icon, cx + inset, header_y + 4.0 + (16.0 * 1.2 - 20.0) * 0.5, 20.0, 20.0, text_fg);
+        icon(pc, glyph, cx + inset, header_y + 4.0 + (16.0 * 1.2 - 20.0) * 0.5, 20.0, 20.0, text_fg, None);
 
         // Pixel-measured budgets against the section frame's inner right edge
         // (None-font text renders sans-serif — measure with the same family).
@@ -378,32 +350,35 @@ impl PreviewPane {
         let val_avail = (frame_right - (cx + 112.0) - 8.0).max(40.0);
 
         let name_truncated = truncate_px(&self.name, "sans-serif", 16.0, name_avail, false);
-        pc.text(&name_truncated, cx + 42.0, header_y + 4.0, 16.0, text_fg);
+        text(pc, &name_truncated, cx + 42.0, header_y + 4.0, 16.0, text_fg, None, None);
 
         let mut y = details_content_start_y + 36.0;
         for (label, val) in &details {
-            pc.text(label, cx + inset, y, 12.0, label_fg);
+            text(pc, label, cx + inset, y, 12.0, label_fg, None, None);
             let val_str = truncate_px(val, "sans-serif", 12.0, val_avail, true);
-            pc.text(&val_str, cx + 112.0, y, 12.0, text_dim);
+            text(pc, &val_str, cx + 112.0, y, 12.0, text_dim, None, None);
             y += 20.0;
         }
 
         if !self.target.is_empty() {
             // One pane gap sets the link target off from the rows above.
             y += cce_ui::layout::plate_gap();
-            pc.text("Target", cx + inset, y, 12.0, label_fg);
+            text(pc, "Target", cx + inset, y, 12.0, label_fg, None, None);
             let target_str = truncate_px(&self.target, "sans-serif", 12.0, val_avail, true);
-            pc.text(&target_str, cx + 112.0, y, 12.0, text_dim);
+            text(pc, &target_str, cx + 112.0, y, 12.0, text_dim, None, None);
+        }
+        if relief {
+            well(pc, cx, details_top, cw, (cy + ch) - details_top, radius, self.focused_well == Some(PreviewWell::Bottom));
         }
     }
 }
 
 /// A well's frame with control relief off: a 1px outline round its rect, in
 /// the section border colour.
-fn well_outline(pc: &mut PageContent, x: f32, y: f32, w: f32, h: f32) {
+fn well_outline(pc: &mut PaintCtx, x: f32, y: f32, w: f32, h: f32) {
     const BORDER: [f32; 4] = [0.25, 0.25, 0.35, 1.0];
-    pc.rect(BORDER, x, y, w, 1.0);
-    pc.rect(BORDER, x, y + h, w, 1.0);
-    pc.rect(BORDER, x, y, 1.0, h);
-    pc.rect(BORDER, x + w - 1.0, y, 1.0, h);
+    fill(pc, BORDER, x, y, w, 1.0);
+    fill(pc, BORDER, x, y + h, w, 1.0);
+    fill(pc, BORDER, x, y, 1.0, h);
+    fill(pc, BORDER, x + w - 1.0, y, 1.0, h);
 }

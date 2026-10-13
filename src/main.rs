@@ -230,59 +230,211 @@ fn occlude_against(
 /// Height of the chooser-mode bottom action bar (the band carved into the plate).
 const SELECT_BAR_H: f32 = 48.0;
 
+/// What painting a [`pages::PageContent`] part reads besides the part: the
+/// window size (an unbounded label's clip) and the pointer (a button's hover).
+struct EmitEnv {
+    win: (f32, f32),
+    cursor: (f32, f32),
+}
+
+impl EmitEnv {
+    /// Paint `part` into `out`, a category at a time, in the order the parts
+    /// have always drawn in: plates, fills, images, glyphs, strokes, relief
+    /// walls, grooves, buttons (plate, then label), then text. `view` is the
+    /// content region `(top, bottom)` the page part is held to — fills,
+    /// plates and walls cut to it, glyphs and strokes clipped by it, labels
+    /// bounded by it. The text of a part with `overlays` is cut away from
+    /// their faces ([`occlude_against`]). Every button lands in
+    /// `page_buttons` for the hand hit tests.
+    fn part(
+        &self,
+        out: &mut cce_ui::scene::paint::PaintCtx,
+        part: &pages::PageContent,
+        view: Option<(f32, f32)>,
+        overlays: &[&pages::PageContent],
+        page_buttons: &mut Vec<(cce_ui::widget::Adapted<cce_ui::widget::Button>, Message)>,
+    ) {
+        use cce_ui::scene::layout::Rect;
+        use cce_ui::scene::Material;
+        let (win_w, win_h) = self.win;
+        let cut = |y: f32, h: f32| match view {
+            Some((top, bottom)) => clip_to_viewport(y, h, top, bottom),
+            None => Some((y, h)),
+        };
+        // A glyph or stroke is cut by a clip, not pressed flat: its own,
+        // narrowed to the view's band across `(x, w)`.
+        let clip_for = |own: Option<[f32; 4]>, x: f32, w: f32| {
+            let mut clip = own.map(|[l, t, r, b]| Rect { x: l, y: t, width: r - l, height: b - t });
+            if let Some((top, bottom)) = view {
+                let band = Rect { x, y: top, width: w, height: bottom - top };
+                clip = Some(match clip {
+                    Some(c) => intersect_rect(c, band),
+                    None => band,
+                });
+            }
+            clip
+        };
+        let misses = |c: Rect, x: f32, y: f32, w: f32, h: f32| {
+            c.width <= 0.0 || c.height <= 0.0 || c.x >= x + w || c.x + c.width <= x || c.y >= y + h || c.y + c.height <= y
+        };
+        let rgb = |c: [f32; 4]| [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8];
+
+        // Plates first: a plate owns a FACE, so it is the floor of its part —
+        // everything else the part emits (a hover fill, an engraved seam, the
+        // labels) is meant to land on top of it. Emitted after the rects it
+        // would paint straight over them, which is where the context menu's
+        // hover row went the first time this ran.
+        for (c, px, py, pw, ph, pr, pd) in &part.plates {
+            let Some((y, h)) = cut(*py, *ph) else { continue };
+            out.plate(Rect { x: *px, y, width: *pw, height: h }, (*pr, *pr, *pr, *pr), &Material::from_fill(*c), *pd);
+        }
+        for (c, x, y, w, h, r, corners) in &part.rects {
+            let Some((y, h)) = cut(*y, *h) else { continue };
+            let rect = Rect { x: *x, y, width: *w, height: h };
+            if *r > 0.1 {
+                out.rounded_rect(rect, *r, *corners, *c);
+            } else {
+                out.quad(rect, *c);
+            }
+        }
+        for (id, x, y, w, h, alpha) in &part.images {
+            let Some((y, h)) = cut(*y, *h) else { continue };
+            out.image(*id, Rect { x: *x, y, width: *w, height: h }, *alpha);
+        }
+        for (name, x, y, w, h, color, bounds) in &part.icons {
+            // Cut, never squashed: a glyph is a picture, so a row scrolled
+            // half under the list's edge loses its half rather than being
+            // pressed flat the way the fills are clipped.
+            let clip = clip_for(*bounds, *x, *w);
+            if clip.is_some_and(|c| misses(c, *x, *y, *w, *h)) {
+                continue;
+            }
+            if let Some(c) = clip {
+                out.push_clip(c);
+            }
+            out.icon(name, Rect { x: *x, y: *y, width: *w, height: *h }, *color);
+            if clip.is_some() {
+                out.pop_clip();
+            }
+        }
+        for (shape, color, bounds) in &part.strokes {
+            // The page's view cuts a stroke top and bottom only. Its own box
+            // is no clip across: a vertical wire is one pixel wide on a
+            // half-pixel, and a scissor that tight rounds it away (the graph
+            // page drew only its horizontal runs).
+            let (sx, sy, sw, sh) = shape.bounds();
+            let clip = clip_for(*bounds, sx - 4.0, sw + 8.0);
+            if clip.is_some_and(|c| misses(c, sx, sy, sw, sh)) {
+                continue;
+            }
+            if let Some(c) = clip {
+                out.push_clip(c);
+            }
+            match *shape {
+                pages::Stroke::Line { x1, y1, x2, y2, thickness, cap } => out.vector(x1, y1, x2, y2, thickness, *color, cap),
+                pages::Stroke::Arc { cx, cy, radius, thickness, start, end } => out.arc(cx, cy, radius, thickness, start, end, *color),
+                pages::Stroke::Disc { cx, cy, radius } => out.circle(cx, cy, radius, *color),
+            }
+            if clip.is_some() {
+                out.pop_clip();
+            }
+        }
+        for (x, y, w, h, r, depth, kind) in &part.reliefs {
+            let Some((y, h)) = cut(*y, *h) else { continue };
+            let rect = Rect { x: *x, y, width: *w, height: h };
+            let radii = (*r, *r, *r, *r);
+            match *kind {
+                pages::RELIEF_RAISED => out.boss(rect, radii, *depth),
+                pages::RELIEF_INSET => out.inset_plate(rect, radii, Material::face([0.0; 4]).as_ref(), *depth),
+                pages::RELIEF_INSET_FOCUS => out.inset_plate_tinted(
+                    rect,
+                    radii,
+                    Material::face([0.0; 4]).as_ref(),
+                    *depth,
+                    cce_ui::widget::ControlPlate::focus_tint(),
+                ),
+                pages::RELIEF_RECESSED_FOCUS => {
+                    let hc = cce_ui::color::highlight_primary_color();
+                    out.recess_tinted(rect, radii, *depth, [hc[0], hc[1], hc[2]]);
+                }
+                _ => out.recess(rect, radii, *depth),
+            }
+        }
+        for (ax, ay, bx, by, gw, gd, hx, hy, hw, hh) in &part.grooves {
+            // Clipped by the HOST rect, not the seam's own span: a groove
+            // whose host is scrolled out has nothing left to engrave.
+            let Some((hy, hh)) = cut(*hy, *hh) else { continue };
+            out.groove((*ax, *ay), (*bx, *by), *gw, *gd, Rect { x: *hx, y: hy, width: *hw, height: hh });
+        }
+        for (btn, action) in &part.buttons {
+            let base = btn.base();
+            let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
+            let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
+            let label = base.label.as_deref().unwrap_or("");
+            // The label's font is the configured button font, resolved the
+            // same way `Button::paint` resolves it — family AND size.
+            let (label_family, label_size) = {
+                let (family, size) = cce_ui::layout::parse_font_string(&cce_ui::layout::button_font());
+                (family, size.unwrap_or(12.0))
+            };
+            let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
+
+            let Some((wy, wh)) = cut(base.y, base.h) else { continue };
+            let (wx, ww) = (base.x, base.w);
+            let (cx, cy) = self.cursor;
+            let hovering = cx >= wx && cx <= wx + ww && cy >= wy && cy <= wy + wh;
+            let col = if hovering { hover_bg } else { bg };
+            let rect = Rect { x: wx, y: wy, width: ww, height: wh };
+            // Flush inset button (control_relief): groove ring down, beveled
+            // lip back up, face level with the surface — mirroring
+            // Button::paint's relief branch. 4.0 is the standard radius.
+            if cce_ui::layout::control_relief() {
+                let depth = cce_ui::layout::bevel_width().min(wh * 0.2);
+                out.inset_plate(rect, (4.0, 4.0, 4.0, 4.0), Material::face(col).as_ref(), depth);
+            } else {
+                out.rounded_rect(rect, 4.0, (true, true, true, true), col);
+            }
+
+            // Centred by the SHAPED width, as `Button::label_width` does, and
+            // placed vertically by `align_text_y`, the toolkit's convention.
+            let text_w = cce_ui::widget::display::measure_text_width(label, &label_family, label_size);
+            let text_x = if btn.justify == cce_ui::widget::Justification::Left {
+                // TODO(style): a left-justified button label's lead-in is a
+                // control-level inset (Button's own, not a rung).
+                base.x + 8.0
+            } else {
+                base.x + (base.w - text_w) / 2.0
+            };
+            let text_y = cce_ui::layout::align_text_y(base.y, base.h, label_size, 0.0);
+            let start = match view {
+                Some((top, bottom)) => [0.0, top, win_w, bottom],
+                None => [0.0, 0.0, win_w, win_h],
+            };
+            let bounds = occlude_against(start, text_x, text_x + text_w, text_y, text_y + label_size * 1.4, overlays);
+            if let Some(b) = bounds {
+                // The family goes with it: measuring in one face and
+                // rendering in another is how the centring drifted.
+                out.text_with(label.to_string(), text_x, text_y, label_size, rgb(label_color), Some(label_family), Some(b));
+            }
+            page_buttons.push((btn.clone(), action.clone()));
+        }
+        for (text, size, x, y, col, font, bounds) in &part.texts {
+            let bounds = match view {
+                Some((top, bottom)) => Some(match bounds {
+                    Some(b) => [b[0], b[1].max(top), b[2], b[3].min(bottom)],
+                    None => [0.0, top, win_w, bottom],
+                }),
+                None => *bounds,
+            };
+            let start = bounds.unwrap_or([0.0, 0.0, win_w, win_h]);
+            let text_w = text.chars().count() as f32 * size * 0.65;
+            let Some(b) = occlude_against(start, *x, *x + text_w, *y, *y + *size * 1.4, overlays) else { continue };
+            out.text_with(text.clone(), *x, *y, *size, rgb(*col), font.clone(), Some(b));
+        }
+    }
+}
+
 // ── State ───────────────────────────────────────────────────────────
-
-/// How a flat quad renders under the SDF-lit plate system. `Flat` is the plain
-/// fill; the relief variants carry the roll/carve depth in px.
-#[derive(Clone, PartialEq)]
-enum WidgetFx {
-    Flat,
-    /// Edges-only raised plateau over whatever is painted below.
-    Boss(f32),
-    /// A lit plate: a rounded face in the quad's own color plus the rolled, lit
-    /// perimeter, at full size. What the pane plates and the preview stub wear.
-    /// Distinct from [`WidgetFx::Boss`], which is a rim with no face of its own.
-    Plate(f32),
-    /// Edges-only carve into whatever is painted below (recessed wells).
-    Recess(f32),
-    /// [`WidgetFx::Recess`] with pointer focus: the tinted carve — the wrapped
-    /// accent glint REPLACING the relief lighting (the DE's one focus
-    /// language; the shader drops the diffuse/curvature terms for tinted
-    /// carves, so the ring is all that shows).
-    RecessFocus(f32),
-    /// A flush inset control (buttons): groove ring carved down around the
-    /// rect, beveled lip back up inside, face level with the surface.
-    Inset(f32),
-    /// [`WidgetFx::Inset`] with keyboard focus: the rim lit in the highlight —
-    /// the ring a focused control plate wears.
-    InsetFocus(f32),
-    /// A GPU-textured quad; the id comes from `cce_ui::vk::upload_rgba`
-    /// (the preview pane's image). `color` is unused.
-    Image { id: u32, alpha: f32 },
-    /// A cce-icons glyph tinted with the widget's `color` (`PaintCtx::icon`),
-    /// cut to `clip` when it has one.
-    Icon { name: String, clip: Option<cce_ui::scene::layout::Rect> },
-    /// A widget's stroke, arc or disc (a graph's wire or port) in the
-    /// widget's `color`, cut to `clip` when it has one; the rect is its
-    /// bounding box, for culling.
-    Stroke { shape: crate::pages::Stroke, clip: Option<cce_ui::scene::layout::Rect> },
-    /// A line engraved from (ax, ay) to (bx, by) into the widget's rect, which
-    /// is the HOST surface here rather than the mark's own bounds — the shading
-    /// fades out across the host's rolled edge. The breadcrumb's slanted seams;
-    /// the only quad in this list that is not axis-aligned.
-    Groove { ax: f32, ay: f32, bx: f32, by: f32, width: f32, depth: f32 },
-}
-
-struct AppWidget {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    color: [f32; 4],
-    radius: f32,
-    corners: (bool, bool, bool, bool),
-    fx: WidgetFx,
-}
 
 #[derive(Clone)]
 struct ContextMenu {
@@ -586,10 +738,10 @@ struct FilesystemApp {
     save_mode: bool,
 
     // Rendering resources
-    widgets: Vec<AppWidget>,
-    // (content, font_size, x, y, color, font, bounds) — occlusion-adjusted text tuples,
-    // emitted as display-list Text prims.
-    texts: Vec<(String, f32, f32, f32, [f32; 4], Option<String>, Option<[f32; 4]>)>,
+    /// The window's content as the last rebuild painted it — every part in
+    /// its layer order, page text occluded by the overlays above it — and
+    /// appended to each frame's display list until the next rebuild.
+    frame: cce_ui::scene::paint::DisplayList,
     font_system: FontSystem,
     needs_rebuild: bool,
     /// What the last rebuild's widgets claimed for text input (an editing
@@ -813,9 +965,6 @@ impl FilesystemApp {
         self.ui_context[self.browse.save_name_box].prepare_text(&mut self.font_system);
         self.ui_context[self.browse.search_box].prepare_text(&mut self.font_system);
 
-        let mut widgets = Vec::new();
-        let mut texts = Vec::new();
-
         cce_ui::widget::hover_animation::reset_frame_registration();
         cce_ui::widget::hover_animation::set_cursor_pos(self.cursor_x, self.cursor_y);
 
@@ -878,14 +1027,6 @@ impl FilesystemApp {
 
         if let Some(tb) = self.prompt_dialog.as_ref().map(|d| d.textbox) {
             self.ui_context.lend_h(tb, |w, ctx| w.set_parent(None, ctx));
-        }
-
-        // Layout widgets recursively inside the parent space
-        let mut dummy_pc = pages::PageContent::new();
-        if has_sidebar {
-            let page_idx = Page::ALL.iter().position(|&p| p == self.current_page).unwrap_or(0);
-            self.ui_context[self.paginator].set_selected_page(page_idx);
-            cce_ui::compose::render_widget_h(&mut dummy_pc, self.paginator, 0.0, 0.0, sidebar_w, self.height as f32, &mut self.ui_context);
         }
 
         // Each top-level widget rendered through the same immediate-mode path the root
@@ -989,10 +1130,6 @@ impl FilesystemApp {
             let button_label = if self.save_mode { "Save" } else { "Select" };
             window_pc.button_plain(button_label, confirm_x, btn_y, btn_w, btn_h, Message::SelectOpen);
         }
-
-        // Gather all popovers
-        let mut popover_pc = pages::PageContent::new();
-        cce_ui::compose::render_popovers(&mut popover_pc, &mut self.ui_context);
 
         // Gather context menu overlay if visible
         let mut context_menu_pc = pages::PageContent::new();
@@ -1100,340 +1237,22 @@ impl FilesystemApp {
             dialog_pc.button_plain(kind.ok_label(), btn_open_x, btn_open_y, btn_open_w, btn_open_h, Message::PromptSubmit);
         }
 
-        // Translate everything into widgets and text_items!
-        // We collect from: window_pc, pc, popover_pc, context_menu_pc, dialog_pc
+        // Paint the parts in layer order into the cached frame. The page part
+        // is held to the content region; the window and page parts' text is
+        // occluded by the overlays above them (the menu, the dialog).
         let mut page_buttons = Vec::new();
+        let mut out = cce_ui::scene::paint::PaintCtx::new();
+        let overlays = [&context_menu_pc, &dialog_pc];
+        let emit = EmitEnv {
+            win: (self.width as f32, self.height as f32),
+            cursor: (self.cursor_x, self.cursor_y),
+        };
+        emit.part(&mut out, &window_pc, None, &overlays, &mut page_buttons);
+        emit.part(&mut out, &pc, Some((content_y, content_y + content_h)), &overlays, &mut page_buttons);
+        emit.part(&mut out, &context_menu_pc, None, &[], &mut page_buttons);
+        emit.part(&mut out, &dialog_pc, None, &[], &mut page_buttons);
 
-        for (part_idx, pc_part) in [&window_pc, &pc, &popover_pc, &context_menu_pc, &dialog_pc].into_iter().enumerate() {
-            let is_page_content = part_idx == 1;
-
-            // Plates first: a plate owns a FACE, so it is the floor of its part —
-            // everything else the part emits (a hover fill, an engraved seam, the
-            // labels) is meant to land on top of it. Emitted after the rects it
-            // would paint straight over them, which is where the context menu's
-            // hover row went the first time this ran.
-            for (c, px, py, pw, ph, pr, pd) in &pc_part.plates {
-                let (mut wy, mut wh) = (*py, *ph);
-                if is_page_content {
-                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
-                        Some((cy, ch)) => { wy = cy; wh = ch; }
-                        None => continue,
-                    }
-                }
-                widgets.push(AppWidget {
-                    x: *px,
-                    y: wy,
-                    w: *pw,
-                    h: wh,
-                    color: *c,
-                    radius: *pr,
-                    corners: (true, true, true, true),
-                    fx: WidgetFx::Plate(*pd),
-                });
-            }
-
-            for (c, x, y, w, h, r, corners) in &pc_part.rects {
-                let wx = *x;
-                let mut wy = *y;
-                let ww = *w;
-                let mut wh = *h;
-
-                if is_page_content {
-                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
-                        Some((cy, ch)) => { wy = cy; wh = ch; }
-                        None => continue,
-                    }
-                }
-
-                widgets.push(AppWidget {
-                    x: wx,
-                    y: wy,
-                    w: ww,
-                    h: wh,
-                    color: *c,
-                    radius: *r,
-                    corners: *corners,
-                    fx: WidgetFx::Flat,
-                });
-            }
-            for (id, ix, iy, iw, ih, alpha) in &pc_part.images {
-                let (mut wy, mut wh) = (*iy, *ih);
-                if is_page_content {
-                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
-                        Some((cy, ch)) => { wy = cy; wh = ch; }
-                        None => continue,
-                    }
-                }
-                widgets.push(AppWidget {
-                    x: *ix,
-                    y: wy,
-                    w: *iw,
-                    h: wh,
-                    color: [0.0; 4],
-                    radius: 0.0,
-                    corners: (true, true, true, true),
-                    fx: WidgetFx::Image { id: *id, alpha: *alpha },
-                });
-            }
-            for (name, ix, iy, iw, ih, color, bounds) in &pc_part.icons {
-                // Cut, never squashed: a glyph is a picture, so a row scrolled
-                // half under the list's edge loses its half rather than being
-                // pressed flat the way the fills are clipped.
-                let mut clip = bounds.map(|[l, t, r, b]| cce_ui::scene::layout::Rect { x: l, y: t, width: r - l, height: b - t });
-                if is_page_content {
-                    let view = cce_ui::scene::layout::Rect { x: *ix, y: content_y, width: *iw, height: content_h };
-                    clip = Some(match clip {
-                        Some(c) => intersect_rect(c, view),
-                        None => view,
-                    });
-                }
-                if let Some(c) = clip {
-                    if c.width <= 0.0 || c.height <= 0.0
-                        || c.x >= ix + iw || c.x + c.width <= *ix
-                        || c.y >= iy + ih || c.y + c.height <= *iy
-                    {
-                        continue;
-                    }
-                }
-                widgets.push(AppWidget {
-                    x: *ix,
-                    y: *iy,
-                    w: *iw,
-                    h: *ih,
-                    color: *color,
-                    radius: 0.0,
-                    corners: (true, true, true, true),
-                    fx: WidgetFx::Icon { name: name.clone(), clip },
-                });
-            }
-            for (shape, color, bounds) in &pc_part.strokes {
-                // Cut by a clip, as the glyphs are: a wire is a line, not a
-                // fill to press flat.
-                let (sx, sy, sw, sh) = shape.bounds();
-                let mut clip = bounds.map(|[l, t, r, b]| cce_ui::scene::layout::Rect { x: l, y: t, width: r - l, height: b - t });
-                if is_page_content {
-                    // The page's view cuts a stroke top and bottom only. Its
-                    // own box is no clip across: a vertical wire is one pixel
-                    // wide on a half-pixel, and a scissor that tight rounds
-                    // it away (the graph page drew only its horizontal runs).
-                    let view = cce_ui::scene::layout::Rect { x: sx - 4.0, y: content_y, width: sw + 8.0, height: content_h };
-                    clip = Some(match clip {
-                        Some(c) => intersect_rect(c, view),
-                        None => view,
-                    });
-                }
-                if let Some(c) = clip {
-                    if c.width <= 0.0 || c.height <= 0.0
-                        || c.x >= sx + sw || c.x + c.width <= sx
-                        || c.y >= sy + sh || c.y + c.height <= sy
-                    {
-                        continue;
-                    }
-                }
-                widgets.push(AppWidget {
-                    x: sx,
-                    y: sy,
-                    w: sw,
-                    h: sh,
-                    color: *color,
-                    radius: 0.0,
-                    corners: (true, true, true, true),
-                    fx: WidgetFx::Stroke { shape: *shape, clip },
-                });
-            }
-            for (rx, ry, rw, rh, rr, rd, kind) in &pc_part.reliefs {
-                let (mut wy, mut wh) = (*ry, *rh);
-                if is_page_content {
-                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
-                        Some((cy, ch)) => { wy = cy; wh = ch; }
-                        None => continue,
-                    }
-                }
-                widgets.push(AppWidget {
-                    x: *rx,
-                    y: wy,
-                    w: *rw,
-                    h: wh,
-                    color: [0.0; 4],
-                    radius: *rr,
-                    corners: (true, true, true, true),
-                    fx: match *kind {
-                        pages::RELIEF_RAISED => WidgetFx::Boss(*rd),
-                        pages::RELIEF_INSET => WidgetFx::Inset(*rd),
-                        pages::RELIEF_INSET_FOCUS => WidgetFx::InsetFocus(*rd),
-                        pages::RELIEF_RECESSED_FOCUS => WidgetFx::RecessFocus(*rd),
-                        _ => WidgetFx::Recess(*rd),
-                    },
-                });
-            }
-            for (ax, ay, bx, by, gw, gd, hx, hy, hw, hh) in &pc_part.grooves {
-                // Clipped by the HOST rect, not the seam's own span: a groove
-                // whose host is scrolled out has nothing left to engrave.
-                let (mut wy, mut wh) = (*hy, *hh);
-                if is_page_content {
-                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
-                        Some((cy, ch)) => { wy = cy; wh = ch; }
-                        None => continue,
-                    }
-                }
-                widgets.push(AppWidget {
-                    x: *hx,
-                    y: wy,
-                    w: *hw,
-                    h: wh,
-                    color: [0.0; 4],
-                    radius: 0.0,
-                    corners: (true, true, true, true),
-                    fx: WidgetFx::Groove { ax: *ax, ay: *ay, bx: *bx, by: *by, width: *gw, depth: *gd },
-                });
-            }
-            for (btn, action) in &pc_part.buttons {
-                let base = btn.base();
-                let bg = btn.bg.unwrap_or([0.16, 0.16, 0.24, 1.0]);
-                let hover_bg = btn.hover_bg.unwrap_or([0.25, 0.30, 0.26, 1.0]);
-                let label = base.label.as_deref().unwrap_or("");
-                // The label's font is the configured button font, resolved the
-                // same way `Button::paint` resolves it — family AND size. A
-                // hardcoded 12.0 here rendered every plain button's label a
-                // size or two off whatever the rest of the DE's buttons wear.
-                let (label_family, label_size) = {
-                    let (family, size) = cce_ui::layout::parse_font_string(&cce_ui::layout::button_font());
-                    (family, size.unwrap_or(12.0))
-                };
-                let label_color = btn.label_color.unwrap_or([0.83, 0.83, 0.83, 1.0]);
-
-                let wx = base.x;
-                let mut wy = base.y;
-                let ww = base.w;
-                let mut wh = base.h;
-
-                if is_page_content {
-                    match clip_to_viewport(wy, wh, content_y, content_y + content_h) {
-                        Some((cy, ch)) => { wy = cy; wh = ch; }
-                        None => continue,
-                    }
-                }
-
-                let hovering = self.cursor_x >= wx && self.cursor_x <= wx + ww
-                    && self.cursor_y >= wy && self.cursor_y <= wy + wh;
-                let col = if hovering { hover_bg } else { bg };
-
-                // Flush inset button (control_relief): groove ring down,
-                // beveled lip back up, face level with the surface —
-                // mirroring Button::paint's relief branch.
-                let fx = if cce_ui::layout::control_relief() {
-                    WidgetFx::Inset(cce_ui::layout::bevel_width().min(wh * 0.2))
-                } else {
-                    WidgetFx::Flat
-                };
-                widgets.push(AppWidget {
-                    x: wx,
-                    y: wy,
-                    w: ww,
-                    h: wh,
-                    color: col,
-                    radius: 4.0, // standard button radius
-                    corners: (true, true, true, true),
-                    fx,
-                });
-
-                // Centring needs the SHAPED width, not `chars * size * 0.65`:
-                // that estimate runs wide on a proportional face (and narrow on
-                // a large mono one), so a centred label sat visibly off to one
-                // side of its own plate — the chooser's Cancel/Select were ~6px
-                // left of centre. Measure the run, as `Button::label_width`
-                // does, and let `align_text_y` place it vertically, the
-                // toolkit's convention for every other text-bearing control.
-                let text_w = cce_ui::widget::display::measure_text_width(label, &label_family, label_size);
-                let text_x = if btn.justify == cce_ui::widget::Justification::Left {
-                    // TODO(style): a left-justified button label's lead-in is a
-                    // control-level inset (Button's own, not a rung).
-                    base.x + 8.0
-                } else {
-                    base.x + (base.w - text_w) / 2.0
-                };
-                let text_y = cce_ui::layout::align_text_y(base.y, base.h, label_size, 0.0);
-
-                let start_bounds = if is_page_content {
-                    [0.0, content_y, self.width as f32, content_y + content_h]
-                } else {
-                    [0.0, 0.0, self.width as f32, self.height as f32]
-                };
-                let text_h = label_size * 1.4;
-                let occluded = if part_idx < 2 {
-                    occlude_against(
-                        start_bounds,
-                        text_x,
-                        text_x + text_w,
-                        text_y,
-                        text_y + text_h,
-                        &[&popover_pc, &context_menu_pc, &dialog_pc],
-                    )
-                } else {
-                    Some(start_bounds)
-                };
-                let final_button_bounds = match occluded {
-                    Some(b) => Some(b),
-                    None => {
-                        page_buttons.push((btn.clone(), action.clone()));
-                        continue;
-                    }
-                };
-
-                // The family goes with it: measuring in one face and rendering
-                // in another is how the centring drifted in the first place.
-                texts.push((label.to_string(), label_size, text_x, text_y, label_color, Some(label_family), final_button_bounds));
-
-                page_buttons.push((btn.clone(), action.clone()));
-            }
-            for (text, size, x, y, col, font, bounds) in &pc_part.texts {
-                let clamped_bounds = if is_page_content {
-                    let viewport_top = content_y;
-                    let viewport_bottom = content_y + content_h;
-                    match bounds {
-                        Some(b) => Some([
-                            b[0],
-                            b[1].max(viewport_top),
-                            b[2],
-                            b[3].min(viewport_bottom),
-                        ]),
-                        None => Some([
-                            0.0,
-                            viewport_top,
-                            self.width as f32,
-                            viewport_bottom,
-                        ]),
-                    }
-                } else {
-                    *bounds
-                };
-
-                let start_bounds = clamped_bounds.unwrap_or([0.0, 0.0, self.width as f32, self.height as f32]);
-                let text_w = text.chars().count() as f32 * size * 0.65;
-                let text_h = *size * 1.4;
-                let occluded = if part_idx < 2 {
-                    occlude_against(
-                        start_bounds,
-                        *x,
-                        *x + text_w,
-                        *y,
-                        *y + text_h,
-                        &[&popover_pc, &context_menu_pc, &dialog_pc],
-                    )
-                } else {
-                    Some(start_bounds)
-                };
-                let final_bounds = match occluded {
-                    Some(b) => Some(b),
-                    None => continue,
-                };
-
-                texts.push((text.clone(), *size, *x, *y, *col, font.clone(), final_bounds));
-            }
-        }
-
-        self.widgets = widgets;
-        self.texts = texts;
+        self.frame = out.finish();
         self.page_buttons = page_buttons;
         self.ui_context.clear_dirty();
         self.needs_rebuild = false;
@@ -1561,8 +1380,7 @@ impl Application for FilesystemApp {
             select_mode,
             select_directory,
             save_mode,
-            widgets: Vec::new(),
-            texts: Vec::new(),
+            frame: Default::default(),
             font_system: cce_ui::create_font_system(),
             needs_rebuild: true,
             text_claim: None,
@@ -1943,9 +1761,9 @@ impl Application for FilesystemApp {
 
     fn display_list(&mut self, size: LogicalSize, scale: f64) -> Option<cce_ui::scene::paint::DisplayList> {
         // Phase 6 single paint path: the whole frame — geometry and text — is this one list.
-        // rebuild_layout flattens every source (browse/network page, popovers, context menu,
-        // dialogs) into self.widgets/self.texts, with popover/dialog occlusion already folded
-        // into each text's bounds.
+        // rebuild_layout paints every source (browse/network page, context menu, dialog)
+        // into `self.frame`, with the menu/dialog occlusion already folded into each
+        // text's bounds.
         if self.needs_rebuild || self.width != size.width as u32 || self.height != size.height as u32 || self.scale_factor != scale {
             self.width = size.width as u32;
             self.height = size.height as u32;
@@ -1983,75 +1801,9 @@ impl Application for FilesystemApp {
             }
         }
 
-        for w in &self.widgets {
-            let rect = Rect { x: w.x, y: w.y, width: w.w, height: w.h };
-            let radii = (w.radius, w.radius, w.radius, w.radius);
-            match w.fx.clone() {
-                WidgetFx::Plate(depth) => pc.plate(rect, radii, &cce_ui::scene::Material::from_fill(w.color), depth),
-                WidgetFx::Boss(depth) => pc.boss(rect, radii, depth),
-                WidgetFx::Recess(depth) => pc.recess(rect, radii, depth),
-                WidgetFx::RecessFocus(depth) => {
-                    let hc = cce_ui::color::highlight_primary_color();
-                    pc.recess_tinted(rect, radii, depth, [hc[0], hc[1], hc[2]]);
-                }
-                WidgetFx::Inset(depth) => pc.inset_plate(rect, radii, cce_ui::scene::Material::face(w.color).as_ref(), depth),
-                WidgetFx::InsetFocus(depth) => {
-                    pc.inset_plate_tinted(rect, radii, cce_ui::scene::Material::face(w.color).as_ref(), depth, cce_ui::widget::ControlPlate::focus_tint())
-                }
-                WidgetFx::Image { id, alpha } => pc.image(id, rect, alpha),
-                WidgetFx::Icon { name, clip } => {
-                    if let Some(c) = clip {
-                        pc.push_clip(c);
-                    }
-                    pc.icon(&name, rect, w.color);
-                    if clip.is_some() {
-                        pc.pop_clip();
-                    }
-                }
-                WidgetFx::Stroke { shape, clip } => {
-                    if let Some(c) = clip {
-                        pc.push_clip(c);
-                    }
-                    match shape {
-                        crate::pages::Stroke::Line { x1, y1, x2, y2, thickness, cap } => pc.vector(x1, y1, x2, y2, thickness, w.color, cap),
-                        crate::pages::Stroke::Arc { cx, cy, radius, thickness, start, end } => pc.arc(cx, cy, radius, thickness, start, end, w.color),
-                        crate::pages::Stroke::Disc { cx, cy, radius } => pc.circle(cx, cy, radius, w.color),
-                    }
-                    if clip.is_some() {
-                        pc.pop_clip();
-                    }
-                }
-                WidgetFx::Groove { ax, ay, bx, by, width, depth } => {
-                    pc.groove((ax, ay), (bx, by), width, depth, rect)
-                }
-                WidgetFx::Flat => {
-                    if w.radius > 0.1 {
-                        pc.rounded_rect(rect, w.radius, w.corners, w.color);
-                    } else {
-                        pc.quad(rect, w.color);
-                    }
-                }
-            }
-        }
-        for (text, font_size, x, y, col, font, bounds) in &self.texts {
-            pc.text_with(
-                text.clone(),
-                *x,
-                *y,
-                *font_size,
-                [
-                    (col[0] * 255.0) as u8,
-                    (col[1] * 255.0) as u8,
-                    (col[2] * 255.0) as u8,
-                ],
-                font.clone(),
-                *bounds,
-            );
-        }
-        // The toolkit's shared context menu (breadcrumb segments, config-bound
-        // controls) draws into the app's display list like every popover. Its
-        // labels carry bounds equal to the menu rect — the engine's popover
-        // occlusion clamp exempts exactly that, so they render inside the menu
+        // The content the last rebuild painted, as it painted it.
+        pc.append_items(self.frame.items.iter().cloned());
+
         // The preview pane's plate-dock affordance (cce-ui RFC 7c-2): the
         // title stub while collapsed, and the corner control — drawn over
         // the page content, under the context menu.
@@ -2084,6 +1836,10 @@ impl Application for FilesystemApp {
             }
         }
 
+        // The toolkit's shared context menu (breadcrumb segments, config-bound
+        // controls) draws into the app's display list like every popover. Its
+        // labels carry bounds equal to the menu rect — the engine's popover
+        // occlusion clamp exempts exactly that, so they render inside the menu
         // while page text beneath stays clamped.
         // The shared menu paints itself as a lit plate (cce-ui), so the
         // breadcrumb's copy-path menu is the same frosted glass as the row

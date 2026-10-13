@@ -250,16 +250,14 @@ pub fn view(state: &mut NetworkState, browse: &BrowseState, pc: &mut PaintCtx, c
 
         if let Some(sel) = browse.selected {
             let expected_node_idx = sel + offset;
-            if ctx[state.graph].selected_node() != Some(expected_node_idx) {
-                if !ctx[state.graph].is_dragging() {
-                    ctx[state.graph].set_selected_node(Some(expected_node_idx));
-                }
+            if ctx[state.graph].selected_node() != Some(expected_node_idx)
+                && !ctx[state.graph].is_dragging()
+            {
+                ctx[state.graph].set_selected_node(Some(expected_node_idx));
             }
         } else {
-            if let Some(graph_sel) = ctx[state.graph].selected_node() {
-                if graph_sel >= offset {
-                    ctx[state.graph].set_selected_node(None);
-                }
+            if let Some(graph_sel) = ctx[state.graph].selected_node() && graph_sel >= offset {
+                ctx[state.graph].set_selected_node(None);
             }
         }
     }

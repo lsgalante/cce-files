@@ -53,11 +53,9 @@ pub mod test_claims {
                 if p.is_dir() {
                     walk(&p, out);
                 } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
-                    if let Ok(s) = std::fs::read_to_string(&p) {
-                        let n = s.matches("#[test]").count();
-                        if n > 0 {
-                            out.push((p, n));
-                        }
+                    let n = std::fs::read_to_string(&p).map_or(0, |s| s.matches("#[test]").count());
+                    if n > 0 {
+                        out.push((p, n));
                     }
                 }
             }
@@ -281,13 +279,12 @@ pub mod test_claims {
                 if let Some(claimed) = claimed.filter(|c| c.ends_with(".rs")) {
                     checked += 1;
                     let claimed = claimed.rsplit('/').next().unwrap_or(&claimed).to_string();
-                    if let Some((top, n)) = mods.iter().max_by_key(|(_, n)| *n) {
-                        if base(top) != claimed {
-                            bad.push(format!(
-                                "`{claimed}` is called the one with the most tests, but {} has {n}",
-                                base(top)
-                            ));
-                        }
+                    let top = mods.iter().max_by_key(|(_, n)| *n);
+                    if let Some((top, n)) = top.filter(|(top, _)| base(top) != claimed) {
+                        bad.push(format!(
+                            "`{claimed}` is called the one with the most tests, but {} has {n}",
+                            base(top)
+                        ));
                     }
                 }
             }

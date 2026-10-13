@@ -104,7 +104,7 @@ impl FsService {
                                 crate::pages::preview::PreviewMessage::PreviewLoaded {
                                     path,
                                     generation,
-                                    data: preview_data,
+                                    data: Box::new(preview_data),
                                 },
                             ));
                         });
@@ -436,13 +436,11 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
         .unwrap_or_else(|| "—".to_string());
 
     let mut file_type = infer_file_type(&name, is_dir);
-    if !is_dir {
-        if let Some(mime) = get_mime_type(path) {
-            if let Some((app_name, _)) = get_default_application(&mime) {
-                file_type = format!("{} ({}) [Open with: {}]", file_type, mime, app_name);
-            } else {
-                file_type = format!("{} ({})", file_type, mime);
-            }
+    if !is_dir && let Some(mime) = get_mime_type(path) {
+        if let Some((app_name, _)) = get_default_application(&mime) {
+            file_type = format!("{} ({}) [Open with: {}]", file_type, mime, app_name);
+        } else {
+            file_type = format!("{} ({})", file_type, mime);
         }
     }
 
@@ -464,21 +462,19 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
         if path.join("state.json").exists() {
             image_preview = load_project_thumbnail(path);
         }
-        if image_preview.is_none() {
-            if let Ok(entries) = fs::read_dir(path) {
-                let mut names = Vec::new();
-                for entry in entries.flatten().take(100) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let is_sub_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    // A text body: a directory wears the plain-text marker,
-                    // a trailing slash, rather than a pictogram.
-                    names.push(if is_sub_dir { format!("{name}/") } else { name });
-                }
-                if names.is_empty() {
-                    content_preview = Some("[Empty directory]".to_string())
-                } else {
-                    content_preview = Some(names.join("\n"))
-                }
+        if image_preview.is_none() && let Ok(entries) = fs::read_dir(path) {
+            let mut names = Vec::new();
+            for entry in entries.flatten().take(100) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let is_sub_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                // A text body: a directory wears the plain-text marker,
+                // a trailing slash, rather than a pictogram.
+                names.push(if is_sub_dir { format!("{name}/") } else { name });
+            }
+            if names.is_empty() {
+                content_preview = Some("[Empty directory]".to_string())
+            } else {
+                content_preview = Some(names.join("\n"))
             }
         }
     } else {
@@ -493,22 +489,20 @@ fn load_preview_data_internal(path: &Path) -> PreviewData {
             image_preview = load_svg_preview(path);
         }
 
-        if image_preview.is_none() {
-            if let Ok(mut file) = fs::File::open(path) {
-                use std::io::Read;
-                let mut buf = vec![0u8; 65536];
-                if let Ok(n) = file.read(&mut buf) {
-                    buf.truncate(n);
-                    let is_text = match std::str::from_utf8(&buf) {
-                        Ok(_) => true,
-                        Err(err) => err.error_len().is_none() && err.valid_up_to() > 0,
-                    };
-                    if is_text {
-                        let utf8_str = String::from_utf8_lossy(&buf).into_owned();
-                        content_preview = Some(utf8_str);
-                    } else {
-                        content_preview = Some("[Binary file content]".to_string());
-                    }
+        if image_preview.is_none() && let Ok(mut file) = fs::File::open(path) {
+            use std::io::Read;
+            let mut buf = vec![0u8; 65536];
+            if let Ok(n) = file.read(&mut buf) {
+                buf.truncate(n);
+                let is_text = match std::str::from_utf8(&buf) {
+                    Ok(_) => true,
+                    Err(err) => err.error_len().is_none() && err.valid_up_to() > 0,
+                };
+                if is_text {
+                    let utf8_str = String::from_utf8_lossy(&buf).into_owned();
+                    content_preview = Some(utf8_str);
+                } else {
+                    content_preview = Some("[Binary file content]".to_string());
                 }
             }
         }
@@ -641,7 +635,7 @@ pub fn get_mime_type(path: &Path) -> Option<String> {
         return Some(mime.to_string());
     }
     let output = std::process::Command::new("xdg-mime")
-        .args(&["query", "filetype"])
+        .args(["query", "filetype"])
         .arg(path)
         .output()
         .ok()?;
@@ -699,15 +693,15 @@ pub fn load_kdl_associations_in(config_dir: &Path) -> Option<std::collections::H
 
 pub fn get_default_application(mime: &str) -> Option<(String, String)> {
     // 1. Check KDL configuration file override
-    if let Some(associations) = load_kdl_associations() {
-        if let Some(custom_exec) = associations.get(mime) {
-            return Some((custom_exec.clone(), custom_exec.clone()));
-        }
+    if let Some(associations) = load_kdl_associations()
+        && let Some(custom_exec) = associations.get(mime)
+    {
+        return Some((custom_exec.clone(), custom_exec.clone()));
     }
 
     // 2. Query default handler desktop file name
     let output = std::process::Command::new("xdg-mime")
-        .args(&["query", "default", mime])
+        .args(["query", "default", mime])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -744,12 +738,12 @@ pub fn spawn_command_for_path(cmd: &str, path: &Path) -> bool {
     }
     let program = parts[0];
     let mut program_path = PathBuf::from(program);
-    if !program_path.is_absolute() && !program.contains('/') {
-        if let Ok(home) = std::env::var("HOME") {
-            let local_bin = PathBuf::from(home).join(".local").join("bin").join(program);
-            if local_bin.exists() {
-                program_path = local_bin;
-            }
+    if !program_path.is_absolute() && !program.contains('/')
+        && let Ok(home) = std::env::var("HOME")
+    {
+        let local_bin = PathBuf::from(home).join(".local").join("bin").join(program);
+        if local_bin.exists() {
+            program_path = local_bin;
         }
     }
     let mut command = std::process::Command::new(program_path);

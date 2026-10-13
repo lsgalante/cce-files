@@ -125,9 +125,7 @@ impl PreviewPane {
     /// plate gap down). `None` when no file is shown — the wells aren't drawn,
     /// so there is nothing to focus.
     pub fn well_at(&self, px: f32, py: f32) -> Option<PreviewWell> {
-        if self.path.is_none() {
-            return None;
-        }
+        self.path.as_ref()?;
         let (cx, cy, cw, ch) = self.rect;
         if cw <= 0.0 || ch <= 0.0 || px < cx || px > cx + cw {
             return None;

@@ -14,6 +14,11 @@ image = { version = "0.25.10", features = ["png", "jpeg"] }
 log = "0.4"
 kdl = "6.7.1"
 
+[lints.clippy]
+# The toolkit's house style (cce-ui's [lints.clippy]): the paint helpers take
+# geometry, colour and paint state piecewise.
+too_many_arguments = "allow"
+
 [lib]
 name = "cce_files"
 path = "src/lib.rs"

@@ -10,7 +10,7 @@ pub enum PreviewMessage {
     Clear,
     /// `generation` is the request's (`FsRequest::ReadPreview`); the app
     /// drops any but the newest before it gets here.
-    PreviewLoaded { path: PathBuf, generation: u64, data: crate::services::fs::PreviewData },
+    PreviewLoaded { path: PathBuf, generation: u64, data: Box<crate::services::fs::PreviewData> },
 }
 
 // ── Update ──────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ pub fn update(state: &mut PreviewPane, msg: PreviewMessage) {
             // Deprecated direct SetPath, as we now load previews via the FsService.
         }
         PreviewMessage::PreviewLoaded { path, data, .. } => {
+            let data = *data;
             state.path_display = path.to_string_lossy().to_string();
             state.path = Some(path);
             state.name = data.name;

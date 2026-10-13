@@ -261,7 +261,7 @@ pub fn view(state: &mut BrowseState, pc: &mut PaintCtx, cx: f32, cy: f32, cw: f3
     let show_perm = !in_trash && list_w > 480.0;
     let show_modified = !in_trash && list_w > 280.0;
     // Trash listing: the metadata columns yield to where the item restores to.
-    let origin_col_w = if in_trash { (list_w * 0.55).min(460.0).max(160.0) } else { 0.0 };
+    let origin_col_w = if in_trash { (list_w * 0.55).clamp(160.0, 460.0) } else { 0.0 };
 
     let mut cols = vec![
         crate::row_list::ListColumn {
@@ -436,10 +436,10 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage, ctx: &mut UiContext) 
             None
         }
         BrowseMessage::NavigateTo(idx) => {
-            if let Some(entry) = state.entries.get(idx) {
-                if entry.is_dir && !is_project_dir(&entry.path) {
-                    return Some(crate::services::fs::FsRequest::ReadDirectory(entry.path.clone()));
-                }
+            if let Some(entry) = state.entries.get(idx)
+                && entry.is_dir && !is_project_dir(&entry.path)
+            {
+                return Some(crate::services::fs::FsRequest::ReadDirectory(entry.path.clone()));
             }
             None
         }
@@ -503,18 +503,10 @@ pub fn update(state: &mut BrowseState, msg: BrowseMessage, ctx: &mut UiContext) 
             }
         }
         BrowseMessage::DeleteEntryPermanent(idx) => {
-            if let Some(entry) = state.entries.get(idx) {
-                Some(crate::services::fs::FsRequest::DeletePath(entry.path.clone(), entry.is_dir))
-            } else {
-                None
-            }
+            state.entries.get(idx).map(|entry| crate::services::fs::FsRequest::DeletePath(entry.path.clone(), entry.is_dir))
         }
         BrowseMessage::RestoreEntry(idx) => {
-            if let Some(entry) = state.entries.get(idx) {
-                Some(crate::services::fs::FsRequest::RestorePath(entry.path.clone()))
-            } else {
-                None
-            }
+            state.entries.get(idx).map(|entry| crate::services::fs::FsRequest::RestorePath(entry.path.clone()))
         }
         BrowseMessage::EmptyTrash => Some(crate::services::fs::FsRequest::EmptyTrash),
         BrowseMessage::NewFolder => Some(crate::services::fs::FsRequest::CreateDir(state.current_dir.clone())),
@@ -587,7 +579,6 @@ mod tests {
     /// the kind decides which.
     #[test]
     fn entry_icon_names_a_glyph_by_kind() {
-        let mut ui = UiContext::new();
         assert_eq!(entry_icon(true, "photos.png"), "folder");
         assert_eq!(entry_icon(false, "Shot.PNG"), "file-image");
         assert_eq!(entry_icon(false, "song.flac"), "file-audio");
@@ -701,7 +692,7 @@ mod tests {
         let mut ui = UiContext::new();
         let mut state = BrowseState::new(&mut ui);
         let req = update(&mut state, BrowseMessage::NavigateToPath(PathBuf::from("/tmp")), &mut ui);
-        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == PathBuf::from("/tmp")));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == Path::new("/tmp")));
     }
 
     #[test]
@@ -746,7 +737,7 @@ mod tests {
         let req = update(&mut state, BrowseMessage::DirectoryLoaded(PathBuf::from("/d"), entries), &mut ui);
         assert_eq!(state.current_dir, PathBuf::from("/d"));
         assert_eq!(state.entries.len(), 2);
-        assert!(matches!(req, Some(crate::services::fs::FsRequest::SaveLastDir(p)) if p == PathBuf::from("/d")));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::SaveLastDir(p)) if p == Path::new("/d")));
     }
 
     #[test]
@@ -846,7 +837,7 @@ mod tests {
         let mut ui = UiContext::new();
         let mut state = BrowseState::new(&mut ui);
         let req = update(&mut state, BrowseMessage::LastDirLoaded(Some(PathBuf::from("/some/dir"))), &mut ui);
-        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == PathBuf::from("/some/dir")));
+        assert!(matches!(req, Some(crate::services::fs::FsRequest::ReadDirectory(p)) if p == Path::new("/some/dir")));
     }
 
     #[test]
@@ -893,7 +884,6 @@ mod tests {
 
     #[test]
     fn test_directory_persistence() {
-        let mut ui = UiContext::new();
         let root = std::env::temp_dir().join(format!(
             "cce_test_persist_{}",
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)

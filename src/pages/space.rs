@@ -221,7 +221,7 @@ impl Breakdown {
             .map(|c| (c, self.bytes[c.index()]))
             .filter(|&(_, b)| b > 0)
             .collect();
-        out.sort_by(|a, b| b.1.cmp(&a.1));
+        out.sort_by_key(|&(_, b)| std::cmp::Reverse(b));
         out
     }
 }
@@ -311,7 +311,7 @@ fn squarify(values: &[f64], rect: (f32, f32, f32, f32)) -> Vec<(f32, f32, f32, f
 
     while i < areas.len() {
         if w <= 0.0 || h <= 0.0 {
-            out.extend(std::iter::repeat((0.0, 0.0, 0.0, 0.0)).take(areas.len() - i));
+            out.extend(std::iter::repeat_n((0.0, 0.0, 0.0, 0.0), areas.len() - i));
             break;
         }
 
@@ -339,8 +339,8 @@ fn squarify(values: &[f64], rect: (f32, f32, f32, f32)) -> Vec<(f32, f32, f32, f
         // Place the row.
         let thickness = (sum / side).min(if horizontal { w } else { h });
         let mut offset = 0.0;
-        for k in i..end {
-            let len = if sum > 0.0 { areas[k] / sum * side } else { 0.0 };
+        for &area in &areas[i..end] {
+            let len = if sum > 0.0 { area / sum * side } else { 0.0 };
             let r = if horizontal {
                 (x, y + offset, thickness, len)
             } else {
@@ -793,15 +793,13 @@ fn map_body(state: &mut SpaceState, browse: &BrowseState, pc: &mut PaintCtx, map
         let [r, g, b, _] = cce_ui::color::TEXT_ACCENT;
         outline(pc, state.tiles[top].rect, [r, g, b, TOP_FOLDER_ALPHA], 2.0);
     }
-    if let Some(sel) = &state.selected_path {
-        if let Some(t) = state.tiles.iter().find(|t| &t.path == sel) {
-            outline(pc, t.rect, cce_ui::color::TEXT_HEADER, 2.0);
-        }
+    if let Some(sel) = &state.selected_path
+        && let Some(t) = state.tiles.iter().find(|t| &t.path == sel)
+    {
+        outline(pc, t.rect, cce_ui::color::TEXT_HEADER, 2.0);
     }
-    if let Some(idx) = state.hovered {
-        if let Some(t) = state.tiles.get(idx) {
-            outline(pc, t.rect, cce_ui::color::TEXT_ACCENT, 1.0);
-        }
+    if let Some(idx) = state.hovered && let Some(t) = state.tiles.get(idx) {
+        outline(pc, t.rect, cce_ui::color::TEXT_ACCENT, 1.0);
     }
     true
 }
@@ -923,7 +921,7 @@ fn group_digits(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);

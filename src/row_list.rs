@@ -193,10 +193,10 @@ impl RowList {
             return None;
         }
         for idx in 0..self.rows.len() {
-            if let Some(draw_y) = self.get_item_draw_y(idx) {
-                if px >= self.x + 2.0 && px <= self.x + self.w - 2.0 && py >= draw_y && py <= draw_y + self.item_height {
-                    return Some(idx);
-                }
+            if let Some(draw_y) = self.get_item_draw_y(idx)
+                && px >= self.x + 2.0 && px <= self.x + self.w - 2.0 && py >= draw_y && py <= draw_y + self.item_height
+            {
+                return Some(idx);
             }
         }
         None
@@ -219,8 +219,8 @@ impl RowList {
                 ColumnWidth::RightOffset(offset) => {
                     let x = list_w - offset;
                     let mut next_x = list_w;
-                    for j in (i + 1)..cols.len() {
-                        if let ColumnWidth::RightOffset(o) = cols[j].width {
+                    for col in &cols[i + 1..] {
+                        if let ColumnWidth::RightOffset(o) = col.width {
                             next_x = list_w - o;
                             break;
                         }
@@ -234,10 +234,10 @@ impl RowList {
         let current_x = 0.0;
         let mut right_boundary = list_w;
         for col in cols.iter() {
-            if let ColumnWidth::RightOffset(offset) = col.width {
-                if list_w - offset < right_boundary {
-                    right_boundary = list_w - offset;
-                }
+            if let ColumnWidth::RightOffset(offset) = col.width
+                && list_w - offset < right_boundary
+            {
+                right_boundary = list_w - offset;
             }
         }
         let left_space = (right_boundary - current_x).max(0.0);
@@ -363,18 +363,16 @@ impl RowList {
                 self.activity.bump();
             }
             let mut clicked = false;
-            if let Some(idx) = self.row_at(px, py) {
-                if self.pressed_row == Some(idx) {
-                    let now = std::time::Instant::now();
-                    if let Some(last) = self.last_click_time {
-                        if now.duration_since(last) < std::time::Duration::from_millis(400) {
-                            self.double_clicked_row = Some(idx);
-                        }
-                    }
-                    self.last_click_time = Some(now);
-                    self.clicked_row = Some(idx);
-                    clicked = true;
+            if let Some(idx) = self.row_at(px, py) && self.pressed_row == Some(idx) {
+                let now = std::time::Instant::now();
+                if let Some(last) = self.last_click_time
+                    && now.duration_since(last) < std::time::Duration::from_millis(400)
+                {
+                    self.double_clicked_row = Some(idx);
                 }
+                self.last_click_time = Some(now);
+                self.clicked_row = Some(idx);
+                clicked = true;
             }
             self.pressed_row = None;
             clicked || was_dragging
@@ -527,14 +525,12 @@ impl RowList {
             let y_secondary = cce_ui::layout::center_text_y(draw_y, self.item_height, secondary_size);
 
             let mut start_text_offset = 8.0;
-            if let Some(glyph) = row.icon {
-                if !col_bounds.is_empty() {
-                    // A glyph the size of the name's text, centred on the row.
-                    let side = primary_size;
-                    let gy = draw_y + (self.item_height - side) * 0.5;
-                    icon(pc, glyph, x + col_bounds[0].0 + 12.0, gy, side, side, row_fg, clip);
-                    start_text_offset = 32.0;
-                }
+            if let Some(glyph) = row.icon && !col_bounds.is_empty() {
+                // A glyph the size of the name's text, centred on the row.
+                let side = primary_size;
+                let gy = draw_y + (self.item_height - side) * 0.5;
+                icon(pc, glyph, x + col_bounds[0].0 + 12.0, gy, side, side, row_fg, clip);
+                start_text_offset = 32.0;
             }
 
             for (c_idx, cell_text) in row.cells.iter().enumerate() {

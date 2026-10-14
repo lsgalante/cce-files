@@ -300,12 +300,6 @@ fn graph_node_menu(idx: usize, current_dir: &std::path::Path, entries: &[pages::
     }
 }
 
-/// App-owned two-pane horizontal split, replacing the dissolved `SplitBox` +
-/// `BrowseContainer`/`NetworkContainer` shims (Phase 6y). Those existed to (a) position
-/// pane content — but the pages already lay out and render everything from the pane rect,
-/// the container copies just coincided (the Phase 0 double-paint) — and (b) own the
-/// divider: its quad, hover tint, and proportion drag. This is (b), app-side, with the
-/// `SplitBox` two-child horizontal math verbatim.
 /// A file as `stat` sees it: what decides whether a preview already read
 /// is still the file's. The link itself and, through it, its target — a
 /// symlink to a file being rewritten keeps its own stamp.
@@ -330,6 +324,12 @@ impl PreviewStamp {
 /// room for the label and the corner control that restores it.
 const PREVIEW_STUB_W: f32 = 170.0;
 
+/// App-owned two-pane horizontal split, replacing the dissolved `SplitBox` +
+/// `BrowseContainer`/`NetworkContainer` shims (Phase 6y). Those existed to (a) position
+/// pane content — but the pages already lay out and render everything from the pane rect,
+/// the container copies just coincided (the Phase 0 double-paint) — and (b) own the
+/// divider: its quad, hover tint, and proportion drag. This is (b), app-side, with the
+/// `SplitBox` two-child horizontal math verbatim.
 struct SplitPane {
     x: f32,
     y: f32,

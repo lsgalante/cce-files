@@ -348,11 +348,19 @@ mod tests {
     /// (cce-ui's lattice centring nodes on crossings) column 0 started left
     /// of the pane, seven columns ran past its right edge and every name lay
     /// across its neighbour.
+    ///
+    /// The node body and lattice are pinned on this graph: they come from
+    /// `style.surface.graph`, and a `--workspace` test build reads the
+    /// toolkit's defaults (150 x 75 bodies, whose 26 px names leave a 600 px
+    /// pane one column) where a crate build reads ~/.config/cce. Pinned on
+    /// the instance, not the shared style, so no parallel test races it.
     #[test]
     fn the_graph_fits_its_pane_and_its_names_fit_their_columns() {
         let mut ui = UiContext::new();
         use cce_ui::widget::display::TextLabel;
         let mut state = NetworkState::new(&mut ui);
+        ui[state.graph].inner_mut().set_node_size(80.0, 40.0);
+        state.base_pitch = (140.0, 90.0);
         let names = ["Adwaita", "AdwaitaMono-BoldItalic.ttf", "a-really-quite-extraordinarily-long-font-family-name.otf", "x", "gnu-free", "noto-cjk", "liberation", "spleen", "xscreensaver"];
         let entries: Vec<DirEntry> = names
             .iter()

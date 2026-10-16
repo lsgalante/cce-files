@@ -19,7 +19,7 @@
 //! own.)
 
 use cce_ui::scene::paint::PaintCtx;
-use cce_ui::widget::{Bounds, Justification, MouseScrollDelta, ScrollMotion, ScrollbarActivity, LINE_PX};
+use cce_ui::widget::{Bounds, Justification, MouseScrollDelta, ScrollMotion, ScrollbarActivity, UiContext, WidgetId, LINE_PX};
 
 use crate::pages::{fill, fill_rounded, icon, text, well};
 
@@ -80,6 +80,8 @@ pub struct RowList {
     /// Pointer focus (the app's well-focus tracking): the well renders as the
     /// tinted carve — accent ring replacing the relief lighting.
     pub focused: bool,
+    /// Who the list is to the scroll-gesture rule (`UiContext::claim_scroll_gesture`).
+    gesture_id: WidgetId,
 }
 
 impl RowList {
@@ -107,6 +109,7 @@ impl RowList {
             drag_offset_y: 0.0,
             activity: ScrollbarActivity::new(),
             focused: false,
+            gesture_id: cce_ui::widget::Widget::new().id(),
         }
     }
 
@@ -382,8 +385,15 @@ impl RowList {
     /// Hit-scoped wheel (`ScrollBox::mouse_wheel`). A wheel notch moves the
     /// target and [`Self::tick`] glides the offset there; a trackpad finger
     /// moves the offset now. True when either moved (repaint).
-    pub fn wheel(&mut self, delta: &MouseScrollDelta, px: f32, py: f32) -> bool {
-        if !self.hit(px, py) {
+    ///
+    /// It takes part in the scroll-gesture rule as `ScrollRegion::wheel_in`
+    /// does: while the gesture is something else's the list stays put; a
+    /// wheel that moves it claims the gesture, and it keeps it wherever the
+    /// pointer goes.
+    pub fn wheel(&mut self, delta: &MouseScrollDelta, px: f32, py: f32, ui: &mut UiContext) -> bool {
+        ui.note_scroll_event();
+        let id = self.gesture_id;
+        if !ui.may_take_wheel(id) || (!ui.owns_scroll_gesture(id) && !self.hit(px, py)) {
             return false;
         }
         self.motion.reconcile(0.0, self.scroll_y);
@@ -391,6 +401,7 @@ impl RowList {
         self.scroll_y = self.motion.y.pos();
         if moved {
             self.raise();
+            ui.claim_scroll_gesture(id);
         }
         moved
     }
@@ -638,7 +649,7 @@ mod tests {
     #[test]
     fn wheel_scrolls_and_scroll_into_view_clamps() {
         let mut l = list_with_rows(50);
-        assert!(l.wheel(&MouseScrollDelta::LineDelta(0.0, -2.0), 50.0, 50.0));
+        assert!(l.wheel(&MouseScrollDelta::LineDelta(0.0, -2.0), 50.0, 50.0, &mut UiContext::new()));
         // Two notches glide to 2 * LINE_PX; settle the motion first.
         for _ in 0..600 {
             if !l.tick(1.0 / 60.0) {
@@ -651,6 +662,29 @@ mod tests {
         l.scroll_into_view(49);
         let expect = 49.0 * (l.item_height + 2.0) + 2.0 + l.item_height - l.viewport_h;
         assert!((l.scroll_y - expect).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_list_keeps_the_gesture_it_moves_and_leaves_anothers() {
+        let pause = || std::thread::sleep(std::time::Duration::from_millis(8));
+        let notch = MouseScrollDelta::LineDelta(0.0, -1.0);
+        let mut ui = UiContext::new();
+        let mut l = list_with_rows(50);
+        assert!(l.wheel(&notch, 50.0, 50.0, &mut ui), "the list scrolls");
+        let owner = ui.scroll_gesture_owner().expect("and claims the gesture");
+        pause();
+        assert!(l.wheel(&notch, -500.0, -500.0, &mut ui), "it keeps it off its rect");
+
+        // A gesture something else took: the list stays put under it.
+        ui.last_scroll_time = None;
+        ui.note_scroll_event();
+        let other = cce_ui::widget::Widget::new().id();
+        ui.claim_scroll_gesture(other);
+        assert_ne!(other, owner);
+        pause();
+        let target = l.motion.y.target();
+        assert!(!l.wheel(&notch, 50.0, 50.0, &mut ui));
+        assert_eq!(l.motion.y.target(), target);
     }
 
     #[test]
@@ -681,7 +715,7 @@ mod tests {
         assert!(bars.iter().all(|&i| i < bg_at && items[i].3), "pills, under the bg");
 
         // A wheel raises it; the fade brings the fore copy in after the rows.
-        assert!(l.wheel(&MouseScrollDelta::LineDelta(0.0, -2.0), 50.0, 50.0));
+        assert!(l.wheel(&MouseScrollDelta::LineDelta(0.0, -2.0), 50.0, 50.0, &mut UiContext::new()));
         assert!(l.scrollbar_raised());
         for _ in 0..30 {
             l.tick(1.0 / 60.0);

@@ -2561,7 +2561,7 @@ impl Application for FilesystemApp {
             // The pane hit-tests its own laid-out rect and consumes any wheel
             // over its content region, scrolled or not.
             if let Some(changed) = (!self.preview_dock.collapsed)
-                .then(|| self.preview.wheel(delta, pos.x, pos.y))
+                .then(|| self.preview.wheel(delta, pos.x, pos.y, &mut self.ui_context))
                 .flatten()
             {
                 if cce_ui::scroll_debug() {
@@ -2576,7 +2576,7 @@ impl Application for FilesystemApp {
         }
 
         if self.current_page == Page::Browse {
-            let hit = self.browse.list.wheel(delta, pos.x, pos.y);
+            let hit = self.browse.list.wheel(delta, pos.x, pos.y, &mut self.ui_context);
             if cce_ui::scroll_debug() {
                 eprintln!("[scroll] files: browse.list.wheel at ({:.0},{:.0}) -> {hit}", pos.x, pos.y);
             }

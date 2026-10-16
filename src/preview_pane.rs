@@ -16,7 +16,7 @@ use cce_ui::scene::layout::{fit_rect, FitMode, Rect};
 use cce_ui::widget::display::{measure_text_width, truncate_tail};
 
 use crate::util::truncate_px;
-use cce_ui::widget::{Bounds, MouseScrollDelta, ScrollMotion};
+use cce_ui::widget::{Bounds, MouseScrollDelta, ScrollMotion, UiContext, WidgetId};
 
 use cce_ui::scene::paint::PaintCtx;
 
@@ -54,6 +54,8 @@ pub struct PreviewPane {
     /// tracking): that well renders as the tinted carve — accent ring
     /// replacing the relief lighting.
     pub focused_well: Option<PreviewWell>,
+    /// Who the text preview is to the scroll-gesture rule.
+    gesture_id: WidgetId,
 }
 
 /// The preview pane's two recessed wells: the file-preview section (top half)
@@ -82,6 +84,7 @@ impl Default for PreviewPane {
             scroll_px: 0.0,
             scroll_motion: ScrollMotion::new(),
             focused_well: None,
+            gesture_id: cce_ui::widget::Widget::new().id(),
         }
     }
 }
@@ -149,7 +152,16 @@ impl PreviewPane {
     /// region (the caller falls through to the list/graph), `Some(changed)` if
     /// the event is consumed — scrolled or not, a wheel over the preview region
     /// never reaches the widgets beneath it.
-    pub fn wheel(&mut self, delta: &MouseScrollDelta, mx: f32, my: f32) -> Option<bool> {
+    ///
+    /// The scroll-gesture rule decides first (as `ScrollRegion::wheel_in`): a
+    /// gesture something else owns passes by (`None`) and one the preview
+    /// owns stays with it wherever the pointer goes.
+    pub fn wheel(&mut self, delta: &MouseScrollDelta, mx: f32, my: f32, ui: &mut UiContext) -> Option<bool> {
+        ui.note_scroll_event();
+        let id = self.gesture_id;
+        if !ui.may_take_wheel(id) {
+            return None;
+        }
         let (prev_x, prev_y, prev_w, prev_h) = self.rect;
         // Inner content-preview region (below the metadata header); the fill
         // spans the full pane width, so the hit region does too.
@@ -157,10 +169,15 @@ impl PreviewPane {
         let py = prev_y + 32.0;
         let pw = prev_w;
         let ph = prev_h * 0.5 - 40.0;
-        if mx < px || mx > px + pw || my < py || my > py + ph {
+        let off = mx < px || mx > px + pw || my < py || my > py + ph;
+        if off && !ui.owns_scroll_gesture(id) {
             return None;
         }
-        Some(self.scroll(delta, prev_h))
+        let moved = self.scroll(delta, prev_h);
+        if moved {
+            ui.claim_scroll_gesture(id);
+        }
+        Some(moved)
     }
 
     /// Back to the top, motion cancelled (a new file loaded).

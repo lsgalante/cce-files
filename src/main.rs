@@ -7,7 +7,7 @@ use cce_ui::widget::{GraphController, PathController};
 
 use notify::{Watcher, RecommendedWatcher, RecursiveMode, Config};
 
-use cce_files::{Message, pages, services};
+use cce_files::{Message, pages, services, ui_state};
 use cce_files::pages::Page;
 use cce_files::pages::browse::is_project_dir;
 
@@ -487,6 +487,9 @@ enum FocusedWell {
 
 struct FilesystemApp {
     current_page: Page,
+    /// The row and list offset to put back once the directory they were in
+    /// loads (`ui_state`); taken by the first load.
+    restore: Option<(std::path::PathBuf, Option<std::path::PathBuf>, f32)>,
     browse: pages::browse::BrowseState,
     network: pages::network::NetworkState,
     space: pages::space::SpaceState,
@@ -679,6 +682,16 @@ impl FilesystemApp {
             let mut exit = false;
             self.update(msg, needs_rebuild, &mut exit);
         }
+    }
+
+    /// Keep the page, directory, row and offset for the next launch
+    /// (`ui_state`). The chooser keeps nothing.
+    fn save_place(&self) {
+        if self.select_mode {
+            return;
+        }
+        let selected = self.browse.selected_path();
+        ui_state::save(self.current_page, &self.browse.current_dir, selected.as_deref(), self.browse.list.scroll_y);
     }
 
     /// Kick off a subtree scan if the Space page is showing a directory it has
@@ -1336,6 +1349,7 @@ impl FilesystemApp {
             {
                 self.ui_context.clear_focus();
                 self.current_page = Page::ALL[idx];
+                self.save_place();
             }
             *needs_rebuild = true;
             self.needs_rebuild = true;
@@ -1907,6 +1921,13 @@ impl Application for FilesystemApp {
             .and_then(|a| std::fs::canonicalize(a).ok())
             .and_then(|p| if p.is_dir() { Some(p) } else { p.parent().map(|q| q.to_path_buf()) });
 
+        // Back where it was when it closed (`ui_state`). Not the chooser: it is a
+        // picker another app opened for one answer.
+        let place = if select_mode { None } else { ui_state::initial(start_dir.as_deref()) };
+        let initial_page = place.as_ref().map_or(Page::Browse, |p| p.page);
+        let restore = place.and_then(|p| Some((p.dir?, p.selected, p.scroll)));
+        let start_dir = restore.as_ref().map(|r| r.0.clone()).or(start_dir);
+
         cce_ui::scale::set_scale_factor(1.0);
 
         // The context owns the widgets; the app keeps their handles.
@@ -1915,7 +1936,8 @@ impl Application for FilesystemApp {
         let _current_dir = browse.current_dir.clone();
 
         let pages_names = Page::ALL.iter().map(|p| p.label().to_string()).collect::<Vec<_>>();
-        let paginator = cce_ui::widget::Paginator::new(pages_names);
+        let mut paginator = cce_ui::widget::Paginator::new(pages_names);
+        paginator.set_selected_page(Page::ALL.iter().position(|&p| p == initial_page).unwrap_or(0));
         let fs_service = services::fs::FsService::new(sender.clone());
         let chooser = select_mode.then(|| ChooserButtons {
             cancel: ui_context.insert(plain_button("Cancel")),
@@ -1924,7 +1946,8 @@ impl Application for FilesystemApp {
         let initial_w = if select_mode { 900 } else { 1200 };
         let initial_h = if select_mode { 500 } else { 720 };
         let app = Self {
-            current_page: Page::Browse,
+            current_page: initial_page,
+            restore,
             browse,
             network: pages::network::NetworkState::new(&mut ui_context),
             space: pages::space::SpaceState::new(&mut ui_context),
@@ -1969,8 +1992,8 @@ impl Application for FilesystemApp {
         
         // Start initial directory loading via FsService. ReadDirectory lands in
         // the same DirectoryLoaded handler ReadLastDir eventually reaches, so an
-        // argv path just skips the restore step; current_dir and the breadcrumb
-        // are set when the load completes either way.
+        // argv path (or a restored place's) just skips the last-dir step;
+        // current_dir and the breadcrumb are set when the load completes either way.
         match start_dir {
             Some(dir) => app.fs_service.send(services::fs::FsRequest::ReadDirectory(dir)),
             None => app.fs_service.send(services::fs::FsRequest::ReadLastDir),
@@ -1981,6 +2004,10 @@ impl Application for FilesystemApp {
         // capture raw self-pointers during rebuild, so the first rebuild must happen
         // after the move (the engine triggers it on the first frame via needs_rebuild).
         app
+    }
+
+    fn on_exit(&mut self) {
+        self.save_place();
     }
 
     fn settings(&self) -> WindowSettings {
@@ -2018,6 +2045,7 @@ impl Application for FilesystemApp {
         match msg {
             Message::SwitchPage(page) => {
                 self.current_page = page;
+                self.save_place();
                 let page_idx = Page::ALL.iter().position(|&p| p == page).unwrap_or(0);
                 self.ui_context[self.paginator].set_selected_page(page_idx);
                 // Switching to Space is what triggers the first scan — it is
@@ -2051,6 +2079,15 @@ impl Application for FilesystemApp {
                 }
 
                 if let Some(path) = is_directory_loaded {
+                    // The first load after a restore: its row and offset, where
+                    // they still are.
+                    if let Some((dir, selected, scroll)) = self.restore.take()
+                        && dir == path
+                    {
+                        self.browse.selected = selected.and_then(|s| self.browse.entries.iter().position(|e| e.path == s));
+                        self.browse.list.scroll_y = scroll;
+                        self.browse.autoscrolled_to = self.browse.selected;
+                    }
                     self.start_watching(path);
                     // Navigating re-scans the new subtree when Space is up.
                     self.ensure_space_scan();

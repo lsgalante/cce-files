@@ -2,6 +2,7 @@ pub mod pages;
 pub mod preview_pane;
 pub mod row_list;
 pub mod services;
+pub mod ui_state;
 pub mod util;
 
 use pages::Page;

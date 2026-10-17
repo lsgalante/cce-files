@@ -310,6 +310,8 @@ dependencies = [
  "kdl 6.7.1",
  "log",
  "notify",
+ "serde",
+ "serde_json",
  "tokio",
  "wayland-client",
 ]

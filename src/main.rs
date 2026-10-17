@@ -193,8 +193,28 @@ fn occlude_against(
     Some(bounds)
 }
 
-/// Height of the chooser-mode bottom action bar (the band carved into the plate).
-const SELECT_BAR_H: f32 = 48.0;
+/// The chooser's bottom action bar, from the window's bottom edge: its top
+/// wall, a run of plate padding, the buttons, and the root inset below them
+/// (the same inset the buttons keep from the right edge). Everything above it
+/// is the content region, so nothing there reaches the wall.
+///
+/// The wall is the plate's own roll, the step the window's edge makes — a
+/// bar's wider wall (`bar_wall_width`) took 16 px of a band that holds one
+/// row of buttons. It is carved inside the band (`carve_inside`): a recess
+/// wall straddles the edge it is given, and the band used to be carved at the
+/// content's bottom, half its wall over the panes and the search box above.
+/// The band was 48 px plus the inset, the buttons centred in the 48, so 33 px
+/// of floor lay under them.
+fn chooser_bar_wall() -> f32 {
+    cce_ui::layout::bevel_width()
+}
+
+fn chooser_bar_h() -> f32 {
+    chooser_bar_wall()
+        + cce_ui::layout::root_plate_padding()
+        + cce_ui::layout::button_height()
+        + cce_ui::layout::root_plate_inset()
+}
 
 /// Cut the text of `list` away from `overlays` (`[x, y, w, h]` each): the
 /// faces of the menu and the dialog, painted over it later in the frame.
@@ -919,9 +939,8 @@ impl FilesystemApp {
         let usable_w = self.width as f32 - sidebar_w - (if has_sidebar { 1.0 } else { 0.0 }) - 2.0 * pad;
         let content_y = pad;
 
-        let select_bar_h = SELECT_BAR_H;
         let content_h = if self.select_mode {
-            self.height as f32 - 2.0 * pad - select_bar_h
+            self.height as f32 - pad - chooser_bar_h()
         } else {
             self.height as f32 - 2.0 * pad
         };
@@ -985,7 +1004,7 @@ impl FilesystemApp {
 
         // The chooser's bottom action bar, below the content region.
         if let Some(chooser) = self.chooser {
-            let bar_y = self.height as f32 - select_bar_h - cce_ui::layout::root_plate_inset();
+            let bar_y = self.height as f32 - chooser_bar_h();
             // Divider line — under control_relief the bar is a band carved into the
             // plate (see display_list), so the flat line is the fallback only.
             if !cce_ui::layout::control_relief() {
@@ -993,7 +1012,7 @@ impl FilesystemApp {
             }
 
             let btn_h = cce_ui::layout::button_height();
-            let btn_y = bar_y + (select_bar_h - btn_h) / 2.0;
+            let btn_y = self.height as f32 - cce_ui::layout::root_plate_inset() - btn_h;
 
             // Cancel and Save/Select: equal widths, one gap, right-aligned to
             // the content region with the bar's own padding — and the
@@ -2390,11 +2409,13 @@ impl Application for FilesystemApp {
         // (The header strip's menubar-style band was removed — the top of the
         // plate is flush; the breadcrumb row sits directly on the surface.)
         if cce_ui::layout::control_relief() {
-            let wall = cce_ui::layout::bar_wall_width();
             if self.select_mode {
-                let band_h = SELECT_BAR_H + cce_ui::layout::root_plate_inset();
+                // The wall inside the band (`chooser_bar_h`): only the top
+                // wall exists, so only the top edge moves in.
+                let wall = chooser_bar_wall();
+                let band_y = fh - chooser_bar_h() + wall * 0.5;
                 pc.recess_edges(
-                    Rect { x: 0.0, y: fh - band_h, width: fw, height: band_h },
+                    Rect { x: 0.0, y: band_y, width: fw, height: fh - band_y },
                     (0.0, 0.0, 0.0, 0.0),
                     wall,
                     (true, false, false, false),

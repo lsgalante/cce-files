@@ -461,15 +461,15 @@ struct BrowseKeys {
 
 impl BrowseKeys {
     fn load() -> Self {
-        let get = cce_ui::input::app_chord;
+        let get = cce_ui::input::app_shortcut;
         Self {
-            open_file: get("open_file", "enter"),
-            enter_dir: get("enter_dir", "l"),
-            parent_dir: get("parent_dir", "h"),
-            select_next: get("select_next", "j"),
-            select_prev: get("select_prev", "k"),
-            delete_entry: get("delete_entry", "delete"),
-            toggle_hidden: get("toggle_hidden", "."),
+            open_file: get("open_file", "enter", "Open the selected file"),
+            enter_dir: get("enter_dir", "l", "Open the selected folder"),
+            parent_dir: get("parent_dir", "h", "Go to the parent folder"),
+            select_next: get("select_next", "j", "Select the next item"),
+            select_prev: get("select_prev", "k", "Select the previous item"),
+            delete_entry: get("delete_entry", "delete", "Delete the selection"),
+            toggle_hidden: get("toggle_hidden", ".", "Show or hide hidden files"),
         }
     }
 }
